@@ -105,6 +105,7 @@ extern crate linked_hash_map;
 extern crate lru_cache;
 extern crate ethcore_stratum;
 extern crate ethabi;
+extern crate hackishlibsnarkbindings;
 extern crate hardware_wallet;
 extern crate stats;
 extern crate itertools;

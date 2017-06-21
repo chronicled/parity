@@ -21,6 +21,10 @@ use std::cmp::min;
 use util::{U256, H256, Hashable, FixedHash, BytesRef};
 use ethkey::{Signature, recover as ec_recover};
 use ethjson;
+use ethabi;
+use hackishlibsnarkbindings;
+use ethabi::spec::ParamType;
+use ethabi::Token;
 
 /// Native implementation of a built-in contract.
 pub trait Impl: Send + Sync {
@@ -81,6 +85,7 @@ impl From<ethjson::spec::Builtin> for Builtin {
 // Ethereum builtin creator.
 fn ethereum_builtin(name: &str) -> Box<Impl> {
 	match name {
+		"zkSNARK" => Box::new(zkSNARK) as Box<Impl>,
 		"identity" => Box::new(Identity) as Box<Impl>,
 		"ecrecover" => Box::new(EcRecover) as Box<Impl>,
 		"sha256" => Box::new(Sha256) as Box<Impl>,
@@ -97,6 +102,9 @@ fn ethereum_builtin(name: &str) -> Box<Impl> {
 // - ripemd160
 
 #[derive(Debug)]
+struct zkSNARK;
+
+#[derive(Debug)]
 struct Identity;
 
 #[derive(Debug)]
@@ -107,6 +115,35 @@ struct Sha256;
 
 #[derive(Debug)]
 struct Ripemd160;
+
+
+impl Impl for zkSNARK {
+	fn execute(&self, input: &[u8], output: &mut BytesRef) {
+		let outlen = output.len();
+		for i in 0..output.len() {
+			output[i] = 0;
+		}
+		let abitype = [ParamType::Bytes, ParamType::Bytes, ParamType::Bytes];
+		let v = input[4..].to_vec();
+		let decode = ethabi::Decoder::decode(&abitype, v);
+		if let Ok(tokens) = decode {
+			if tokens.len() == 3 {
+				if let Token::Bytes(ref v1) = tokens[0] {
+					if let Token::Bytes(ref v2) = tokens[1] {
+						if let Token::Bytes(ref v3) = tokens[2] {
+							let res = hackishlibsnarkbindings::snark_verify(v1, v2, v3);
+							if res {
+								output[outlen - 1] = 1;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+
 
 impl Impl for Identity {
 	fn execute(&self, input: &[u8], output: &mut BytesRef) {

@@ -31,6 +31,8 @@ itertools = "0.5"
 ethabi = "1.0"
 evmjit = { path = "../evmjit", optional = true }
 clippy = { version = "0.0.103", optional = true}
+# ethabi = { git = "https://github.com/gancherj/ethabi.git" }
+hackishlibsnarkbindings = { git = "https://github.com/ebfull/hackishlibsnarkbindings.git" }
 ethash = { path = "../ethash" }
 ethcore-util = { path = "../util" }
 ethcore-io = { path = "../util/io" }

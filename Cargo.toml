@@ -50,6 +50,8 @@ parity-reactor = { path = "util/reactor" }
 parity-local-store = { path = "local-store" }
 ethcore-dapps = { path = "dapps", optional = true }
 clippy = { version = "0.0.103", optional = true}
+# ethabi = { git = "https://github.com/gancherj/ethabi.git" }
+ethabi = "1.0"
 ethcore-secretstore = { path = "secret_store", optional = true }
 
 [dev-dependencies]
