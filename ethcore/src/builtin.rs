@@ -28,6 +28,10 @@ use ethereum_types::{H256, U256};
 use bytes::BytesRef;
 use ethkey::{Signature, recover as ec_recover};
 use ethjson;
+use ethabi;
+use hackishlibsnarkbindings;
+use ethabi::spec::ParamType;
+use ethabi::Token;
 
 /// Execution error.
 #[derive(Debug)]
@@ -213,6 +217,7 @@ impl From<ethjson::spec::Builtin> for Builtin {
 /// Ethereum built-in factory.
 pub fn ethereum_builtin(name: &str) -> Box<Impl> {
 	match name {
+		"zkSNARK" => Box::new(zkSNARK) as Box<Impl>,
 		"identity" => Box::new(Identity) as Box<Impl>,
 		"ecrecover" => Box::new(EcRecover) as Box<Impl>,
 		"sha256" => Box::new(Sha256) as Box<Impl>,
@@ -232,6 +237,9 @@ pub fn ethereum_builtin(name: &str) -> Box<Impl> {
 // - sha256
 // - ripemd160
 // - modexp (EIP198)
+
+#[derive(Debug)]
+struct zkSNARK;
 
 #[derive(Debug)]
 struct Identity;
@@ -256,6 +264,34 @@ struct Bn128MulImpl;
 
 #[derive(Debug)]
 struct Bn128PairingImpl;
+
+impl Impl for zkSNARK {
+	fn execute(&self, input: &[u8], output: &mut BytesRef) {
+		let outlen = output.len();
+		for i in 0..output.len() {
+			output[i] = 0;
+		}
+		let abitype = [ParamType::Bytes, ParamType::Bytes, ParamType::Bytes];
+		let v = input[4..].to_vec();
+		let decode = ethabi::Decoder::decode(&abitype, v);
+		if let Ok(tokens) = decode {
+			if tokens.len() == 3 {
+				if let Token::Bytes(ref v1) = tokens[0] {
+					if let Token::Bytes(ref v2) = tokens[1] {
+						if let Token::Bytes(ref v3) = tokens[2] {
+							let res = hackishlibsnarkbindings::snark_verify(v1, v2, v3);
+							if res {
+								output[outlen - 1] = 1;
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+
 
 impl Impl for Identity {
 	fn execute(&self, input: &[u8], output: &mut BytesRef) -> Result<(), Error> {
