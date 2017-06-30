@@ -132,8 +132,12 @@ impl Impl for zkSNARK {
 					if let Token::Bytes(ref v2) = tokens[1] {
 						if let Token::Bytes(ref v3) = tokens[2] {
 							let res = hackishlibsnarkbindings::snark_verify(v1, v2, v3);
+
+							println!("SnarkVerify Result: {}", res);
 							if res {
-								output[outlen - 1] = 1;
+								let mut out = [0; 32];
+								output.write(0, &out);
+								output.write(31, &[1]);
 							}
 						}
 					}
