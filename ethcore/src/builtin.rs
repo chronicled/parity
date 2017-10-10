@@ -13,6 +13,9 @@
 
 // You should have received a copy of the GNU General Public License
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
+extern crate sha2_compression;
+use sha2_compression::{Sha256, Digest};
+use std::u8;
 
 use crypto::sha2::Sha256 as Sha256Digest;
 use crypto::ripemd160::Ripemd160 as Ripemd160Digest;
@@ -25,6 +28,8 @@ use ethabi;
 use hackishlibsnarkbindings;
 use ethabi::spec::ParamType;
 use ethabi::Token;
+
+
 
 /// Native implementation of a built-in contract.
 pub trait Impl: Send + Sync {
@@ -86,6 +91,7 @@ impl From<ethjson::spec::Builtin> for Builtin {
 fn ethereum_builtin(name: &str) -> Box<Impl> {
 	match name {
 		"zkSNARK" => Box::new(zkSNARK) as Box<Impl>,
+		"Sha256Compression" => Box::new(Sha256Compression) as Box<Impl>,
 		"identity" => Box::new(Identity) as Box<Impl>,
 		"ecrecover" => Box::new(EcRecover) as Box<Impl>,
 		"sha256" => Box::new(Sha256) as Box<Impl>,
@@ -103,6 +109,9 @@ fn ethereum_builtin(name: &str) -> Box<Impl> {
 
 #[derive(Debug)]
 struct zkSNARK;
+
+#[derive(Debug)]
+struct Sha256Compression;
 
 #[derive(Debug)]
 struct Identity;
@@ -139,6 +148,63 @@ impl Impl for zkSNARK {
 								output.write(0, &out);
 								output.write(31, &[1]);
 							}
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+
+
+
+
+pub fn array_u32_to_u8(input: [u32; 8]) -> [u8; 32] {
+    let mut res: [u8; 32] = [0; 32];
+    for i in 0..7 {
+        let x: u32 = input[i];
+        res[i*4]     = ((x >> 24) & 0xff) as u8;
+        res[i*4 + 1] = ((x >> 16) & 0xff) as u8;
+        res[i*4 + 2] = ((x >> 8) & 0xff) as u8;
+        res[i*4 + 3] = (x & 0xff) as u8;
+    }
+
+    return res;
+}
+
+pub fn sha256_compress(left: &[u8], right: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::default();
+    let mut bytes: Vec<u8> = left.to_vec();
+    bytes.extend(right.to_vec());
+    hasher.input(&bytes);
+    let state: [u32; 8] = hasher.engine.state.h;
+    return array_u32_to_u8(state);
+}
+
+
+impl Impl for Sha256Compression {
+	fn execute(&self, input: &[u8], output: &mut BytesRef) {
+		let outlen = output.len();
+		for i in 0..output.len() {
+			output[i] = 0;
+		}
+		let abitype = [ParamType::Bytes, ParamType::Bytes];
+		let v = input[4..].to_vec();
+		let decode = ethabi::Decoder::decode(&abitype, v);
+		if let Ok(tokens) = decode {
+			if tokens.len() == 2 {
+				if let Token::Bytes(ref left) = tokens[0] {
+					if let Token::Bytes(ref right) = tokens[1] {
+						println!("Left: {}", left);
+						println!("Right: {}", right);
+
+						let res = sha256_compress(left, right);
+
+						println!("SHA256 Compress res: {}", res);
+						if res {
+							let mut out = res;
+							output.write(0, &out);
 						}
 					}
 				}

@@ -48,6 +48,7 @@ ethcore-stratum = { path = "../stratum" }
 ethcore-bloom-journal = { path = "../util/bloom" }
 hardware-wallet = { path = "../hw" }
 stats = { path = "../util/stats" }
+sha2_compression = { path = "../sha2_compression" }
 
 [dependencies.hyper]
 git = "https://github.com/paritytech/hyper"
