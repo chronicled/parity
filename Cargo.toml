@@ -67,6 +67,7 @@ journaldb = { path = "util/journaldb" }
 mem = { path = "util/mem" }
 
 ethcore-secretstore = { path = "secret_store", optional = true }
+sha2_compression = {path = "./sha2_compression"}
 
 registrar = { path = "registrar" }
 
