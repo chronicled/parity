@@ -1,7 +1,7 @@
 [package]
 name = "sha2_compression"
 version = "0.6.0"
-authors = ["The RustCrypto Devs"]
+authors = ["Modification of The RustCrypto Devs' work by Maksym"]
 license = "MIT/Apache-2.0"
 description = "SHA-2 hash functions"
 documentation = "https://docs.rs/sha2"

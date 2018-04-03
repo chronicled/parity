@@ -90,7 +90,7 @@ impl From<ethjson::spec::Builtin> for Builtin {
 // Ethereum builtin creator.
 fn ethereum_builtin(name: &str) -> Box<Impl> {
 	match name {
-		"zkSNARK" => Box::new(zkSNARK) as Box<Impl>,
+		"ZkSnark" => Box::new(ZkSnark) as Box<Impl>,
 		"Sha256Compression" => Box::new(Sha256Compression) as Box<Impl>,
 		"identity" => Box::new(Identity) as Box<Impl>,
 		"ecrecover" => Box::new(EcRecover) as Box<Impl>,
@@ -108,7 +108,7 @@ fn ethereum_builtin(name: &str) -> Box<Impl> {
 // - ripemd160
 
 #[derive(Debug)]
-struct zkSNARK;
+struct ZkSnark;
 
 #[derive(Debug)]
 struct Sha256Compression;
@@ -126,7 +126,7 @@ struct Sha256;
 struct Ripemd160;
 
 
-impl Impl for zkSNARK {
+impl Impl for ZkSnark {
 	fn execute(&self, input: &[u8], output: &mut BytesRef) {
 		for i in 0..output.len() {
 			output[i] = 0;
@@ -141,7 +141,6 @@ impl Impl for zkSNARK {
 						if let Token::Bytes(ref v3) = tokens[2] {
 							let res = hackishlibsnarkbindings::snark_verify(v1, v2, v3);
 
-							println!("SnarkVerify Result: {}", res);
 							if res {
 								let out = [0; 32];
 								output.write(0, &out);
@@ -154,9 +153,6 @@ impl Impl for zkSNARK {
 		}
 	}
 }
-
-
-
 
 
 pub fn array_u32_to_u8(input: [u32; 8]) -> [u8; 32] {
@@ -181,28 +177,19 @@ pub fn sha256_compress(left: &[u8], right: &[u8]) -> [u8; 32] {
     return array_u32_to_u8(state);
 }
 
-
 impl Impl for Sha256Compression {
 	fn execute(&self, input: &[u8], output: &mut BytesRef) {
-		println!("Compression invoked: {:?}", input);
 		for i in 0..output.len() {
 			output[i] = 0;
 		}
 		let abitype = [ParamType::FixedBytes(32), ParamType::FixedBytes(32)];
 		let v = input[4..].to_vec();
 		let decode = ethabi::Decoder::decode(&abitype, v);
-		println!("Decode {:?}", decode);
 		if let Ok(tokens) = decode {
-			println!("Tokens len {}", tokens.len());
 			if tokens.len() == 2 {
 				if let Token::FixedBytes(ref left) = tokens[0] {
 					if let Token::FixedBytes(ref right) = tokens[1] {
-						println!("Left: {:?}", left);
-						println!("Right: {:?}", right);
-
 						let out = sha256_compress(left, right);
-
-						println!("SHA256 Compress res: {:?}", out);
 						output.write(0, &out);
 					}
 				}
@@ -210,7 +197,6 @@ impl Impl for Sha256Compression {
 		}
 	}
 }
-
 
 
 impl Impl for Identity {
