@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 extern crate sha2_compression;
-use sha2_compression::{Sha256, Digest};
+use sha2_compression::{Sha256 as Sha256C, Digest as DigestC};
 use std::u8;
 
 //! Standard built-in contracts.
@@ -274,7 +274,6 @@ struct Bn128PairingImpl;
 
 impl Impl for zkSNARK {
 	fn execute(&self, input: &[u8], output: &mut BytesRef) {
-		let outlen = output.len();
 		for i in 0..output.len() {
 			output[i] = 0;
 		}
@@ -290,7 +289,7 @@ impl Impl for zkSNARK {
 
 							println!("SnarkVerify Result: {}", res);
 							if res {
-								let mut out = [0; 32];
+								let out = [0; 32];
 								output.write(0, &out);
 								output.write(31, &[1]);
 							}
@@ -308,7 +307,7 @@ impl Impl for zkSNARK {
 
 pub fn array_u32_to_u8(input: [u32; 8]) -> [u8; 32] {
     let mut res: [u8; 32] = [0; 32];
-    for i in 0..7 {
+    for i in 0..8 {
         let x: u32 = input[i];
         res[i*4]     = ((x >> 24) & 0xff) as u8;
         res[i*4 + 1] = ((x >> 16) & 0xff) as u8;
@@ -320,7 +319,7 @@ pub fn array_u32_to_u8(input: [u32; 8]) -> [u8; 32] {
 }
 
 pub fn sha256_compress(left: &[u8], right: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha256::default();
+    let mut hasher = Sha256C::default();
     let mut bytes: Vec<u8> = left.to_vec();
     bytes.extend(right.to_vec());
     hasher.input(&bytes);
@@ -331,27 +330,26 @@ pub fn sha256_compress(left: &[u8], right: &[u8]) -> [u8; 32] {
 
 impl Impl for Sha256Compression {
 	fn execute(&self, input: &[u8], output: &mut BytesRef) {
-		let outlen = output.len();
+		println!("Compression invoked: {:?}", input);
 		for i in 0..output.len() {
 			output[i] = 0;
 		}
-		let abitype = [ParamType::Bytes, ParamType::Bytes];
+		let abitype = [ParamType::FixedBytes(32), ParamType::FixedBytes(32)];
 		let v = input[4..].to_vec();
 		let decode = ethabi::Decoder::decode(&abitype, v);
+		println!("Decode {:?}", decode);
 		if let Ok(tokens) = decode {
+			println!("Tokens len {}", tokens.len());
 			if tokens.len() == 2 {
-				if let Token::Bytes(ref left) = tokens[0] {
-					if let Token::Bytes(ref right) = tokens[1] {
-						println!("Left: {}", left);
-						println!("Right: {}", right);
+				if let Token::FixedBytes(ref left) = tokens[0] {
+					if let Token::FixedBytes(ref right) = tokens[1] {
+						println!("Left: {:?}", left);
+						println!("Right: {:?}", right);
 
-						let res = sha256_compress(left, right);
+						let out = sha256_compress(left, right);
 
-						println!("SHA256 Compress res: {}", res);
-						if res {
-							let mut out = res;
-							output.write(0, &out);
-						}
+						println!("SHA256 Compress res: {:?}", out);
+						output.write(0, &out);
 					}
 				}
 			}
