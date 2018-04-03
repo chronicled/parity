@@ -109,6 +109,7 @@ extern crate hackishlibsnarkbindings;
 extern crate hardware_wallet;
 extern crate stats;
 extern crate itertools;
+extern crate sha2_compression;
 
 #[macro_use]
 extern crate log;
