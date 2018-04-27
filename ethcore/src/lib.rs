@@ -103,6 +103,7 @@ extern crate parity_snappy as snappy;
 extern crate ethabi;
 extern crate rustc_hex;
 extern crate hackishlibsnarkbindings;
+extern crate snarkverifier;
 extern crate stats;
 extern crate stop_guard;
 extern crate using_queue;

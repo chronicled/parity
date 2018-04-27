@@ -1,4 +1,8 @@
-![Parity Ethereum](docs/logo-parity-ethereum.svg)
+# [Parity ZK](https://ethcore.io/parity.html)
+
+Assumes rust-snark-verifier located parallel to this dir `https://github.com/chronicled/rust-snark-verifier/tree/snark-binding`
+
+### Fast, light, and robust Ethereum implementation
 
 ## The fastest and most advanced Ethereum client.
 
