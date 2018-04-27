@@ -25,9 +25,9 @@ use util::{U256, H256, Hashable, FixedHash, BytesRef};
 use ethkey::{Signature, recover as ec_recover};
 use ethjson;
 use ethabi;
-use hackishlibsnarkbindings;
 use ethabi::spec::ParamType;
 use ethabi::Token;
+use snarkverifier;
 
 
 
@@ -139,7 +139,7 @@ impl Impl for ZkSnark {
 				if let Token::Bytes(ref v1) = tokens[0] {
 					if let Token::Bytes(ref v2) = tokens[1] {
 						if let Token::Bytes(ref v3) = tokens[2] {
-							let res = hackishlibsnarkbindings::snark_verify(v1, v2, v3);
+							let res = snarkverifier::verify(v1, v2, v3);
 
 							if res {
 								let out = [0; 32];

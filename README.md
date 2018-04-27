@@ -1,4 +1,7 @@
-# [Parity](https://ethcore.io/parity.html)
+# [Parity ZK](https://ethcore.io/parity.html)
+
+Assumes rust-snark-verifier located parallel to this dir `https://github.com/chronicled/rust-snark-verifier/tree/snark-binding`
+
 ### Fast, light, and robust Ethereum implementation
 
 [![build status](https://gitlab.ethcore.io/parity/parity/badges/master/build.svg)](https://gitlab.ethcore.io/parity/parity/commits/master) [![Coverage Status][coveralls-image]][coveralls-url]  [![GPLv3][license-image]][license-url]
