@@ -17,7 +17,7 @@ extern crate sha2_compression;
 use sha2_compression::{Sha256 as Sha256C, Digest as DigestC};
 use std::u8;
 
-//! Standard built-in contracts.
+// Standard built-in contracts.
 
 use std::cmp::{max, min};
 use std::io::{self, Read};
@@ -32,7 +32,7 @@ use bytes::BytesRef;
 use ethkey::{Signature, recover as ec_recover};
 use ethjson;
 use ethabi;
-use ethabi::spec::ParamType;
+use ethabi::ParamType;
 use ethabi::Token;
 use snarkverifier;
 
@@ -273,13 +273,13 @@ struct Bn128MulImpl;
 struct Bn128PairingImpl;
 
 impl Impl for ZkSnark {
-	fn execute(&self, input: &[u8], output: &mut BytesRef) {
+	fn execute(&self, input: &[u8], output: &mut BytesRef) -> Result<(), Error> {
 		for i in 0..output.len() {
 			output[i] = 0;
 		}
 		let abitype = [ParamType::Bytes, ParamType::Bytes, ParamType::Bytes];
 		let v = input[4..].to_vec();
-		let decode = ethabi::Decoder::decode(&abitype, v);
+		let decode = ethabi::decode(&abitype, &v);
 		if let Ok(tokens) = decode {
 			if tokens.len() == 3 {
 				if let Token::Bytes(ref v1) = tokens[0] {
@@ -297,6 +297,7 @@ impl Impl for ZkSnark {
 				}
 			}
 		}
+    Ok(())
 	}
 }
 
@@ -324,13 +325,13 @@ pub fn sha256_compress(left: &[u8], right: &[u8]) -> [u8; 32] {
 }
 
 impl Impl for Sha256Compression {
-	fn execute(&self, input: &[u8], output: &mut BytesRef) {
+	fn execute(&self, input: &[u8], output: &mut BytesRef) -> Result<(), Error> {
 		for i in 0..output.len() {
 			output[i] = 0;
 		}
 		let abitype = [ParamType::FixedBytes(32), ParamType::FixedBytes(32)];
 		let v = input[4..].to_vec();
-		let decode = ethabi::Decoder::decode(&abitype, v);
+		let decode = ethabi::decode(&abitype, &v);
 		if let Ok(tokens) = decode {
 			if tokens.len() == 2 {
 				if let Token::FixedBytes(ref left) = tokens[0] {
@@ -341,6 +342,7 @@ impl Impl for Sha256Compression {
 				}
 			}
 		}
+    Ok(())
 	}
 }
 

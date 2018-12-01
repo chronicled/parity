@@ -17,8 +17,7 @@ crossbeam = "0.3"
 #linked-hash-map = "0.3.0"
 #evmjit = { path = "../evmjit", optional = true }
 #clippy = { version = "0.0.103", optional = true}
-snarkverifier = { path = "../../rust-snark-verifier" }
-snarkverifier = { git = "https://github.com/chronicled/rust-snark-verifier.git" }
+snarkverifier = { git = "https://github.com/chronicled/rust-snark-verifier.git", branch = "performance-off" }
 ethash = { path = "../ethash" }
 ethcore-bloom-journal = { path = "../util/bloom" }
 parity-bytes = "0.1"
