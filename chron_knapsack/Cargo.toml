@@ -1,0 +1,14 @@
+[package]
+name = "chron_knapsack"
+version = "0.1.0"
+authors = ["Chronicled Inc. <info@chronicled.com>"]
+
+[dependencies]
+num-bigint = "0.2.1"
+num = "0.2.0"
+lazy_static = "1.2.0"
+rust-crypto = "0.2"
+byteorder = "1.2.7"
+bitintr = "0.2.0"
+#snarkverifier = { git = "https://github.com/chronicled/rust-snark-verifier.git" }
+

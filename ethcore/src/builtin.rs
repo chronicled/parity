@@ -14,6 +14,8 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 extern crate sha2_compression;
+extern crate chron_knapsack;
+
 use sha2_compression::{Sha256 as Sha256C, Digest as DigestC};
 use std::u8;
 
@@ -35,6 +37,7 @@ use ethabi;
 use ethabi::ParamType;
 use ethabi::Token;
 use snarkverifier;
+use chron_knapsack::knapsack_lsb_slice;
 
 /// Execution error.
 #[derive(Debug)]
@@ -222,6 +225,7 @@ pub fn ethereum_builtin(name: &str) -> Box<Impl> {
 	match name {
 		"ZkSnark" => Box::new(ZkSnark) as Box<Impl>,
 		"Sha256Compression" => Box::new(Sha256Compression) as Box<Impl>,
+		"knapsack" => Box::new(Knapsack) as Box<Impl>,
 		"identity" => Box::new(Identity) as Box<Impl>,
 		"ecrecover" => Box::new(EcRecover) as Box<Impl>,
 		"sha256" => Box::new(Sha256) as Box<Impl>,
@@ -242,11 +246,19 @@ pub fn ethereum_builtin(name: &str) -> Box<Impl> {
 // - ripemd160
 // - modexp (EIP198)
 
+// Chronicled builtins:
+// - ZkSnark
+// - Sha256Compression
+// - Knapsack CRH
+
 #[derive(Debug)]
 struct ZkSnark;
 
 #[derive(Debug)]
 struct Sha256Compression;
+
+#[derive(Debug)]
+struct Knapsack;
 
 #[derive(Debug)]
 struct Identity;
@@ -342,6 +354,14 @@ impl Impl for Sha256Compression {
 				}
 			}
 		}
+    Ok(())
+	}
+}
+
+impl Impl for Knapsack {
+	fn execute(&self, input: &[u8], output: &mut BytesRef) -> Result<(), Error> {
+    let res = knapsack_lsb_slice(input).map_err(|e| Error(e))?;
+    output.write(0, &res);
     Ok(())
 	}
 }
@@ -1149,4 +1169,31 @@ mod tests {
 		b.execute(&i[..], &mut BytesRef::Fixed(&mut o[..])).expect("Builtin should not fail");
 		assert_eq!(i, o);
 	}
+
+	#[test]
+	fn knapsack() {
+		let f = ethereum_builtin("knapsack");
+
+		let i: [u8; 2] = [0x53, 2];
+
+		let mut o = [255u8; 32];
+		f.execute(&i[..], &mut BytesRef::Fixed(&mut o[..])).expect("Builtin should not fail");
+		assert_eq!(&o[..], &(FromHex::from_hex("ed6a27cfb9a844cd64ee34af3935c3bb7f74cf242354081679688b31f94fcc2a").unwrap())[..]);
+
+		let mut o8 = [255u8; 8];
+		f.execute(&i[..], &mut BytesRef::Fixed(&mut o8[..])).expect("Builtin should not fail");
+		assert_eq!(&o8[..], &(FromHex::from_hex("ed6a27cfb9a844cd").unwrap())[..]);
+
+		let mut o34 = [255u8; 34];
+		f.execute(&i[..], &mut BytesRef::Fixed(&mut o34[..])).expect("Builtin should not fail");
+		assert_eq!(&o34[..], &(FromHex::from_hex("ed6a27cfb9a844cd64ee34af3935c3bb7f74cf242354081679688b31f94fcc2affff").unwrap())[..]);
+
+		let mut ov = vec![];
+		f.execute(&i[..], &mut BytesRef::Flexible(&mut ov)).expect("Builtin should not fail");
+		assert_eq!(&ov[..], &(FromHex::from_hex("ed6a27cfb9a844cd64ee34af3935c3bb7f74cf242354081679688b31f94fcc2a").unwrap())[..]);
+
+		let i_1024 = [255u8; 1024];
+		f.execute(&i_1024[..], &mut BytesRef::Flexible(&mut ov)).expect_err("Builtin should fail if input is too long");
+	}
+
 }
