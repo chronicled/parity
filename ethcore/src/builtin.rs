@@ -37,7 +37,7 @@ use ethabi;
 use ethabi::ParamType;
 use ethabi::Token;
 use snarkverifier;
-use chron_knapsack::knapsack_lsb_slice;
+use chron_knapsack::knapsack_msb_slice;
 
 /// Execution error.
 #[derive(Debug)]
@@ -360,7 +360,7 @@ impl Impl for Sha256Compression {
 
 impl Impl for Knapsack {
 	fn execute(&self, input: &[u8], output: &mut BytesRef) -> Result<(), Error> {
-    let res = knapsack_lsb_slice(input).map_err(|e| Error(e))?;
+    let res = knapsack_msb_slice(input).map_err(|e| Error(e))?;
     output.write(0, &res);
     Ok(())
 	}
@@ -1174,7 +1174,7 @@ mod tests {
 	fn knapsack() {
 		let f = ethereum_builtin("knapsack");
 
-		let i: [u8; 2] = [0x53, 2];
+		let i: [u8; 2] = [0xca, 0x40];
 
 		let mut o = [255u8; 32];
 		f.execute(&i[..], &mut BytesRef::Fixed(&mut o[..])).expect("Builtin should not fail");

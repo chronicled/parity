@@ -2,31 +2,32 @@ extern crate num;
 #[macro_use]
 extern crate lazy_static;
 extern crate crypto;
+extern crate bit_vec;
+extern crate hex;
 extern crate byteorder;
-extern crate bitintr;
 
-use num::{BigUint, One, Zero};
+use num::{BigUint, Zero};
 use crypto::digest::Digest;
 use crypto::sha2::Sha512;
 use byteorder::{ByteOrder, LittleEndian};
-use bitintr::Rbit;
+use bit_vec::BitVec;
 
-const CURVE_BN128_R: &[u8] = b"21888242871839275222246405745257275088548364400416034343698204186575808495617";
-//const CURVE_EDWARDS_R: &[u8] = b"1552511030102430251236801561344621993261920897571225601";
-//const CURVE_MNT4_R: &[u8] = b"475922286169261325753349249653048451545124878552823515553267735739164647307408490559963137";
-//const CURVE_MNT6_R: &[u8] = b"475922286169261325753349249653048451545124879242694725395555128576210262817955800483758081";
+const BN128_R: &[u8] = b"21888242871839275222246405745257275088548364400416034343698204186575808495617";
+//const EDWARDS_R: &[u8] = b"1552511030102430251236801561344621993261920897571225601";
+//const MNT4_R: &[u8] = b"475922286169261325753349249653048451545124878552823515553267735739164647307408490559963137";
+//const MNT6_R: &[u8] = b"475922286169261325753349249653048451545124879242694725395555128576210262817955800483758081";
 
 const MAX_BITLENGTH: u32 = 4096;
 
 lazy_static! {
-  static ref curve: BigUint = BigUint::parse_bytes(CURVE_BN128_R, 10).unwrap();
+  static ref curve: BigUint = BigUint::parse_bytes(BN128_R, 10).unwrap();
   static ref coefficients: Vec<BigUint> = {
     let mask = BigUint::from(1u8) << curve.bits();
     let mut res = Vec::new();
     for i in 0u32..MAX_BITLENGTH {
       let mut buf1 = [0u8; 8];
       LittleEndian::write_u32(&mut buf1, i);
-      for j in 0u32..1000 {
+      for j in 0u32..std::u32::MAX {
         let mut buf2 = [0; 8];
         LittleEndian::write_u32(&mut buf2, j);
         let mut hasher = Sha512::new();
@@ -49,40 +50,35 @@ lazy_static! {
   };
 }
 
-pub fn knapsack_lsb(input: &BigUint) -> Result<BigUint, &'static str> {
-  let bit_length = input.bits() as u32;
+pub fn knapsack(input: &BitVec) -> Result<BigUint, &'static str> {
+  let bit_length = input.len() as u32;
   if bit_length > MAX_BITLENGTH {
     return Err("Input bit length exceeds cached knapsack coefficients.");
   }
   let mut result = BigUint::zero();
-  for i in 0..bit_length as usize {
-    let bitset = input & (BigUint::one() << i);
-    if bitset > BigUint::zero() {
-      result += &coefficients[i];
+  for bitset in input.iter().enumerate() {
+    if bitset.1 {
+      result += &coefficients[bitset.0];
       result = result % &*curve;
     }
   }
   Ok(result)
 }
 
-pub fn knapsack_msb(input: &BigUint, bit_length: u32) -> Result<BigUint, &'static str> {
-  let reversed = input.to_bytes_le().iter().map(|&byte| byte.rbit()).collect::<Vec<u8>>();
-  let input_msb = &BigUint::from_bytes_be(reversed.as_slice()) >> (reversed.len() * 8 - bit_length as usize);
-  knapsack_lsb(&input_msb)
-}
-
-pub fn knapsack_lsb_slice<'a>(input: &[u8]) -> Result<[u8; 32], &'static str> {
-  let input_lsb = BigUint::from_bytes_le(input);
-  let hash = knapsack_lsb(&input_lsb)?;
+pub fn knapsack_msb_slice<'a>(input: &[u8]) -> Result<[u8; 32], &'static str> {
+  let input_vec = BitVec::from_bytes(input);
+  let hash = knapsack(&input_vec)?;
   let mut res = [0u8; 32];
+
   res.copy_from_slice(hash.to_bytes_le().as_slice());
   Ok(res)
 }
 
 #[cfg(test)]
 mod tests {
-  use {knapsack_msb, knapsack_lsb};
+  use {knapsack, knapsack_msb_slice};
   use num::BigUint;
+  use bit_vec::BitVec;
 
   #[test]
   fn compare_libsnarks_output() {
@@ -92,47 +88,31 @@ mod tests {
       input_length: u32,
       output: &'static [u8],
     }
-    static REF_LSB: &'static [&'static TestRef] = &[
-      &TestRef {curve: "bn128_r", input: b"0x253", input_length: 10, output: b"0x2acc4ff9318b68791608542324cf747fbbc33539af34ee64cd44a8b9cf276aed"},
-      &TestRef {curve: "bn128_r", input: b"0xc6", input_length: 10, output: b"0x22b3e6a0afda243aebb4df8cbab41a6f866f025b01aea6054e7cc82eab201f93"},
-      &TestRef {curve: "edwards_r", input: b"0x253", input_length: 10, output: b"0x23873783006679d60b97e14e435fd9596aaed6ae4cbde"},
-      &TestRef {curve: "edwards_r", input: b"0xc6", input_length: 10, output: b"0x12fe0ea57011de5f6275c52c20a5306eeb0c6888ec1e9"},
-      &TestRef {curve: "mnt4_r", input: b"0x253", input_length: 10, output: b"0xbc3419b722f9daccf64a847995f8e4782bfc4b578c1deefe14a99aead76ed400eca13314f"},
-      &TestRef {curve: "mnt4_r", input: b"0xc6", input_length: 10, output: b"0x2ad2845358a024908c06c14b6f1aee6608f6f755d9bae9746947419db9ff8d85f75620ed691"},
-      &TestRef {curve: "mnt6_r", input: b"0x253", input_length: 10, output: b"0xbc3419b722f9daccf64a847995f8e4782bf86d6ce351dc133cd14682f5b59fca1e747314f"},
-      &TestRef {curve: "mnt6_r", input: b"0xc6", input_length: 10, output: b"0x2ad2845358a024908c06c14b6f1aee6608f6f377ef121d617e6f6949521dd451c087f42d691"}
+    static REF: &'static [&'static TestRef] = &[
+      &TestRef {curve: "bn128_r", input: b"ca40", input_length: 10, output: b"0x2acc4ff9318b68791608542324cf747fbbc33539af34ee64cd44a8b9cf276aed"},
+      &TestRef {curve: "bn128_r", input: b"6300", input_length: 10, output: b"0x22b3e6a0afda243aebb4df8cbab41a6f866f025b01aea6054e7cc82eab201f93"},
+      &TestRef {curve: "edwards_r", input: b"ca40", input_length: 10, output: b"0x23873783006679d60b97e14e435fd9596aaed6ae4cbde"},
+      &TestRef {curve: "edwards_r", input: b"6300", input_length: 10, output: b"0x12fe0ea57011de5f6275c52c20a5306eeb0c6888ec1e9"},
+      &TestRef {curve: "mnt4_r", input: b"ca40", input_length: 10, output: b"0xbc3419b722f9daccf64a847995f8e4782bfc4b578c1deefe14a99aead76ed400eca13314f"},
+      &TestRef {curve: "mnt4_r", input: b"6300", input_length: 10, output: b"0x2ad2845358a024908c06c14b6f1aee6608f6f755d9bae9746947419db9ff8d85f75620ed691"},
+      &TestRef {curve: "mnt6_r", input: b"ca40", input_length: 10, output: b"0xbc3419b722f9daccf64a847995f8e4782bf86d6ce351dc133cd14682f5b59fca1e747314f"},
+      &TestRef {curve: "mnt6_r", input: b"6300", input_length: 10, output: b"0x2ad2845358a024908c06c14b6f1aee6608f6f377ef121d617e6f6949521dd451c087f42d691"}
     ];
 
-    static REF_MSB: &'static [&'static TestRef] = &[
-      &TestRef {curve: "bn128_r", input: b"0x329", input_length: 10, output: b"0x2acc4ff9318b68791608542324cf747fbbc33539af34ee64cd44a8b9cf276aed"},
-      &TestRef {curve: "bn128_r", input: b"0x18c", input_length: 10, output: b"0x22b3e6a0afda243aebb4df8cbab41a6f866f025b01aea6054e7cc82eab201f93"},
-      &TestRef {curve: "edwards_r", input: b"0x329", input_length: 10, output: b"0x23873783006679d60b97e14e435fd9596aaed6ae4cbde"},
-      &TestRef {curve: "edwards_r", input: b"0x18c", input_length: 10, output: b"0x12fe0ea57011de5f6275c52c20a5306eeb0c6888ec1e9"},
-      &TestRef {curve: "mnt4_r", input: b"0x329", input_length: 10, output: b"0xbc3419b722f9daccf64a847995f8e4782bfc4b578c1deefe14a99aead76ed400eca13314f"},
-      &TestRef {curve: "mnt4_r", input: b"0x18c", input_length: 10, output: b"0x2ad2845358a024908c06c14b6f1aee6608f6f755d9bae9746947419db9ff8d85f75620ed691"},
-      &TestRef {curve: "mnt6_r", input: b"0x329", input_length: 10, output: b"0xbc3419b722f9daccf64a847995f8e4782bf86d6ce351dc133cd14682f5b59fca1e747314f"},
-      &TestRef {curve: "mnt6_r", input: b"0x18c", input_length: 10, output: b"0x2ad2845358a024908c06c14b6f1aee6608f6f377ef121d617e6f6949521dd451c087f42d691"}
-    ];
-    for val in REF_LSB {
+    for val in REF {
       if val.curve != "bn128_r" {continue};
-      let input = BigUint::parse_bytes(&val.input[2..], 16).unwrap();
+      let decoded = hex::decode(&val.input).unwrap();
+      let input = BitVec::from_bytes(&decoded);
       let expected_output = BigUint::parse_bytes(&val.output[2..], 16).unwrap();
 
-      let result = knapsack_lsb(&input);
+      let result = knapsack(&input).unwrap();
 
-      assert!(result == expected_output, "LSB knapsack failed.");
+      assert!(result == expected_output, "Knapsack failed.");
     }
-    for val in REF_MSB {
-      if val.curve != "bn128_r" {continue};
-      let input = BigUint::parse_bytes(&val.input[2..], 16).unwrap();
-      let expected_output = BigUint::parse_bytes(&val.output[2..], 16).unwrap();
-      println!("Hashing {} {}", input, val.curve);
 
-      let result = knapsack_msb(&input, val.input_length);
-
-      println!("{}", result.to_str_radix(16));
-      assert!(result == expected_output, "MSB knapsack failed.");
-    }
+    let mut res_vec = knapsack_msb_slice(&hex::decode(b"ca40").unwrap()).unwrap().to_vec();
+    res_vec.reverse();
+    assert!(hex::encode(res_vec) == "2acc4ff9318b68791608542324cf747fbbc33539af34ee64cd44a8b9cf276aed", "Knapsack slice failed.");
   }
 }
 
