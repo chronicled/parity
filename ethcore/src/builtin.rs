@@ -55,6 +55,15 @@ impl Into<::vm::Error> for Error {
 	}
 }
 
+impl From<ethabi::Error> for Error {
+	fn from(val: ethabi::Error) -> Self {
+    println!("Ethabi error {}", val.description());
+		Error("Ethabi error")
+	}
+}
+
+
+
 /// Native implementation of a built-in contract.
 pub trait Impl: Send + Sync {
 	/// execute this built-in on the given input, writing to the given output.
@@ -360,9 +369,21 @@ impl Impl for Sha256Compression {
 
 impl Impl for Knapsack {
 	fn execute(&self, input: &[u8], output: &mut BytesRef) -> Result<(), Error> {
-    let res = knapsack_msb_slice(input).map_err(|e| Error(e))?;
-    output.write(0, &res);
-    Ok(())
+		let abitype = [ParamType::Bytes];
+    // we don't use "tightly packed" data here for more convenience with solc
+		let v = input[4..].to_vec();
+		let decode = ethabi::decode(&abitype, &v)?;
+    if decode.len() != 1 {
+      return Err(Error::from("Knapsack expects one parameter"));
+    }
+    match decode[0] {
+      Token::Bytes(ref v1) => {
+        let res = knapsack_msb_slice(v1).map_err(|e| Error(e))?;
+        output.write(0, &res);
+        Ok(())
+      },
+      _ => Err(Error::from("Wrong knapsack input")),
+    }
 	}
 }
 
@@ -674,6 +695,7 @@ mod tests {
 	use bytes::BytesRef;
 	use rustc_hex::FromHex;
 	use num::{BigUint, Zero, One};
+  use ethabi::Token;
 
 	#[test]
 	fn modexp_func() {
@@ -1173,8 +1195,8 @@ mod tests {
 	#[test]
 	fn knapsack() {
 		let f = ethereum_builtin("knapsack");
-
-		let i: [u8; 2] = [0xca, 0x40];
+    let mut i = FromHex::from_hex("01020304").unwrap();
+    i.append(&mut ethabi::encode(&vec![Token::Bytes(FromHex::from_hex("ca40").unwrap())]));
 
 		let mut o = [255u8; 32];
 		f.execute(&i[..], &mut BytesRef::Fixed(&mut o[..])).expect("Builtin should not fail");
@@ -1193,7 +1215,9 @@ mod tests {
 		assert_eq!(&ov[..], &(FromHex::from_hex("ed6a27cfb9a844cd64ee34af3935c3bb7f74cf242354081679688b31f94fcc2a").unwrap())[..]);
 
 		let i_1024 = [255u8; 1024];
-		f.execute(&i_1024[..], &mut BytesRef::Flexible(&mut ov)).expect_err("Builtin should fail if input is too long");
+    let mut i_1024_rlp = FromHex::from_hex("01020304").unwrap();
+    i_1024_rlp.append(&mut ethabi::encode(&vec![Token::Bytes(i_1024.to_vec())]));
+		f.execute(&i_1024_rlp[..], &mut BytesRef::Flexible(&mut ov)).expect_err("Builtin should fail if input is too long");
 	}
 
 }
