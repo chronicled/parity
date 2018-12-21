@@ -37,7 +37,7 @@ use ethabi;
 use ethabi::ParamType;
 use ethabi::Token;
 use snarkverifier;
-use chron_knapsack::knapsack_msb_slice;
+use chron_knapsack::knapsack_msb254_slice;
 
 /// Execution error.
 #[derive(Debug)]
@@ -57,7 +57,7 @@ impl Into<::vm::Error> for Error {
 
 impl From<ethabi::Error> for Error {
 	fn from(val: ethabi::Error) -> Self {
-    println!("Ethabi error {}", val.description());
+	println!("Ethabi error {}", val.description());
 		Error("Ethabi error")
 	}
 }
@@ -318,31 +318,31 @@ impl Impl for ZkSnark {
 				}
 			}
 		}
-    Ok(())
+	Ok(())
 	}
 }
 
 
 pub fn array_u32_to_u8(input: [u32; 8]) -> [u8; 32] {
-    let mut res: [u8; 32] = [0; 32];
-    for i in 0..8 {
-        let x: u32 = input[i];
-        res[i*4]     = ((x >> 24) & 0xff) as u8;
-        res[i*4 + 1] = ((x >> 16) & 0xff) as u8;
-        res[i*4 + 2] = ((x >> 8) & 0xff) as u8;
-        res[i*4 + 3] = (x & 0xff) as u8;
-    }
+	let mut res: [u8; 32] = [0; 32];
+	for i in 0..8 {
+		let x: u32 = input[i];
+		res[i*4]	 = ((x >> 24) & 0xff) as u8;
+		res[i*4 + 1] = ((x >> 16) & 0xff) as u8;
+		res[i*4 + 2] = ((x >> 8) & 0xff) as u8;
+		res[i*4 + 3] = (x & 0xff) as u8;
+	}
 
-    return res;
+	return res;
 }
 
 pub fn sha256_compress(left: &[u8], right: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha256C::default();
-    let mut bytes: Vec<u8> = left.to_vec();
-    bytes.extend(right.to_vec());
-    hasher.input(&bytes);
-    let state: [u32; 8] = hasher.engine.state.h;
-    return array_u32_to_u8(state);
+	let mut hasher = Sha256C::default();
+	let mut bytes: Vec<u8> = left.to_vec();
+	bytes.extend(right.to_vec());
+	hasher.input(&bytes);
+	let state: [u32; 8] = hasher.engine.state.h;
+	return array_u32_to_u8(state);
 }
 
 impl Impl for Sha256Compression {
@@ -363,27 +363,32 @@ impl Impl for Sha256Compression {
 				}
 			}
 		}
-    Ok(())
+	Ok(())
 	}
 }
 
 impl Impl for Knapsack {
+	/* knapsack(bytes param1, bytes param2)
+	 *	 Calculates the knapsack CRH of param1 and param2.
+	 *	 param1 is a 254-bit input, bit 0 is at the most significant position
+	 *	 param2 is concatenated to the 254 bits of param1 and contains bits 254 to 510
+	 */ 
 	fn execute(&self, input: &[u8], output: &mut BytesRef) -> Result<(), Error> {
-		let abitype = [ParamType::Bytes];
-    // we don't use "tightly packed" data here for more convenience with solc
+		let abitype = [ParamType::Bytes, ParamType::Bytes];
+		// we don't use "tightly packed" data here for more convenience with solc
 		let v = input[4..].to_vec();
 		let decode = ethabi::decode(&abitype, &v)?;
-    if decode.len() != 1 {
-      return Err(Error::from("Knapsack expects one parameter"));
-    }
-    match decode[0] {
-      Token::Bytes(ref v1) => {
-        let res = knapsack_msb_slice(v1).map_err(|e| Error(e))?;
-        output.write(0, &res);
-        Ok(())
-      },
-      _ => Err(Error::from("Wrong knapsack input")),
-    }
+		if decode.len() != 2 {
+			return Err(Error::from("Wrong parameter count"));
+		}
+		match (&decode[0], &decode[1]) {
+			(Token::Bytes(ref p1), Token::Bytes(ref p2)) => {
+				let res = knapsack_msb254_slice(p1, p2).map_err(|e| Error(e))?;
+				output.write(0, &res);
+				Ok(())
+			},
+			_ => Err(Error::from("Wrong knapsack input")),
+		}
 	}
 }
 
@@ -611,9 +616,9 @@ impl Impl for Bn128MulImpl {
 
 impl Impl for Bn128PairingImpl {
 	/// Can fail if:
-	///     - input length is not a multiple of 192
-	///     - any of odd points does not belong to bn128 curve
-	///     - any of even points does not belong to the twisted bn128 curve over the field F_p^2 = F_p[i] / (i^2 + 1)
+	///		- input length is not a multiple of 192
+	///		- any of odd points does not belong to bn128 curve
+	///		- any of even points does not belong to the twisted bn128 curve over the field F_p^2 = F_p[i] / (i^2 + 1)
 	fn execute(&self, input: &[u8], output: &mut BytesRef) -> Result<(), Error> {
 		if input.len() % 192 != 0 {
 			return Err("Invalid input length, must be multiple of 192 (3 * (32*2))".into())
@@ -1195,28 +1200,28 @@ mod tests {
 	#[test]
 	fn knapsack() {
 		let f = ethereum_builtin("knapsack");
-    let mut i = FromHex::from_hex("01020304").unwrap();
-    i.append(&mut ethabi::encode(&vec![Token::Bytes(FromHex::from_hex("ca40").unwrap())]));
+		let mut i = FromHex::from_hex("01020304").unwrap();
+		i.append(&mut ethabi::encode(&vec![Token::Bytes(FromHex::from_hex("ca40000000000000000000000000000000000000000000000000000000000000").unwrap()), Token::Bytes(FromHex::from_hex("80").unwrap())]));
 
 		let mut o = [255u8; 32];
 		f.execute(&i[..], &mut BytesRef::Fixed(&mut o[..])).expect("Builtin should not fail");
-		assert_eq!(&o[..], &(FromHex::from_hex("ed6a27cfb9a844cd64ee34af3935c3bb7f74cf242354081679688b31f94fcc2a").unwrap())[..]);
+		assert_eq!(&o[..], &(FromHex::from_hex("8459e08ea7f620bfb73b9b9f9ad3f7e9c999cfbb3718d6c2e43ea75c2df18612").unwrap())[..]);
 
 		let mut o8 = [255u8; 8];
 		f.execute(&i[..], &mut BytesRef::Fixed(&mut o8[..])).expect("Builtin should not fail");
-		assert_eq!(&o8[..], &(FromHex::from_hex("ed6a27cfb9a844cd").unwrap())[..]);
+		assert_eq!(&o8[..], &(FromHex::from_hex("8459e08ea7f620bf").unwrap())[..]);
 
 		let mut o34 = [255u8; 34];
 		f.execute(&i[..], &mut BytesRef::Fixed(&mut o34[..])).expect("Builtin should not fail");
-		assert_eq!(&o34[..], &(FromHex::from_hex("ed6a27cfb9a844cd64ee34af3935c3bb7f74cf242354081679688b31f94fcc2affff").unwrap())[..]);
+		assert_eq!(&o34[..], &(FromHex::from_hex("8459e08ea7f620bfb73b9b9f9ad3f7e9c999cfbb3718d6c2e43ea75c2df18612ffff").unwrap())[..]);
 
 		let mut ov = vec![];
 		f.execute(&i[..], &mut BytesRef::Flexible(&mut ov)).expect("Builtin should not fail");
-		assert_eq!(&ov[..], &(FromHex::from_hex("ed6a27cfb9a844cd64ee34af3935c3bb7f74cf242354081679688b31f94fcc2a").unwrap())[..]);
+		assert_eq!(&ov[..], &(FromHex::from_hex("8459e08ea7f620bfb73b9b9f9ad3f7e9c999cfbb3718d6c2e43ea75c2df18612").unwrap())[..]);
 
 		let i_1024 = [255u8; 1024];
-    let mut i_1024_rlp = FromHex::from_hex("01020304").unwrap();
-    i_1024_rlp.append(&mut ethabi::encode(&vec![Token::Bytes(i_1024.to_vec())]));
+		let mut i_1024_rlp = FromHex::from_hex("01020304").unwrap();
+		i_1024_rlp.append(&mut ethabi::encode(&vec![Token::Bytes(i_1024.to_vec()), Token::Bytes(i_1024.to_vec())]));
 		f.execute(&i_1024_rlp[..], &mut BytesRef::Flexible(&mut ov)).expect_err("Builtin should fail if input is too long");
 	}
 
