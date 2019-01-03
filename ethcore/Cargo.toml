@@ -79,6 +79,7 @@ tempdir = {version="0.3", optional = true}
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android"))'.dependencies]
 hardware-wallet = { path = "../hw" }
 sha2_compression = { path = "../sha2_compression" }
+chron_knapsack = { path = "../chron_knapsack" }
 
 [target.'cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android")))'.dependencies]
 fake-hardware-wallet = { path = "../util/fake-hardware-wallet" }
