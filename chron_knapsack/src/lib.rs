@@ -5,12 +5,14 @@ extern crate crypto;
 extern crate bit_vec;
 extern crate hex;
 extern crate byteorder;
+extern crate bitintr;
 
 use num::{BigUint, Zero};
 use crypto::digest::Digest;
 use crypto::sha2::Sha512;
 use byteorder::{ByteOrder, LittleEndian};
 use bit_vec::BitVec;
+use bitintr::Rbit;
 
 const BN128_R: &[u8] = b"21888242871839275222246405745257275088548364400416034343698204186575808495617";
 //const EDWARDS_R: &[u8] = b"1552511030102430251236801561344621993261920897571225601";
@@ -71,24 +73,16 @@ pub fn knapsack_msb254_slice<'a>(input1: &[u8], input2: &[u8]) -> Result<[u8; 32
   input_vec1.truncate(254);
   input_vec1.extend(input_vec2.iter());
   let hash = knapsack(&input_vec1)?;
+  let reversed: Vec<u8> = hash.to_bytes_le().as_slice().iter().map(|x| x.rbit()).collect();
+
   let mut res = [0u8; 32];
-
-  res.copy_from_slice(hash.to_bytes_le().as_slice());
-  Ok(res)
-}
-
-pub fn knapsack_msb_slice<'a>(input: &[u8]) -> Result<[u8; 32], &'static str> {
-  let input_vec = BitVec::from_bytes(input);
-  let hash = knapsack(&input_vec)?;
-  let mut res = [0u8; 32];
-
-  res.copy_from_slice(hash.to_bytes_le().as_slice());
+  res.copy_from_slice(&reversed);
   Ok(res)
 }
 
 #[cfg(test)]
 mod tests {
-  use {knapsack, knapsack_msb_slice, knapsack_msb254_slice};
+  use {knapsack, knapsack_msb254_slice};
   use num::BigUint;
   use bit_vec::BitVec;
 
@@ -122,13 +116,9 @@ mod tests {
       assert!(result == expected_output, "Knapsack failed.");
     }
 
-    let mut res_vec = knapsack_msb_slice(&hex::decode(b"ca40").unwrap()).unwrap().to_vec();
+    let mut res_vec = knapsack_msb254_slice(&hex::decode(&b"ca40000000000000000000000000000000000000000000000000000000000000"[..]).unwrap(), &hex::decode(b"80").unwrap()).unwrap().to_vec();
     res_vec.reverse();
-    assert!(hex::encode(res_vec) == "2acc4ff9318b68791608542324cf747fbbc33539af34ee64cd44a8b9cf276aed", "Knapsack slice failed.");
-
-    res_vec = knapsack_msb254_slice(&hex::decode(&b"ca40000000000000000000000000000000000000000000000000000000000000"[..]).unwrap(), &hex::decode(b"80").unwrap()).unwrap().to_vec();
-    res_vec.reverse();
-    assert!(hex::encode(res_vec) == "1286f12d5ca73ee4c2d61837bbcf99c9e9f7d39a9f9b3bb7bf20f6a78ee05984", "Knapsack 254 slice failed.");
+    assert!(hex::encode(res_vec) == "48618fb43ae57c27436b18ecddf3999397efcb59f9d9dcedfd046fe571079a21", "Knapsack 254 slice failed.");
   }
 }
 

@@ -1205,19 +1205,19 @@ mod tests {
 
 		let mut o = [255u8; 32];
 		f.execute(&i[..], &mut BytesRef::Fixed(&mut o[..])).expect("Builtin should not fail");
-		assert_eq!(&o[..], &(FromHex::from_hex("8459e08ea7f620bfb73b9b9f9ad3f7e9c999cfbb3718d6c2e43ea75c2df18612").unwrap())[..]);
+		assert_eq!(&o[..], &(FromHex::from_hex("219a0771e56f04fdeddcd9f959cbef979399f3ddec186b43277ce53ab48f6148").unwrap())[..]);
 
 		let mut o8 = [255u8; 8];
 		f.execute(&i[..], &mut BytesRef::Fixed(&mut o8[..])).expect("Builtin should not fail");
-		assert_eq!(&o8[..], &(FromHex::from_hex("8459e08ea7f620bf").unwrap())[..]);
+		assert_eq!(&o8[..], &(FromHex::from_hex("219a0771e56f04fd").unwrap())[..]);
 
 		let mut o34 = [255u8; 34];
 		f.execute(&i[..], &mut BytesRef::Fixed(&mut o34[..])).expect("Builtin should not fail");
-		assert_eq!(&o34[..], &(FromHex::from_hex("8459e08ea7f620bfb73b9b9f9ad3f7e9c999cfbb3718d6c2e43ea75c2df18612ffff").unwrap())[..]);
+		assert_eq!(&o34[..], &(FromHex::from_hex("219a0771e56f04fdeddcd9f959cbef979399f3ddec186b43277ce53ab48f6148ffff").unwrap())[..]);
 
 		let mut ov = vec![];
 		f.execute(&i[..], &mut BytesRef::Flexible(&mut ov)).expect("Builtin should not fail");
-		assert_eq!(&ov[..], &(FromHex::from_hex("8459e08ea7f620bfb73b9b9f9ad3f7e9c999cfbb3718d6c2e43ea75c2df18612").unwrap())[..]);
+		assert_eq!(&ov[..], &(FromHex::from_hex("219a0771e56f04fdeddcd9f959cbef979399f3ddec186b43277ce53ab48f6148").unwrap())[..]);
 
 		let i_1024 = [255u8; 1024];
 		let mut i_1024_rlp = FromHex::from_hex("01020304").unwrap();
