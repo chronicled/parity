@@ -25,6 +25,6 @@ slab = "0.3"
 smallvec = "0.6"
 tiny-keccak = "1.4"
 
-jsonrpc-core = { path = "../../temp/private-jsonrpc/core" }
-jsonrpc-macros = { path = "../../temp/private-jsonrpc/macros" }
-jsonrpc-pubsub = { path = "../../temp/private-jsonrpc/pubsub" }
+jsonrpc-core = { path = "../../chron-jsonrpc/core" }
+jsonrpc-macros = { path = "../../chron-jsonrpc/macros" }
+jsonrpc-pubsub = { path = "../../chron-jsonrpc/pubsub" }

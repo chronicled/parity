@@ -27,13 +27,13 @@ tokio-timer = "0.1"
 transient-hashmap = "0.4"
 itertools = "0.5"
 
-jsonrpc-core = { path = "../../temp/private-jsonrpc/core" }
-jsonrpc-rabbitmq = { path = "../../temp/private-jsonrpc/rabbit-mq" }
-jsonrpc-http-server = { path = "../../temp/private-jsonrpc/http" }
-jsonrpc-ws-server = { path = "../../temp/private-jsonrpc/ws" }
-jsonrpc-ipc-server = { path = "../../temp/private-jsonrpc/ipc" }
-jsonrpc-macros = { path = "../../temp/private-jsonrpc/macros" }
-jsonrpc-pubsub = { path = "../../temp/private-jsonrpc/pubsub" }
+jsonrpc-core = { path = "../../chron-jsonrpc/core" }
+jsonrpc-rabbitmq = { path = "../../chron-jsonrpc/rabbit-mq" }
+jsonrpc-http-server = { path = "../../chron-jsonrpc/http" }
+jsonrpc-ws-server = { path = "../../chron-jsonrpc/ws" }
+jsonrpc-ipc-server = { path = "../../chron-jsonrpc/ipc" }
+jsonrpc-macros = { path = "../../chron-jsonrpc/macros" }
+jsonrpc-pubsub = { path = "../../chron-jsonrpc/pubsub" }
 
 ethash = { path = "../ethash" }
 ethcore = { path = "../ethcore", features = ["test-helpers"] }
