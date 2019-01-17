@@ -27,6 +27,7 @@ extern crate env_logger;
 extern crate futures;
 extern crate atty;
 extern crate jsonrpc_core;
+extern crate jsonrpc_rabbitmq;
 extern crate num_cpus;
 extern crate number_prefix;
 extern crate parking_lot;

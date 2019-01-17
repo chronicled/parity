@@ -27,12 +27,13 @@ tokio-timer = "0.1"
 transient-hashmap = "0.4"
 itertools = "0.5"
 
-jsonrpc-core = { git = "https://github.com/paritytech/jsonrpc.git", branch = "parity-2.2" }
-jsonrpc-http-server = { git = "https://github.com/paritytech/jsonrpc.git", branch = "parity-2.2" }
-jsonrpc-ws-server = { git = "https://github.com/paritytech/jsonrpc.git", branch = "parity-2.2" }
-jsonrpc-ipc-server = { git = "https://github.com/paritytech/jsonrpc.git", branch = "parity-2.2" }
-jsonrpc-macros = { git = "https://github.com/paritytech/jsonrpc.git", branch = "parity-2.2" }
-jsonrpc-pubsub = { git = "https://github.com/paritytech/jsonrpc.git", branch = "parity-2.2" }
+jsonrpc-core = { path = "../../temp/private-jsonrpc/core" }
+jsonrpc-rabbitmq = { path = "../../temp/private-jsonrpc/rabbit-mq" }
+jsonrpc-http-server = { path = "../../temp/private-jsonrpc/http" }
+jsonrpc-ws-server = { path = "../../temp/private-jsonrpc/ws" }
+jsonrpc-ipc-server = { path = "../../temp/private-jsonrpc/ipc" }
+jsonrpc-macros = { path = "../../temp/private-jsonrpc/macros" }
+jsonrpc-pubsub = { path = "../../temp/private-jsonrpc/pubsub" }
 
 ethash = { path = "../ethash" }
 ethcore = { path = "../ethcore", features = ["test-helpers"] }
