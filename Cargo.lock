@@ -1666,15 +1666,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "jsonrpc-rabbitmq"
-version = "9.0.0"
-dependencies = [
- "jsonrpc-core 9.0.0 (git+https://github.com/paritytech/jsonrpc.git?branch=parity-2.2)",
- "serde 1.0.80 (registry+https://github.com/rust-lang/crates.io-index)",
- "serde_json 1.0.32 (registry+https://github.com/rust-lang/crates.io-index)",
-]
-
-[[package]]
 name = "jsonrpc-server-utils"
 version = "9.0.0"
 source = "git+https://github.com/paritytech/jsonrpc.git?branch=parity-2.2#84360bf1d03821b8fd669a6a95fcdf847aaf6cca"
@@ -2273,7 +2264,6 @@ dependencies = [
  "ipnetwork 0.12.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "journaldb 0.2.0",
  "jsonrpc-core 9.0.0 (git+https://github.com/paritytech/jsonrpc.git?branch=parity-2.2)",
- "jsonrpc-rabbitmq 9.0.0",
  "keccak-hash 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "kvdb 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "kvdb-rocksdb 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -2437,7 +2427,6 @@ dependencies = [
  "jsonrpc-ipc-server 9.0.0 (git+https://github.com/paritytech/jsonrpc.git?branch=parity-2.2)",
  "jsonrpc-macros 9.0.0 (git+https://github.com/paritytech/jsonrpc.git?branch=parity-2.2)",
  "jsonrpc-pubsub 9.0.0 (git+https://github.com/paritytech/jsonrpc.git?branch=parity-2.2)",
- "jsonrpc-rabbitmq 9.0.0",
  "jsonrpc-ws-server 9.0.0 (git+https://github.com/paritytech/jsonrpc.git?branch=parity-2.2)",
  "keccak-hash 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "kvdb-memorydb 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",

@@ -42,6 +42,8 @@ use miner::external::ExternalMiner;
 use node_filter::NodeFilter;
 use parity_runtime::Runtime;
 use parity_rpc::{Origin, Metadata, NetworkSettings, informant, is_major_importing};
+use parity_rpc::v1::{EthClient, EthClientOptions};
+use parity_rpc::rabbitmq;
 use updater::{UpdatePolicy, Updater};
 use parity_version::version;
 use ethcore_private_tx::{ProviderConfig, EncryptorConfig, SecretStoreEncryptor};
@@ -749,7 +751,28 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	let ws_server = rpc::new_ws(cmd.ws_conf.clone(), &dependencies)?;
 	let ipc_server = rpc::new_ipc(cmd.ipc_conf, &dependencies)?;
 	let http_server = rpc::new_http("HTTP JSON-RPC", "jsonrpc", cmd.http_conf.clone(), &dependencies)?;
-	rpc::new_rabbitmq(&dependencies);
+	let eth_client = EthClient::new(
+		&client.clone(),
+		&snapshot_service.clone(),
+		&sync_provider.clone(),
+		&account_provider.clone(),
+		&miner.clone(),
+		&external_miner.clone(),
+		EthClientOptions {
+			pending_nonce_from_queue: cmd.geth_compatibility,
+			allow_pending_receipt_query: cmd.geth_compatibility,
+			send_block_number_in_get_work: cmd.geth_compatibility,
+			gas_price_percentile: cmd.gas_price_percentile,
+			poll_lifetime: cmd.poll_lifetime
+		}
+	);
+	// let res_block_number = interface_client.block_number();
+	// println!("Result Block Number {:?}", res_block_number);
+	let rabbit_mq_interface = rabbitmq::interface::Interface{
+		eth_client: eth_client
+	};
+	rabbit_mq_interface.get_last_block();
+	//rpc::new_rabbitmq(&dependencies);
 
 	// secret store key server
 	let secretstore_deps = secretstore::Dependencies {

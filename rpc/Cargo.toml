@@ -33,7 +33,6 @@ jsonrpc-ws-server = { git = "https://github.com/paritytech/jsonrpc.git", branch 
 jsonrpc-ipc-server = { git = "https://github.com/paritytech/jsonrpc.git", branch = "parity-2.2" }
 jsonrpc-macros = { git = "https://github.com/paritytech/jsonrpc.git", branch = "parity-2.2" }
 jsonrpc-pubsub = { git = "https://github.com/paritytech/jsonrpc.git", branch = "parity-2.2" }
-jsonrpc-rabbitmq = { path = "./rabbit-mq" }
 
 ethash = { path = "../ethash" }
 ethcore = { path = "../ethcore", features = ["test-helpers"] }

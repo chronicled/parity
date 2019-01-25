@@ -106,6 +106,7 @@ pub extern crate jsonrpc_ws_server as ws;
 mod authcodes;
 mod http_common;
 pub mod v1;
+pub mod rabbitmq;
 
 pub mod tests;
 

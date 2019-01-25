@@ -23,7 +23,6 @@ use dir::default_data_path;
 use dir::helpers::replace_home;
 use helpers::parity_ipc_path;
 use jsonrpc_core::MetaIoHandler;
-use jsonrpc_rabbitmq;
 use parity_runtime::Executor;
 use parity_rpc::informant::{RpcStats, Middleware};
 use parity_rpc::{self as rpc, Metadata, DomainsValidation};
@@ -136,18 +135,6 @@ pub struct Dependencies<D: rpc_apis::Dependencies> {
 	pub apis: Arc<D>,
 	pub executor: Executor,
 	pub stats: Arc<RpcStats>,
-}
-
-pub fn new_rabbitmq<D: rpc_apis::Dependencies>(
-	deps: &Dependencies<D>
-) {
-	let mut meta_io = MetaIoHandler::default();
-	let apis = &ApiSet::UnsafeContext;
-	deps.apis.extend_with_set(&mut meta_io, &apis.list_apis());
-	let rpc = jsonrpc_rabbitmq::Rpc::new(meta_io);
-	// Rpc request test
-	let result = rpc.request("eth_blockNumber", &());
-	println!("Block Number: {:?}", result);
 }
 
 pub fn new_ws<D: rpc_apis::Dependencies>(
