@@ -30,7 +30,7 @@ impl<C, SN: ?Sized, S: ?Sized, M, EM> Interface<C, SN, S, M, EM> where
 	pub fn get_last_block(&self) {
 		// TODO
 		// Publish new block to RabbitMQ
-		let response = &self.eth_client.block_number();
-		println!("Last Block --> {:?}", response);
+		let response = &self.eth_client.block_number().unwrap();
+		println!("Latest Block --> {:?}", response);
 	}
 }

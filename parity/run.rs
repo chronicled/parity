@@ -766,13 +766,11 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 			poll_lifetime: cmd.poll_lifetime
 		}
 	);
-	// let res_block_number = interface_client.block_number();
-	// println!("Result Block Number {:?}", res_block_number);
+
 	let rabbit_mq_interface = rabbitmq::interface::Interface{
 		eth_client: eth_client
 	};
 	rabbit_mq_interface.get_last_block();
-	//rpc::new_rabbitmq(&dependencies);
 
 	// secret store key server
 	let secretstore_deps = secretstore::Dependencies {
