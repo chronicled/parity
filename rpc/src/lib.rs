@@ -20,6 +20,9 @@
 
 #[macro_use]
 extern crate futures;
+extern crate lapin_futures as lapin;
+extern crate failure;
+extern crate tokio;
 
 extern crate ansi_term;
 extern crate cid;
