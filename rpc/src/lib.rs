@@ -80,6 +80,10 @@ extern crate jsonrpc_macros;
 #[macro_use]
 extern crate serde_derive;
 
+extern crate failure;
+extern crate lapin_futures as lapin;
+extern crate tokio;
+
 #[cfg(test)]
 extern crate ethjson;
 #[cfg(test)]

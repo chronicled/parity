@@ -42,6 +42,7 @@ use miner::external::ExternalMiner;
 use node_filter::NodeFilter;
 use parity_runtime::Runtime;
 use parity_rpc::{Origin, Metadata, NetworkSettings, informant, is_major_importing};
+use parity_rpc::v1::rabbitmq;
 use updater::{UpdatePolicy, Updater};
 use parity_version::version;
 use ethcore_private_tx::{ProviderConfig, EncryptorConfig, SecretStoreEncryptor};
@@ -749,6 +750,11 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	let ws_server = rpc::new_ws(cmd.ws_conf.clone(), &dependencies)?;
 	let ipc_server = rpc::new_ipc(cmd.ipc_conf, &dependencies)?;
 	let http_server = rpc::new_http("HTTP JSON-RPC", "jsonrpc", cmd.http_conf.clone(), &dependencies)?;
+	let rabbitmq_server = Arc::new(rabbitmq::client::PubSubClient {
+		client: client.clone(),
+		interface: rabbitmq::interface::RabbitMqInterface::new()
+	});
+	service.add_notify(rabbitmq_server.clone());
 
 	// secret store key server
 	let secretstore_deps = secretstore::Dependencies {
@@ -821,7 +827,7 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 			informant,
 			client,
 			client_service: Arc::new(service),
-			keep_alive: Box::new((watcher, updater, ws_server, http_server, ipc_server, secretstore_key_server, ipfs_server, runtime)),
+			keep_alive: Box::new((watcher, updater, ws_server, http_server, ipc_server, secretstore_key_server, ipfs_server, runtime, rabbitmq_server)),
 		}
 	})
 }
