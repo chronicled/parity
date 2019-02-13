@@ -26,21 +26,19 @@ use lapin::types::FieldTable;
 use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
 
-pub struct Config {
-	pub address: SocketAddr
+#[derive(Debug, Clone, PartialEq)]
+pub struct RabbitMqConfig {
+	pub hostname: String,
+	pub port: u16
 }
 
 /// RabbitMQ interface using lapin
 pub struct RabbitMqInterface {
-	config: Config
+	config: RabbitMqConfig
 }
 
 impl RabbitMqInterface {
-	pub fn new() -> Self {
-		let config = Config {
-			// TODO use config file
-			address: "127.0.0.1:5672".parse().unwrap()
-		};
+	pub fn new(config: RabbitMqConfig) -> Self {
 		Self {
 			config: config
 		}
@@ -48,8 +46,9 @@ impl RabbitMqInterface {
 
 	/// Publish a new message to the defined queue
 	pub fn publish(&self, serialized_block: String, queue_name: &'static str) {
+		let url = format!("{}:{}", self.config.hostname, self.config.port).parse().unwrap();
 		Runtime::new().unwrap().block_on_all(
-			TcpStream::connect(&self.config.address).map_err(Error::from).and_then(|stream| {
+			TcpStream::connect(&url).map_err(Error::from).and_then(|stream| {
 				lapin::client::Client::connect(stream, ConnectionOptions::default()).map_err(Error::from)
 			}).and_then(|(client, _ /* heartbeat */)| {
 				client.create_channel().map_err(Error::from)

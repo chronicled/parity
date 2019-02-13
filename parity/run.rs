@@ -103,6 +103,7 @@ pub struct RunCmd {
 	pub http_conf: rpc::HttpConfiguration,
 	pub ipc_conf: rpc::IpcConfiguration,
 	pub net_conf: sync::NetworkConfiguration,
+	pub rabbitmq_conf: rabbitmq::interface::RabbitMqConfig,
 	pub network_id: Option<u64>,
 	pub warp_sync: bool,
 	pub warp_barrier: Option<u64>,
@@ -752,7 +753,7 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	let http_server = rpc::new_http("HTTP JSON-RPC", "jsonrpc", cmd.http_conf.clone(), &dependencies)?;
 	let rabbitmq_server = Arc::new(rabbitmq::client::PubSubClient {
 		client: client.clone(),
-		interface: rabbitmq::interface::RabbitMqInterface::new()
+		interface: rabbitmq::interface::RabbitMqInterface::new(cmd.rabbitmq_conf)
 	});
 	service.add_notify(rabbitmq_server.clone());
 
