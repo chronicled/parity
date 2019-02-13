@@ -260,13 +260,18 @@ impl<C: Client> txpool::Verifier<Transaction> for Verifier<C, ::pool::scoring::N
 		}
 
 		let sender = transaction.sender();
-		let account_details = self.client.account_details(&sender);
+		// If unsigned made this far then it should've passed preliminar verification and permission
+		let account_is_local = match transaction.is_unsigned() {
+			true => false,
+			// TODO: temp cache account details on first fetch
+			false => self.client.account_details(&sender).is_local,
+		};
 
 		if transaction.gas_price < self.options.minimal_gas_price {
 			let transaction_type = self.client.transaction_type(&transaction);
 			if let TransactionType::Service = transaction_type {
 				debug!(target: "txqueue", "Service tx {:?} below minimal gas price accepted", hash);
-			} else if is_own || account_details.is_local {
+			} else if is_own || account_is_local {
 				info!(target: "own_tx", "Local tx {:?} below minimal gas price accepted", hash);
 			} else {
 				trace!(
@@ -283,33 +288,37 @@ impl<C: Client> txpool::Verifier<Transaction> for Verifier<C, ::pool::scoring::N
 			}
 		}
 
-		let cost = transaction.value + transaction.gas_price * transaction.gas;
-		if account_details.balance < cost {
-			debug!(
-				target: "txqueue",
-				"[{:?}] Rejected tx with not enough balance: {} < {}",
-				hash,
-				account_details.balance,
-				cost,
-			);
-			bail!(transaction::Error::InsufficientBalance {
-				cost: cost,
-				balance: account_details.balance,
-			});
+		if !transaction.is_unsigned() {
+			let account_details = self.client.account_details(&sender);
+
+			let cost = transaction.value + transaction.gas_price * transaction.gas;
+			if account_details.balance < cost {
+				debug!(
+					target: "txqueue",
+					"[{:?}] Rejected tx with not enough balance: {} < {}",
+					hash,
+					account_details.balance,
+					cost,
+				);
+				bail!(transaction::Error::InsufficientBalance {
+					cost: cost,
+					balance: account_details.balance,
+				});
+			}
+
+			if transaction.nonce < account_details.nonce {
+				debug!(
+					target: "txqueue",
+					"[{:?}] Rejected tx with old nonce ({} < {})",
+					hash,
+					transaction.nonce,
+					account_details.nonce,
+				);
+				bail!(transaction::Error::Old);
+			}
 		}
 
-		if transaction.nonce < account_details.nonce {
-			debug!(
-				target: "txqueue",
-				"[{:?}] Rejected tx with old nonce ({} < {})",
-				hash,
-				transaction.nonce,
-				account_details.nonce,
-			);
-			bail!(transaction::Error::Old);
-		}
-
-		let priority = match (is_own || account_details.is_local, is_retracted) {
+		let priority = match (is_own || account_is_local, is_retracted) {
 			(true, _) => super::Priority::Local,
 			(false, false) => super::Priority::Regular,
 			(false, true) => super::Priority::Retracted,

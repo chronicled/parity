@@ -242,7 +242,7 @@ impl<'a> EvmTestClient<'a> {
 	) -> TransactResult<T::Output, V::Output> {
 		let initial_gas = transaction.gas;
 		// Verify transaction
-		let is_ok = transaction.verify_basic(true, None, false);
+		let is_ok = transaction.verify_basic(true, None, false, false);
 		if let Err(error) = is_ok {
 			return TransactResult::Err {
 				state_root: *self.state.root(),

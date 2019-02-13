@@ -348,6 +348,7 @@ impl EthereumMachine {
 
 	/// Verify a particular transaction is valid, regardless of order.
 	pub fn verify_transaction_unordered(&self, t: UnverifiedTransaction, _header: &Header) -> Result<SignedTransaction, transaction::Error> {
+		transaction::Verifiable::verify_unordered(&t, None)?;
 		Ok(SignedTransaction::new(t)?)
 	}
 
@@ -365,7 +366,7 @@ impl EthereumMachine {
 		} else {
 			None
 		};
-		t.verify_basic(check_low_s, chain_id, false)?;
+		t.verify_basic(check_low_s, chain_id, false, true)?;
 
 		Ok(())
 	}

@@ -444,7 +444,7 @@ impl Miner {
 				ordering: miner::PendingOrdering::Priority,
 			}
 		);
-
+	
 		let took_ms = |elapsed: &Duration| {
 			elapsed.as_secs() * 1000 + elapsed.subsec_nanos() as u64 / 1_000_000
 		};
@@ -1001,7 +1001,9 @@ impl miner::MinerService for Miner {
 			self.map_existing_pending_block(|sealing| {
 				sealing.transactions()
 					.iter()
-					.map(|signed| pool::VerifiedTransaction::from_pending_block_transaction(signed.clone()))
+					.map(|signed| {
+						pool::VerifiedTransaction::from_pending_block_transaction(signed.clone())
+					})
 					.map(Arc::new)
 					.take(max_len)
 					.collect()
@@ -1458,6 +1460,56 @@ mod tests {
 		assert_eq!(miner.prepare_pending_block(&client), BlockPreparationStatus::Succeeded);
 		// After pending block is created we should see a transaction.
 		assert_eq!(miner.ready_transactions(&client, 10, PendingOrdering::Priority).len(), 1);
+	}
+
+	#[test]
+	fn should_import_external_zko_transaction() {
+		/* - should_not_import_when_disabled
+		*/
+		let insufficient_gas = FromHex::from_hex("f90291020182520894095e7baea6a6c7c4c2dfeb977efac326af552d870ab90270f9026d84aabbccddb90265f90262a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12a0379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96a03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db840b8e768655fd075c064809348bd759a9cbc5055eafd1860e9498ca8ab2a373b888de62f48fbb1b0864e9b11ca5c5c882db2310ae80a1e27cc099c7ce6e778de0d808080").unwrap();
+		let zko_ig: UnverifiedTransaction = rlp::decode(&insufficient_gas).expect("decoding UnverifiedTransaction failed");
+		let invalid_sig = FromHex::from_hex("f90292020183019a2894095e7baea6a6c7c4c2dfeb977efac326af552d870ab90270f9026d84aabbccddb90265f90262a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12a0379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96a03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db840b8e768655fd075c064809348bd759a9cbc5055eafd1860e9498ca8ab2a373b888de62f48fbb1b0864e9b11ca5c5c882db2310ae80a1e27cc099c7ce6e778de0d028080").unwrap();
+		let zko_is: UnverifiedTransaction = rlp::decode(&invalid_sig).expect("decoding UnverifiedTransaction failed");
+
+		let valid_sig = FromHex::from_hex("f904f5020183019a2894095e7baea6a6c7c4c2dfeb977efac326af552d870ab904d3f904d0b90265f90262a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12a0379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96a03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db840b8e768655fd075c064809348bd759a9cbc5055eafd1860e9498ca8ab2a373b888de62f48fbb1b0864e9b11ca5c5c882db2310ae80a1e27cc099c7ce6e778de0db90265f90262a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12a0379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96a03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db8401d99585328392b581c3bc11a04d08e35fd197d95f2bc7da17a7c16884529ee0cb6d138d06d476676caa53857600a39fff1597fabf5777ae3da6e895c05cab307028080").unwrap();
+		let zko_tx: UnverifiedTransaction = rlp::decode(&valid_sig).expect("decoding UnverifiedTransaction failed");
+
+		// given
+		let client = TestBlockChainClient::default();
+		let miner = miner();
+		let best_block = 0;
+		
+		// insufficient gas
+		miner.import_external_transactions(&client, vec![zko_ig]).pop().unwrap().expect_err("Invalid tx cannot be accepted");
+		// incorrect sig
+		miner.import_external_transactions(&client, vec![zko_is]).pop().unwrap().expect_err("Wrong sig should not be accepted");
+		// when
+		let res = miner.import_external_transactions(&client, vec![zko_tx]).pop().unwrap();
+
+		// then
+		assert_eq!(res.unwrap(), ());
+		// By default we don't reseal on external transactions
+		assert_eq!(miner.pending_transactions(best_block), None);
+		assert_eq!(miner.pending_receipts(best_block), None);
+		// By default we use PendingSet::AlwaysSealing, so no transactions yet.
+		assert_eq!(miner.ready_transactions(&client, 10, PendingOrdering::Priority).len(), 0);
+		// This method will let us know if pending block was created (before calling that method)
+		assert_eq!(miner.queued_transactions().len(), 1);
+
+		assert_eq!(miner.prepare_pending_block(&client), BlockPreparationStatus::Succeeded);
+		// Transaction is succefully fetched from pool for the block inclusion
+		let chain_info = client.chain_info();
+		let pending: Vec<Arc<_>> = miner.transaction_queue.pending(
+			miner.pool_client(&client).clone(),
+			pool::PendingSettings {
+				block_number: chain_info.best_block_number,
+				current_timestamp: chain_info.best_block_timestamp,
+				nonce_cap: Some(U256::from(1000)),
+				max_len: 10,
+				ordering: miner::PendingOrdering::Priority,
+			}
+		);
+		assert_eq!(pending.len(), 1);
 	}
 
 	#[test]

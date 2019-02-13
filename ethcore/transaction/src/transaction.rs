@@ -17,7 +17,7 @@
 //! Transaction data structure.
 
 use std::ops::Deref;
-use ethereum_types::{H256, H160, Address, U256};
+use ethereum_types::{H256, H512, H160, Address, U256};
 use error;
 use ethjson;
 use ethkey::{self, Signature, Secret, Public, recover, public_to_address};
@@ -25,6 +25,7 @@ use evm::Schedule;
 use hash::keccak;
 use heapsize::HeapSizeOf;
 use rlp::{self, RlpStream, Rlp, DecoderError, Encodable};
+use crypto::ed25519;
 
 type Bytes = Vec<u8>;
 type BlockNumber = u64;
@@ -323,6 +324,10 @@ impl rlp::Encodable for UnverifiedTransaction {
 	fn rlp_append(&self, s: &mut RlpStream) { self.rlp_append_sealed_transaction(s) }
 }
 
+pub trait Verifiable {
+	fn verify_unordered(&self, chain_id: Option<u64>) -> Result<(), error::Error>;
+}
+
 impl UnverifiedTransaction {
 	/// Used to compute hash of created transactions
 	fn compute_hash(mut self) -> UnverifiedTransaction {
@@ -334,6 +339,26 @@ impl UnverifiedTransaction {
 	/// Checks is signature is empty.
 	pub fn is_unsigned(&self) -> bool {
 		self.r.is_zero() && self.s.is_zero()
+	}
+
+	pub fn is_typed(&self) -> bool {
+		let data = &self.unsigned.data;
+
+		// 3 is a minimum length of RLP of two elements 
+		if !&self.is_unsigned() || data.len() < 3 || self.unsigned.nonce.is_zero()  {
+			return false
+		}
+		
+		let rlp = Rlp::new(&data);
+		rlp.item_count().unwrap_or(0) == 2
+	}
+
+	pub fn get_type(&self) -> Result<U256, ethkey::Error> {
+		if self.is_typed() {
+			Ok(self.nonce)
+		} else {
+			Err(ethkey::Error::Custom("Has no type, i.e. a regular transaction".to_string()))
+		}
 	}
 
 	/// Append object with a signature into RLP stream
@@ -394,16 +419,17 @@ impl UnverifiedTransaction {
 	}
 
 	/// Verify basic signature params. Does not attempt sender recovery.
-	pub fn verify_basic(&self, check_low_s: bool, chain_id: Option<u64>, allow_empty_signature: bool) -> Result<(), error::Error> {
+	pub fn verify_basic(&self, check_low_s: bool, chain_id: Option<u64>, allow_empty_signature: bool, allow_typed_txs: bool) -> Result<(), error::Error> {
 		if check_low_s && !(allow_empty_signature && self.is_unsigned()) {
 			self.check_low_s()?;
 		}
 		// Disallow unsigned transactions in case EIP-86 is disabled.
-		if !allow_empty_signature && self.is_unsigned() {
+		if !allow_empty_signature && !allow_typed_txs && self.is_unsigned() {
 			return Err(ethkey::Error::InvalidSignature.into());
 		}
+		let pvn_empty = self.gas_price.is_zero() && self.value.is_zero() && self.nonce.is_zero();
 		// EIP-86: Transactions of this form MUST have gasprice = 0, nonce = 0, value = 0, and do NOT increment the nonce of account 0.
-		if allow_empty_signature && self.is_unsigned() && !(self.gas_price.is_zero() && self.value.is_zero() && self.nonce.is_zero()) {
+		if allow_empty_signature && self.is_unsigned() && !allow_typed_txs && !pvn_empty {
 			return Err(ethkey::Error::InvalidSignature.into())
 		}
 		match (self.chain_id(), chain_id) {
@@ -411,7 +437,253 @@ impl UnverifiedTransaction {
 			(Some(n), Some(m)) if n == m => {},
 			_ => return Err(error::Error::InvalidChainId),
 		};
+
+		if allow_typed_txs && self.is_unsigned() && !pvn_empty {
+			UnverifiedTypedTransaction::new(&self)?.verify_basic()?;
+		}
+
 		Ok(())
+	}
+}
+
+impl Verifiable for UnverifiedTransaction {
+	/// Additional per-type checks, in verification piplines goes after verify_basic
+	fn verify_unordered(&self, chain_id: Option<u64>) -> Result<(), error::Error> {
+		// 
+		if self.is_typed() {
+			UnverifiedTypedTransaction::new(&self)?.verify_unordered(chain_id)?;
+		}
+
+		Ok(())
+	}
+}
+
+
+/// A transaction with a specific non-regular type, e.g, a ZK origin transaction
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct UnverifiedTypedTransaction {
+	/// Plain Transaction.
+	unverified: UnverifiedTransaction,
+	// Hash of the transaction remains of the same origin
+
+	/// Transaction type to it which corresponds 
+	pub tx_type: U256,
+
+	pub typed_payload: Bytes,
+	// TODO: do not allow to instantiate tx of non-supported type
+}
+
+impl UnverifiedTypedTransaction {
+	pub fn new(unverified_tx: &UnverifiedTransaction) -> Result<Self, ethkey::Error> {
+		let mut tx = unverified_tx.clone();
+		if !&tx.is_typed() {
+			return Err(ethkey::Error::Custom("Not a typed tx".to_string()));
+		}
+		let tx_type = tx.get_type().unwrap();
+
+		if tx_type != U256([2, 0, 0, 0]) {
+			return Err(ethkey::Error::Custom("Unsupported type".to_string()));
+		}
+
+		let rlp = Rlp::new(&unverified_tx.unsigned.data);
+		let data: Bytes = rlp.val_at(0).unwrap();
+		let typed_payload: Bytes = rlp.val_at(1).unwrap();
+		
+		tx.unsigned.data = data;
+
+		Ok(UnverifiedTypedTransaction {
+			unverified: tx,
+			tx_type: tx_type,
+			typed_payload: typed_payload,
+		})
+	}
+
+	pub fn new_from_bytes(bytes: &[u8]) -> Result<Self, ethkey::Error> {
+		let map = |e| {ethkey::Error::Custom(format!("{:?}", e))};
+		Self::new(&rlp::decode(&bytes).map_err(map).unwrap())
+	}
+
+	pub fn get_type(&self) -> U256 {
+		self.tx_type
+	}
+
+	pub fn get_typed_tx(&self) -> Result<TypedTransaction, error::Error> {
+		match &self.get_type() {
+			U256([2, 0, 0, 0]) => Ok(TypedTransaction::ZkOrigin(ZkOriginTransaction::new(&self)?)),
+			_ => Err(ethkey::Error::Custom("Invalid type of transaction".to_string()).into())
+		}
+	}
+
+	/// Verifies if typed transaction is constructable
+	pub fn verify_basic(&self) -> Result<(), error::Error> {
+		match self.get_typed_tx() {
+			Ok(_) => Ok(()),
+			Err(e) => Err(e),
+		}
+	}
+}
+
+impl Verifiable for UnverifiedTypedTransaction {
+	fn verify_unordered(&self, chain_id: Option<u64>) -> Result<(), error::Error> {
+		&self.get_typed_tx()?.get_verifiable()?.verify_unordered(chain_id)?;
+		Ok(())
+	}
+}
+
+// #[derive(Debug, Clone, PartialEq, Eq)]
+pub type ProofGroth16 = [u8; 134];
+
+const COINS_IN_CNT: usize = 2;
+const COINS_OUT_CNT: usize = 2;
+
+/// Zero-knowledge origin transaction with the corresponding fields
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct ZkOriginTransaction {
+	/// Plain Transaction.
+	unverified: UnverifiedTransaction,
+	rt: H256,
+	sn: [H256; COINS_IN_CNT],
+	cm: [H256; COINS_OUT_CNT],
+	eph_pk: H256,
+	glue: H256,
+	k: H256,
+	proof: Bytes,
+	// Ciphertext
+	ct: [Bytes; COINS_OUT_CNT],
+	sig:  H512,
+}
+
+/// TODO: allow k to be empty, either Option, Enum or Vec
+impl ZkOriginTransaction {
+	pub fn new(tx: &UnverifiedTypedTransaction) -> Result<Self, DecoderError> {
+		// let dtoe = |e| ethkey::Error::Custom(format!("ZKO RLP error {:?}", e));
+
+	 	if tx.get_type() != U256([2, 0, 0, 0]) {
+			return Err(DecoderError::Custom("Doesn't match ZKO tx type"))
+		}
+
+		if tx.unverified.unsigned.action == Action::Create {
+			return Err(DecoderError::Custom("Contract creation isn't supported for ZKO txs"))
+		}
+
+		let rlp = Rlp::new(&tx.typed_payload);
+		if rlp.item_count().unwrap_or(0) != Self::fields_count() {
+			return Err(DecoderError::Custom("Incorrect number of fields for ZkOriginTransaction"))
+		}
+
+		let proof_index = 5 + COINS_IN_CNT + COINS_OUT_CNT - 1;
+		if rlp.at(proof_index)?.size() != 134 {
+			return Err(DecoderError::Custom("Incorrect proof length"));
+		}
+		
+		let unsigned = &tx.unverified.unsigned;
+		let v_pub: U256 = unsigned.gas * unsigned.gas_price + unsigned.value;
+		if v_pub != U256::from(v_pub.low_u64()) {
+			return Err(DecoderError::Custom("v_pub doesn't fit into 64 bits"));
+		}
+
+		Ok(ZkOriginTransaction {
+			unverified: tx.unverified.clone(),
+			rt: rlp.val_at(0)?,
+			sn: [rlp.val_at(1)?, rlp.val_at(2)?],
+			cm: [rlp.val_at(3)?, rlp.val_at(4)?],
+			eph_pk: rlp.val_at(5)?,
+			glue: rlp.val_at(6)?,
+			k: rlp.val_at(7)?,
+			proof: rlp.val_at(8)?,
+			ct: [rlp.val_at(9)?, rlp.val_at(10)?],
+			sig: rlp.val_at(11)?,
+		})
+	}
+
+	pub fn new_from_bytes(typed_bytes: &[u8]) -> Result<Self, DecoderError> {
+		let unverified_typed = 
+			&UnverifiedTypedTransaction::new_from_bytes(&typed_bytes)
+			.map_err(|_| {DecoderError::Custom("Cannot instantiate UnverifiedTypedTransaction with typed_bytes")})
+			.unwrap();
+		Self::new(unverified_typed)
+	}
+
+	pub fn fields_count() -> usize {
+		6 + COINS_IN_CNT + 2 * COINS_OUT_CNT
+	}
+
+	pub fn get_v_pub(&self) -> u64 {
+		let tx = &self.unverified.unsigned;
+		(tx.gas_price * tx.gas + tx.value).as_u64()
+	}
+
+	pub fn rlp_append_unsigned_tz(&self, s: &mut RlpStream) {
+		s.begin_list(Self::fields_count() - 1);
+		s.append(&self.rt);
+		for sn in &self.sn { s.append(sn); }
+		for cm in &self.cm { s.append(cm); }
+		s.append(&self.eph_pk);
+		s.append(&self.glue);
+		s.append(&self.k);
+		s.append(&self.proof);
+		for ct in &self.ct { s.append(ct); }
+	}
+
+	pub fn get_unsigned_msg(&self, _chain_id: Option<u64>) -> Bytes {
+		let mut zs = RlpStream::new();
+		self.rlp_append_unsigned_tz(&mut zs);
+		
+		let z: &Bytes = &zs.out();
+		let call_data = &self.unverified.unsigned.data;
+		// Consider using out()
+		let d_prime: Bytes = RlpStream::new().begin_list(2).append(call_data).append(z).as_raw().to_vec();
+
+		let mut unverified = self.unverified.clone();
+		unverified.unsigned.data = d_prime;
+		rlp::encode(&unverified)
+
+		// let chain_id_ensured = Some(chain_id.unwrap_or(0u64));
+		// let mut unsigned_stream = RlpStream::new();
+		// tx.rlp_append_unsigned_transaction(&mut unsigned_stream, chain_id_ensured);
+		// rlp_append_sealed_transaction
+		// unsigned_stream.out()
+	}
+
+	pub fn verify_signature(&self, chain_id: Option<u64>) -> bool {
+		ed25519::verify(&self.get_unsigned_msg(chain_id), &self.eph_pk as &[u8], &self.sig as &[u8])
+	}
+
+	pub fn sign(&self, sk: &[u8]) -> [u8; 64] {
+		ed25519::signature(&self.get_unsigned_msg(None), &sk)
+	}
+}
+
+impl HeapSizeOf for ZkOriginTransaction {
+	fn heap_size_of_children(&self) -> usize {
+		self.unverified.heap_size_of_children() +
+		self.proof.heap_size_of_children() +
+		self.ct.iter().fold(0, |acc, b| acc + b.heap_size_of_children())
+	}
+}
+
+impl Verifiable for ZkOriginTransaction {
+	fn verify_unordered(&self, chain_id: Option<u64>) -> Result<(), error::Error> {
+		if !&self.verify_signature(chain_id) {
+			return Err(ethkey::Error::Custom("ZKO signature is incorrect".into()).into())
+		}
+
+		Ok(())
+	}
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum TypedTransaction {
+	ZkOrigin(ZkOriginTransaction),
+}
+
+impl TypedTransaction {
+	pub fn get_verifiable(&self) -> Result<&impl Verifiable, error::Error> {
+		match &self {
+			TypedTransaction::ZkOrigin(ref tx) => Ok(tx),
+			// No need for default, compliler's check is exhaustve
+			// _ => Err(ethkey::Error::Custom(format!("No verifiable for {:?}", &self)).into()),
+		}
 	}
 }
 
@@ -450,6 +722,8 @@ impl SignedTransaction {
 	/// Try to verify transaction and recover sender.
 	pub fn new(transaction: UnverifiedTransaction) -> Result<Self, ethkey::Error> {
 		if transaction.is_unsigned() {
+			// TODO: move out of here and get proper chain_id
+			transaction.verify_unordered(Some(0)).map_err(|e| {ethkey::Error::Custom(format!("{:?}", e))})?;
 			Ok(SignedTransaction {
 				transaction: transaction,
 				sender: UNSIGNED_SENDER,
@@ -543,6 +817,11 @@ impl PendingTransaction {
 			transaction: signed,
 			condition: condition,
 		}
+	}
+
+	/// Checks is signature is empty.
+	pub fn is_unsigned(&self) -> bool {
+		self.transaction.is_unsigned()
 	}
 }
 
@@ -676,5 +955,113 @@ mod tests {
 		test_vector("f867078504a817c807830290409435353535353535353535353535353535353535358201578025a052f1a9b320cab38e5da8a8f97989383aab0a49165fc91c737310e4f7e9821021a052f1a9b320cab38e5da8a8f97989383aab0a49165fc91c737310e4f7e9821021", "0xd37922162ab7cea97c97a87551ed02c9a38b7332");
 		test_vector("f867088504a817c8088302e2489435353535353535353535353535353535353535358202008025a064b1702d9298fee62dfeccc57d322a463ad55ca201256d01f62b45b2e1c21c12a064b1702d9298fee62dfeccc57d322a463ad55ca201256d01f62b45b2e1c21c10", "0x9bddad43f934d313c2b79ca28a432dd2b7281029");
 		test_vector("f867098504a817c809830334509435353535353535353535353535353535353535358202d98025a052f8f61201b2b11a78d6e866abc9c3db2ae8631fa656bfe5cb53668255367afba052f8f61201b2b11a78d6e866abc9c3db2ae8631fa656bfe5cb53668255367afb", "0x3c24d7329e92f84f08556ceb6df1cdb0104ca49f");
+	}
+
+	#[test]
+	fn should_recognize_typed_tx() {
+		use rustc_hex::FromHex;
+
+		let untyped = FromHex::from_hex("f863800182520894095e7baea6a6c7c4c2dfeb977efac326af552d870a84aabbccdd1ba048b55bfa915ac795c431978d8a6a992b628d557da5ff759b307d495a36649353a0efffd310ac743f371de3b9f7f9cb56c0b28ad43601b4ab949f53faa07bd2c804").unwrap();
+		let t1: UnverifiedTransaction = rlp::decode(&untyped).expect("decoding UnverifiedTransaction failed");
+		assert_eq!(t1.is_typed(), false);
+
+		let typed = FromHex::from_hex("ea020182520894095e7baea6a6c7c4c2dfeb977efac326af552d870a8bca841100110084aabbccdd1b8080").unwrap();
+		let t2: UnverifiedTransaction = rlp::decode(&typed).expect("decoding UnverifiedTransaction failed");
+		assert_eq!(t2.is_typed(), true);
+		assert_eq!(t2.get_type().unwrap(), U256([2, 0, 0, 0]));
+
+		let t2_typed = UnverifiedTypedTransaction::new(&t2).unwrap();
+		assert_eq!(&t2_typed.unverified.unsigned.data, &FromHex::from_hex("11001100").unwrap());
+		assert_eq!(&t2_typed.typed_payload, &FromHex::from_hex("aabbccdd").unwrap());
+	}
+
+	#[test]
+	fn should_parse_zko_tx() {
+		use rustc_hex::FromHex;
+
+		let typed_bytes = FromHex::from_hex("f902b2020182520894095e7baea6a6c7c4c2dfeb977efac326af552d870ab90291f9028e84aabbccddb90286f90283a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12b8407af1bd981c4b64df73aaa33846a1a2f09a3012ca082d3559c220481fd71c7e0e04b986cf7737bf43c5c2cdaf88f74025d58a2872db448f8c0303184186c4287ba03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db84023d0c12636b3444530ae2d3b5cc8b60be5ec042ba7ee8781b72aa21ba65785ad5d52b65bd2c8997bb255f895531e3483194ed5f88088058c36479eee5f0ab2721b8080").unwrap();
+		let tx: UnverifiedTransaction = rlp::decode(&typed_bytes).expect("decoding UnverifiedTransaction failed");
+		let zko_tx = ZkOriginTransaction::new(&UnverifiedTypedTransaction::new(&tx).unwrap()).unwrap();
+		
+		assert_eq!(zko_tx.get_v_pub(), 21_010u64);
+		assert_eq!(zko_tx.unverified.unsigned.data, FromHex::from_hex("aabbccdd").unwrap());
+		assert_eq!(format!("{:?}", zko_tx.unverified.hash), "0x6bb6591c73996ade7cfc34fb11400b7a449bfa3aadf8ec85365cbb834ec86fa8");
+		assert_eq!(format!("{:?}", zko_tx.rt), "0x3a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3");
+		assert_eq!(format!("{:?}", zko_tx.sn[0]), "0xca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352");
+		assert_eq!(format!("{:?}", zko_tx.sn[1]), "0x2018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802");
+		assert_eq!(format!("{:?}", zko_tx.cm[0]), "0x826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8f");
+		assert_eq!(format!("{:?}", zko_tx.cm[1]), "0xdfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12");
+		assert_eq!(format!("{:?}", zko_tx.eph_pk), "0x7af1bd981c4b64df73aaa33846a1a2f09a3012ca082d3559c220481fd71c7e0e04b986cf7737bf43c5c2cdaf88f74025d58a2872db448f8c0303184186c4287b");
+		assert_eq!(format!("{:?}", zko_tx.glue), "0x3f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436e");
+		assert_eq!(format!("{:?}", zko_tx.k), "0xbe3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2");
+		assert_eq!(zko_tx.proof, FromHex::from_hex("683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedba").unwrap());
+		assert_eq!(zko_tx.ct[0], FromHex::from_hex("38d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8").unwrap());
+		assert_eq!(zko_tx.ct[1], FromHex::from_hex("59d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4d").unwrap());
+		assert_eq!(format!("{:?}", zko_tx.sig), "0x23d0c12636b3444530ae2d3b5cc8b60be5ec042ba7ee8781b72aa21ba65785ad5d52b65bd2c8997bb255f895531e3483194ed5f88088058c36479eee5f0ab272");
+	}
+
+	#[test]
+	fn should_not_parse_zko_tx() {
+		use rustc_hex::FromHex;
+
+		let typed_invalid = FromHex::from_hex("ea020182520894095e7baea6a6c7c4c2dfeb977efac326af552d870a8bca841100110084aabbccdd1b8080").unwrap();
+		let tx_ivalid: UnverifiedTransaction = rlp::decode(&typed_invalid).expect("decoding UnverifiedTransaction failed");
+		let zko_tx_invalid = ZkOriginTransaction::new(&UnverifiedTypedTransaction::new(&tx_ivalid).unwrap()).ok();
+		assert_eq!(zko_tx_invalid, None);
+		
+		let hex_zk_opt = |h: &[u8]| {
+			ZkOriginTransaction::new(
+				&UnverifiedTypedTransaction::new(
+					&rlp::decode(&h).unwrap()
+				).unwrap()
+			).ok()
+		};
+
+		vec![
+			"ea020182520894095e7baea6a6c7c4c2dfeb977efac326af552d870a8bca841100110084aabbccdd1b8080",
+			"f902b1020182520894095e7baea6a6c7c4c2dfeb977efac326af552d870ab90290f9028d84aabbccddb90285f90282a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a8029f826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23dea0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12b8407af1bd981c4b64df73aaa33846a1a2f09a3012ca082d3559c220481fd71c7e0e04b986cf7737bf43c5c2cdaf88f74025d58a2872db448f8c0303184186c4287ba03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db84023d0c12636b3444530ae2d3b5cc8b60be5ec042ba7ee8781b72aa21ba65785ad5d52b65bd2c8997bb255f895531e3483194ed5f88088058c36479eee5f0ab2721b8080",
+			"f902b1020182520894095e7baea6a6c7c4c2dfeb977efac326af552d870ab90290f9028d84aabbccddb90285f902829f3a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fa0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12b8407af1bd981c4b64df73aaa33846a1a2f09a3012ca082d3559c220481fd71c7e0e04b986cf7737bf43c5c2cdaf88f74025d58a2872db448f8c0303184186c4287ba03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db84023d0c12636b3444530ae2d3b5cc8b60be5ec042ba7ee8781b72aa21ba65785ad5d52b65bd2c8997bb255f895531e3483194ed5f88088058c36479eee5f0ab2721b8080",
+			"f902a1020182520894095e7baea6a6c7c4c2dfeb977efac326af552d870ab90280f9027d84aabbccddb90275f90272a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12b8407af1bd981c4b64df73aaa33846a1a2f09a3012ca082d3559c220481fd71c7e0e04b986cf7737bf43c5c2cdaf88f74025d58a2872db448f8c0303184186c4287ba03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db023d0c12636b3444530ae2d3b5cc8b60be5ec042ba7ee8781b72aa21ba65785ad5d52b65bd2c8997bb255f895531e34801b8080",
+		].into_iter()
+		.map(|hex| FromHex::from_hex(hex).unwrap())
+		.for_each(|hex| assert_eq!(hex_zk_opt(&hex), None));
+	}
+
+	#[test]
+	fn unsigned_zko_tx_should_be_valid() {
+		use rustc_hex::FromHex;
+		let chain_id = None;
+
+		let signed = FromHex::from_hex("f902b2020182520894095e7baea6a6c7c4c2dfeb977efac326af552d870ab90291f9028e84aabbccddb90286f90283a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12b8407af1bd981c4b64df73aaa33846a1a2f09a3012ca082d3559c220481fd71c7e0e04b986cf7737bf43c5c2cdaf88f74025d58a2872db448f8c0303184186c4287ba03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db84023d0c12636b3444530ae2d3b5cc8b60be5ec042ba7ee8781b72aa21ba65785ad5d52b65bd2c8997bb255f895531e3483194ed5f88088058c36479eee5f0ab2721b8080").unwrap();
+		let unsigned = FromHex::from_hex("f90270020182520894095e7baea6a6c7c4c2dfeb977efac326af552d870ab9024ff9024c84aabbccddb90244f90241a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12b8407af1bd981c4b64df73aaa33846a1a2f09a3012ca082d3559c220481fd71c7e0e04b986cf7737bf43c5c2cdaf88f74025d58a2872db448f8c0303184186c4287ba03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4d808080").unwrap();
+		let zko_tx = ZkOriginTransaction::new_from_bytes(&signed).unwrap();
+		assert_eq!(zko_tx.get_unsigned_msg(chain_id), unsigned);
+		assert_eq!(zko_tx.verify_unordered(chain_id).is_err(), true);
+	}
+
+	#[test]
+	fn should_verify_signed() {
+		use rustc_hex::FromHex;
+		let chain_id = None;
+
+		// sk = seed || pub_key
+		// sk 6f88a747b5956074ed8d5364bb4fbba9b7319986b07642cc8127fa82d9ba229d379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96
+		// pk 379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96
+		// msg f9024f020182520894095e7baea6a6c7c4c2dfeb977efac326af552d870ab9022ef9022b84aabbccddb90223f90220a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12a0379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96a03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4d808080
+		// sig b8e768655fd075c064809348bd759a9cbc5055eafd1860e9498ca8ab2a373b888de62f48fbb1b0864e9b11ca5c5c882db2310ae80a1e27cc099c7ce6e778de0d
+		// let seed = FromHex::from_hex("6f88a747b5956074ed8d5364bb4fbba9b7319986b07642cc8127fa82d9ba229d").unwrap();
+		// let keypair = ed25519::keypair(&seed);
+
+
+		// Correct sig for the transaction:
+		let signed = FromHex::from_hex("f90291020182520894095e7baea6a6c7c4c2dfeb977efac326af552d870ab90270f9026d84aabbccddb90265f90262a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12a0379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96a03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db840b8e768655fd075c064809348bd759a9cbc5055eafd1860e9498ca8ab2a373b888de62f48fbb1b0864e9b11ca5c5c882db2310ae80a1e27cc099c7ce6e778de0d808080").unwrap();
+		let zko_tx = ZkOriginTransaction::new_from_bytes(&signed).unwrap();
+		assert_eq!(zko_tx.verify_unordered(chain_id).is_ok(), true);
+		
+
+		// Incorrect chain_id, signed 0, provided 27 in tx
+		let signed_incorrect_chain_id = FromHex::from_hex("f90291020182520894095e7baea6a6c7c4c2dfeb977efac326af552d870ab90270f9026d84aabbccddb90265f90262a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12a0379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96a03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db840b8e768655fd075c064809348bd759a9cbc5055eafd1860e9498ca8ab2a373b888de62f48fbb1b0864e9b11ca5c5c882db2310ae80a1e27cc099c7ce6e778de0d1b8080").unwrap();
+		let zko_tx_incorrect_chain_id = ZkOriginTransaction::new_from_bytes(&signed_incorrect_chain_id).unwrap();
+		assert_eq!(zko_tx_incorrect_chain_id.verify_unordered(chain_id).is_ok(), false);
 	}
 }

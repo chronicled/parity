@@ -322,7 +322,7 @@ impl Impl for ZkSnark {
 	}
 }
 
-
+/// Converts slice of bytes as 32bit unsigned representation to slice of bytes as u8
 pub fn array_u32_to_u8(input: [u32; 8]) -> [u8; 32] {
 	let mut res: [u8; 32] = [0; 32];
 	for i in 0..8 {
