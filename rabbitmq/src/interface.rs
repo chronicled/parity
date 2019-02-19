@@ -2,8 +2,8 @@
 
 use failure::Error;
 use futures::future::Future;
-use lapin::channel::{BasicPublishOptions, BasicProperties, ExchangeDeclareOptions};
-use lapin::client::ConnectionOptions;
+use lapin::channel::{BasicPublishOptions, BasicProperties, ConfirmSelectOptions, ExchangeDeclareOptions};
+use lapin::client::{Client, ConnectionOptions};
 use lapin::types::FieldTable;
 use std::net::{ToSocketAddrs};
 use tokio::net::TcpStream;
@@ -27,20 +27,28 @@ impl RabbitMqInterface {
 		}
 	}
 
-	/// Publish a new message to the defined queue
-	pub fn publish(&self, serialized_data: String, exchange_name: &'static str) {
+	/// Publish a new message to a topic exchange
+	pub fn topic_publish(&self, serialized_data: String, exchange_name: &'static str, routing_key: &'static str) {
 		let mut socket_addrs = format!("{}:{}", self.config.hostname, self.config.port).to_socket_addrs().unwrap().filter(|addr| addr.is_ipv4());;
 		Runtime::new().unwrap().block_on_all(
 			TcpStream::connect(&socket_addrs.next().unwrap()).map_err(Error::from).and_then(|stream| {
-				lapin::client::Client::connect(stream, ConnectionOptions::default()).map_err(Error::from)
-			}).and_then(|(client, _ /* heartbeat */)| {
-				client.create_channel().map_err(Error::from)
-			}).and_then(move |channel| {
-				channel.exchange_declare(exchange_name, "topic", ExchangeDeclareOptions::default(), FieldTable::new()).and_then(move |_| {
-					channel.basic_publish(exchange_name, "parity", serialized_data.into_bytes(), BasicPublishOptions::default(), BasicProperties::default())
+				Client::connect(stream, ConnectionOptions {
+					frame_max: 65535,
+					heartbeat: 20,
+					..Default::default()
 				}).map_err(Error::from)
-			})
-		).expect("Runtime failure");
+			}).and_then(move |(client, _ /*heartbeat*/)| {
+				client.create_confirm_channel(ConfirmSelectOptions::default())
+					.and_then(move |channel| {
+						channel.clone().exchange_declare(exchange_name, "topic", ExchangeDeclareOptions::default(), FieldTable::new()).map(move |_| channel)
+					}).and_then(move |channel| {
+						channel.basic_publish(exchange_name, routing_key, serialized_data.into_bytes(), BasicPublishOptions::default(), BasicProperties::default()).map(|confirmation| {
+							println!("got confirmation of publication: {:?}", confirmation);
+						})
+					})
+					.map_err(Error::from)
+			}).map_err(|err| eprintln!("An error occured: {}", err))
+		).expect("runtime exited with failure");
 	}
 
 	/// Listen and consume incoming message

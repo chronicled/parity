@@ -63,7 +63,7 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 		for ref rich_block in blocks {
 			let serialized_block = serde_json::to_string(&rich_block).unwrap();
 			println!("Serialized: {:?}", serialized_block);
-			self.interface.publish(serialized_block, "new_block");
+			self.interface.topic_publish(serialized_block, "BlockchainInterface.Output", "interface.in.new-block");
 		}
 	}
 }
