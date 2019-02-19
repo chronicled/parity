@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 use serde_json;
-use super::interface::RabbitMqInterface;
+use interface::RabbitMqInterface;
 
 
 use ethcore::client::{BlockChainClient, ChainNotify, NewBlocks, ChainRouteType, BlockId};
-use v1::types::{Block, BlockTransactions, RichBlock, Transaction};
+use types::{Block, BlockTransactions, RichBlock, Transaction};
 
 /// Eth PubSub implementation.
 pub struct PubSubClient<C> {

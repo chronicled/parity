@@ -552,7 +552,7 @@ usage! {
 
 			ARG arg_rabbitmq_port: (u16) = 5672u16, or |c: &Config| c.rabbitmq.as_ref()?.port.clone(),
 			"--rabbitmq-port=[PORT]",
-			"Specify tthe RabbitMQ server port",
+			"Specify the RabbitMQ server port",
 
 		["API and Console Options – IPFS"]
 			FLAG flag_ipfs_api: (bool) = false, or |c: &Config| c.ipfs.as_ref()?.enable.clone(),

@@ -40,9 +40,10 @@ use journaldb::Algorithm;
 use light::Cache as LightDataCache;
 use miner::external::ExternalMiner;
 use node_filter::NodeFilter;
+use parity_rabbitmq::client::PubSubClient;
+use parity_rabbitmq::interface::{RabbitMqInterface, RabbitMqConfig};
 use parity_runtime::Runtime;
 use parity_rpc::{Origin, Metadata, NetworkSettings, informant, is_major_importing};
-use parity_rpc::v1::rabbitmq;
 use updater::{UpdatePolicy, Updater};
 use parity_version::version;
 use ethcore_private_tx::{ProviderConfig, EncryptorConfig, SecretStoreEncryptor};
@@ -103,7 +104,7 @@ pub struct RunCmd {
 	pub http_conf: rpc::HttpConfiguration,
 	pub ipc_conf: rpc::IpcConfiguration,
 	pub net_conf: sync::NetworkConfiguration,
-	pub rabbitmq_conf: rabbitmq::interface::RabbitMqConfig,
+	pub rabbitmq_conf: RabbitMqConfig,
 	pub network_id: Option<u64>,
 	pub warp_sync: bool,
 	pub warp_barrier: Option<u64>,
@@ -751,9 +752,9 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	let ws_server = rpc::new_ws(cmd.ws_conf.clone(), &dependencies)?;
 	let ipc_server = rpc::new_ipc(cmd.ipc_conf, &dependencies)?;
 	let http_server = rpc::new_http("HTTP JSON-RPC", "jsonrpc", cmd.http_conf.clone(), &dependencies)?;
-	let rabbitmq_server = Arc::new(rabbitmq::client::PubSubClient {
+	let rabbitmq_server = Arc::new(PubSubClient {
 		client: client.clone(),
-		interface: rabbitmq::interface::RabbitMqInterface::new(cmd.rabbitmq_conf)
+		interface: RabbitMqInterface::new(cmd.rabbitmq_conf)
 	});
 	service.add_notify(rabbitmq_server.clone());
 

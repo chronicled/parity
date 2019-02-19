@@ -1,0 +1,21 @@
+[package]
+description = "Parity RabbitMQ server"
+name = "parity-rabbitmq"
+version = "0.1.0"
+
+[dependencies]
+failure = "0.1"
+futures = "0.1.6"
+lapin-futures = "0.15.0"
+rustc-hex = "1.0"
+serde = "1.0"
+serde_derive = "1.0"
+serde_json = "1.0"
+tokio = "0.1"
+
+ethcore = { path = "../ethcore", features = ["test-helpers"] }
+ethcore-miner = { path = "../miner" }
+ethcore-transaction = { path = "../ethcore/transaction" }
+ethereum-types = "0.4"
+rlp = { version = "0.3.0", features = ["ethereum"] }
+

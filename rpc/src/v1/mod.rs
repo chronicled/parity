@@ -40,7 +40,6 @@ pub mod extractors;
 pub mod informant;
 pub mod metadata;
 pub mod traits;
-pub mod rabbitmq;
 
 pub use self::traits::{Debug, Eth, EthFilter, EthPubSub, EthSigning, Net, Parity, ParityAccounts, ParitySet, ParitySigning, Personal, PubSub, Private, Rpc, SecretStore, Signer, Traces, Web3};
 pub use self::impls::*;
