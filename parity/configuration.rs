@@ -1410,7 +1410,10 @@ mod tests {
 			http_conf: Default::default(),
 			ipc_conf: Default::default(),
 			net_conf: default_network_config(),
-			rabbitmq_conf: None,
+			rabbitmq_conf: RabbitMqConfig {
+				hostname: "localhost".into(),
+				port: 5672,
+			},
 			network_id: None,
 			warp_sync: true,
 			warp_barrier: None,

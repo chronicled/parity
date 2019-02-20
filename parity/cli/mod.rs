@@ -546,7 +546,7 @@ usage! {
 			"Specify custom API set available via JSON-RPC over IPC using a comma-delimited list of API names. Possible names are: all, safe, web3, net, eth, pubsub, personal, signer, parity, parity_pubsub, parity_accounts, parity_set, traces, rpc, secretstore, shh, shh_pubsub. You can also disable a specific API by putting '-' in the front, example: all,-personal. 'safe' enables the following APIs: web3, net, eth, pubsub, parity, parity_pubsub, traces, rpc, shh, shh_pubsub",
 
 		["API and Console Options – RabbitMQ"]
-			ARG arg_rabbitmq_hostname: (String) = "127.0.0.1", or |c: &Config| c.rabbitmq.as_ref()?.hostname.clone(),
+			ARG arg_rabbitmq_hostname: (String) = "localhost", or |c: &Config| c.rabbitmq.as_ref()?.hostname.clone(),
 			"--rabbitmq-hostname=[IP]",
 			"Specify the RabbitMQ server hostname",
 
@@ -1417,7 +1417,7 @@ struct Light {
 mod tests {
 	use super::{
 		Args, ArgsError,
-		Config, Operating, Account, Ui, Network, Ws, Rpc, Ipc, Dapps, Ipfs, Mining, Footprint,
+		Config, Operating, Account, Ui, Network, Ws, Rpc, Ipc, RabbitMQ, Dapps, Ipfs, Mining, Footprint,
 		Snapshots, Misc, Whisper, SecretStore, Light,
 	};
 	use toml;
@@ -1722,6 +1722,10 @@ mod tests {
 			arg_ipc_path: "$HOME/.parity/jsonrpc.ipc".into(),
 			arg_ipc_apis: "web3,eth,net,parity,parity_accounts,personal,traces,rpc,secretstore".into(),
 
+			// RabbitMQ
+			arg_rabbitmq_hostname: "localhost".into(),
+			arg_rabbitmq_port: 5672u16,
+
 			// DAPPS
 			arg_dapps_path: Some("$HOME/.parity/dapps".into()),
 			flag_no_dapps: false,
@@ -1987,6 +1991,10 @@ mod tests {
 				disable: None,
 				path: None,
 				apis: Some(vec!["rpc".into(), "eth".into()]),
+			}),
+			rabbitmq: Some(RabbitMQ {
+				hostname: Some("localhost".into()),
+				port: Some(5672),
 			}),
 			dapps: Some(Dapps {
 				_legacy_disable: None,
