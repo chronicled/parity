@@ -59,6 +59,7 @@ extern crate kvdb;
 extern crate parity_hash_fetch as hash_fetch;
 extern crate parity_ipfs_api;
 extern crate parity_local_store as local_store;
+extern crate parity_rabbitmq;
 extern crate parity_runtime;
 extern crate parity_rpc;
 extern crate parity_updater as updater;

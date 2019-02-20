@@ -545,6 +545,15 @@ usage! {
 			"--ipc-apis=[APIS]",
 			"Specify custom API set available via JSON-RPC over IPC using a comma-delimited list of API names. Possible names are: all, safe, web3, net, eth, pubsub, personal, signer, parity, parity_pubsub, parity_accounts, parity_set, traces, rpc, secretstore, shh, shh_pubsub. You can also disable a specific API by putting '-' in the front, example: all,-personal. 'safe' enables the following APIs: web3, net, eth, pubsub, parity, parity_pubsub, traces, rpc, shh, shh_pubsub",
 
+		["API and Console Options – RabbitMQ"]
+			ARG arg_rabbitmq_hostname: (String) = "127.0.0.1", or |c: &Config| c.rabbitmq.as_ref()?.hostname.clone(),
+			"--rabbitmq-hostname=[IP]",
+			"Specify the RabbitMQ server hostname",
+
+			ARG arg_rabbitmq_port: (u16) = 5672u16, or |c: &Config| c.rabbitmq.as_ref()?.port.clone(),
+			"--rabbitmq-port=[PORT]",
+			"Specify the RabbitMQ server port",
+
 		["API and Console Options – IPFS"]
 			FLAG flag_ipfs_api: (bool) = false, or |c: &Config| c.ipfs.as_ref()?.enable.clone(),
 			"--ipfs-api",
@@ -1111,6 +1120,7 @@ struct Config {
 	rpc: Option<Rpc>,
 	websockets: Option<Ws>,
 	ipc: Option<Ipc>,
+	rabbitmq: Option<RabbitMQ>,
 	dapps: Option<Dapps>,
 	secretstore: Option<SecretStore>,
 	private_tx: Option<PrivateTransactions>,
@@ -1244,6 +1254,13 @@ struct Ipc {
 	disable: Option<bool>,
 	path: Option<String>,
 	apis: Option<Vec<String>>,
+}
+
+#[derive(Default, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RabbitMQ {
+	hostname: Option<String>,
+	port: Option<u16>,
 }
 
 #[derive(Default, Debug, PartialEq, Deserialize)]

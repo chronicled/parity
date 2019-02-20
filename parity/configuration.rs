@@ -36,6 +36,7 @@ use miner::pool;
 use num_cpus;
 
 use rpc::{IpcConfiguration, HttpConfiguration, WsConfiguration};
+use parity_rabbitmq::interface::RabbitMqConfig;
 use parity_rpc::NetworkSettings;
 use cache::CacheConfig;
 use helpers::{to_duration, to_mode, to_block_id, to_u256, to_pending_set, to_price, geth_ipc_path, parity_ipc_path, to_bootnodes, to_addresses, to_address, to_queue_strategy, to_queue_penalization, passwords_from_files};
@@ -131,6 +132,7 @@ impl Configuration {
 		let http_conf = self.http_config()?;
 		let ipc_conf = self.ipc_config()?;
 		let net_conf = self.net_config()?;
+		let rabbitmq_conf = self.rabbitmq_config();
 		let network_id = self.network_id();
 		let cache_config = self.cache_config();
 		let tracing = self.args.arg_tracing.parse()?;
@@ -364,6 +366,7 @@ impl Configuration {
 				http_conf: http_conf,
 				ipc_conf: ipc_conf,
 				net_conf: net_conf,
+				rabbitmq_conf: rabbitmq_conf,
 				network_id: network_id,
 				acc_conf: self.accounts_config()?,
 				gas_pricer_conf: self.gas_pricer_config()?,
@@ -741,6 +744,14 @@ impl Configuration {
 		};
 		Ok(ret)
 	}
+
+	fn rabbitmq_config(&self) -> RabbitMqConfig {
+		RabbitMqConfig {
+			hostname: self.args.arg_rabbitmq_hostname.clone(),
+			port: self.args.arg_rabbitmq_port
+		}
+	}
+
 
 	fn network_id(&self) -> Option<u64> {
 		self.args.arg_network_id.or(self.args.arg_networkid)
@@ -1399,6 +1410,7 @@ mod tests {
 			http_conf: Default::default(),
 			ipc_conf: Default::default(),
 			net_conf: default_network_config(),
+			rabbitmq_conf: None,
 			network_id: None,
 			warp_sync: true,
 			warp_barrier: None,
