@@ -18,9 +18,9 @@
 use std::cmp;
 use std::sync::Arc;
 use hash::keccak;
-use ethereum_types::{H256, U256, U512, Address};
+use ethereum_types::{H160, H256, U256, U512, Address};
 use bytes::{Bytes, BytesRef};
-use state::{Backend as StateBackend, State, Substate, CleanupMode};
+use state::{Backend as StateBackend, State, Substate, CleanupMode, StateInfo};
 use error::ExecutionError;
 use machine::EthereumMachine as Machine;
 use evm::{CallType, Finalize, FinalizationResult};
@@ -31,7 +31,7 @@ use vm::{
 use factory::VmFactory;
 use externalities::*;
 use trace::{self, Tracer, VMTracer};
-use transaction::{Action, SignedTransaction};
+use transaction::{Action, SignedTransaction, UnverifiedTransaction, TypedTransaction, ZkOriginTransaction};
 use crossbeam;
 pub use executed::{Executed, ExecutionResult};
 
@@ -50,6 +50,8 @@ const STACK_SIZE_ENTRY_OVERHEAD: usize = 100 * 1024;
 #[cfg(not(debug_assertions))]
 /// Entry stack overhead prior to execution.
 const STACK_SIZE_ENTRY_OVERHEAD: usize = 20 * 1024;
+
+const ZKO_PRECOMPILED_ADDR: Address = H160([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,0xff, 0xff, 0xff, 0xff,0xff, 0xff, 0xff, 0xff,0xff, 0xff, 0xff, 0x02]);
 
 /// Returns new address created from address, nonce, and code hash
 pub fn contract_address(address_scheme: CreateContractAddress, sender: &Address, nonce: &U256, code: &[u8]) -> (Address, Option<H256>) {
@@ -742,6 +744,95 @@ impl<'a> CallCreateExecutive<'a> {
 	}
 }
 
+/// Tx pre-execution hook result
+pub struct PreExecution {
+	sender: Address,
+	data: Bytes,
+	/// Current account nonce
+	nonce: U256,
+}
+
+pub trait ExecutableTx<'a, B: 'a> {
+	fn pre_execution(&self, executive: &'a mut Executive<B>, substate: &mut Substate, check_nonce: bool, total_cost: &U512) ->
+		Result<PreExecution, ExecutionError>;
+}
+
+impl<'a, B: 'a + StateBackend> ExecutableTx<'a, B> for TypedTransaction {
+	fn pre_execution(&self, executive: &'a mut Executive<B>, substate: &mut Substate, check_nonce: bool, total_cost: &U512) 
+		-> Result<PreExecution, ExecutionError> 
+	{
+		match &self {
+			TypedTransaction::Regular(tx) => tx.pre_execution(executive, substate, check_nonce, &total_cost),
+			TypedTransaction::ZkOrigin(tx) => tx.pre_execution(executive, substate, check_nonce, &total_cost),
+		}
+	}
+}
+
+impl<'a, B: 'a + StateBackend> ExecutableTx<'a, B> for SignedTransaction {
+	fn pre_execution(&self, executive: &'a mut Executive<B>, substate: &mut Substate, check_nonce: bool, total_cost: &U512) 
+		-> Result<PreExecution, ExecutionError> 
+	{
+		let schedule = executive.schedule;
+
+		let sender = self.sender();
+		let nonce = executive.state.nonce(&sender)?;
+
+		if !self.is_unsigned() && check_nonce && schedule.kill_dust != CleanDustMode::Off && !executive.state.exists(&sender)? {
+			return Err(ExecutionError::SenderMustExist);
+		}
+
+		// validate transaction nonce
+		if check_nonce && self.nonce != nonce {
+			return Err(ExecutionError::InvalidNonce { expected: nonce, got: self.nonce });
+		}
+
+		// avoid unaffordable transactions
+		let balance = executive.state.balance(&sender)?;
+
+		let balance512 = U512::from(balance);
+		if balance512 < *total_cost {
+			return Err(ExecutionError::NotEnoughCash { required: *total_cost, got: balance512 });
+		}
+
+		// NOTE: there can be no invalid transactions from this point.
+		if !schedule.keep_unsigned_nonce || !self.is_unsigned() {
+			executive.state.inc_nonce(&sender)?;
+		}
+
+		Ok(PreExecution {sender: sender, data: self.data.clone(), nonce})
+	}
+}
+
+impl<'a, B: 'a + StateBackend> ExecutableTx<'a, B> for ZkOriginTransaction {
+	fn pre_execution(&self, executive: &'a mut Executive<B>, substate: &mut Substate, check_nonce: bool, total_cost: &U512) 
+		-> Result<PreExecution, ExecutionError> 
+	{
+		let schedule = executive.schedule;
+
+		// avoid unaffordable transactions
+		let balance = executive.state.balance(&ZKO_PRECOMPILED_ADDR)?;
+
+		let balance512 = U512::from(balance);
+		if balance512 < *total_cost {
+			return Err(ExecutionError::NotEnoughZkoCash { required: *total_cost, got: balance512 });
+		}
+
+		if self.action != Action::Create {
+			return Err(ExecutionError::NotAllowedAction);
+		}
+
+		// TODO call precompiled
+		// TODO: add empty k and value check
+
+		Ok(PreExecution {
+			sender: ZKO_PRECOMPILED_ADDR, 
+			data: self.data.clone(), 
+			nonce: U256::from(0)
+		})
+	}
+}
+
+
 /// Transaction executor.
 pub struct Executive<'a, B: 'a> {
 	state: &'a mut State<B>,
@@ -810,8 +901,7 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 		mut tracer: T,
 		mut vm_tracer: V
 	) -> Result<Executed<T::Output, V::Output>, ExecutionError> where T: Tracer, V: VMTracer {
-		let sender = t.sender();
-		let nonce = self.state.nonce(&sender)?;
+		let tt = t.get_typed_tx().map_err(|e| ExecutionError::TransactionMalformed(format!("ExecutionError {:?}", e)))?;
 
 		let schedule = self.schedule;
 		let base_gas_required = U256::from(t.gas_required(&schedule));
@@ -820,16 +910,7 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 			return Err(ExecutionError::NotEnoughBaseGas { required: base_gas_required, got: t.gas });
 		}
 
-		if !t.is_unsigned() && check_nonce && schedule.kill_dust != CleanDustMode::Off && !self.state.exists(&sender)? {
-			return Err(ExecutionError::SenderMustExist);
-		}
-
 		let init_gas = t.gas - base_gas_required;
-
-		// validate transaction nonce
-		if check_nonce && t.nonce != nonce {
-			return Err(ExecutionError::InvalidNonce { expected: nonce, got: t.nonce });
-		}
 
 		// validate if transaction fits into given block
 		if self.info.gas_used + t.gas > self.info.gas_limit {
@@ -841,22 +922,14 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 		}
 
 		// TODO: we might need bigints here, or at least check overflows.
-		let balance = self.state.balance(&sender)?;
 		let gas_cost = t.gas.full_mul(t.gas_price);
 		let total_cost = U512::from(t.value) + gas_cost;
 
-		// avoid unaffordable transactions
-		let balance512 = U512::from(balance);
-		if balance512 < total_cost {
-			return Err(ExecutionError::NotEnoughCash { required: total_cost, got: balance512 });
-		}
-
 		let mut substate = Substate::new();
 
-		// NOTE: there can be no invalid transactions from this point.
-		if !schedule.keep_unsigned_nonce || !t.is_unsigned() {
-			self.state.inc_nonce(&sender)?;
-		}
+		// let &mut executive = self; 
+		let PreExecution { sender, data, nonce } = tt.pre_execution(self, &mut substate, check_nonce, &total_cost)?;
+
 		self.state.sub_balance(&sender, &U256::from(gas_cost), &mut substate.to_cleanup_mode(&schedule))?;
 
 		let (result, output) = match t.action {
@@ -894,7 +967,7 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 					value: ActionValue::Transfer(t.value),
 					code: self.state.code(address)?,
 					code_hash: self.state.code_hash(address)?,
-					data: Some(t.data.clone()),
+					data: Some(data.clone()),
 					call_type: CallType::Call,
 					params_type: vm::ParamsType::Separate,
 				};
@@ -1886,6 +1959,40 @@ mod tests {
 		assert_eq!(state.balance(&contract).unwrap(), U256::from(17));
 		assert_eq!(state.nonce(&sender).unwrap(), U256::from(1));
 		assert_eq!(state.storage_at(&contract, &H256::new()).unwrap(), H256::from(&U256::from(1)));
+	}
+
+	evm_test!{test_transact_zko: test_transact_zko_int}
+	fn test_transact_zko(factory: Factory) {
+		let tx_bytes = FromHex::from_hex("f904f5020183019a2894095e7baea6a6c7c4c2dfeb977efac326af552d870ab904d3f904d0b90265f90262a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12a0379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96a03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db840b8e768655fd075c064809348bd759a9cbc5055eafd1860e9498ca8ab2a373b888de62f48fbb1b0864e9b11ca5c5c882db2310ae80a1e27cc099c7ce6e778de0db90265f90262a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12a0379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96a03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db8401d99585328392b581c3bc11a04d08e35fd197d95f2bc7da17a7c16884529ee0cb6d138d06d476676caa53857600a39fff1597fabf5777ae3da6e895c05cab307028080").unwrap();
+		let t_unverified: UnverifiedTransaction = rlp::decode(&tx_bytes).expect("decoding UnverifiedTransaction failed");
+		let t = SignedTransaction::new(t_unverified).unwrap();
+
+		let contract = contract_address(CreateContractAddress::FromSenderAndNonce, &H160([0xff; 20]), &U256::zero(), &[]).0;
+
+		let mut state = get_temp_state_with_factory(factory);
+		state.add_balance(&ZKO_PRECOMPILED_ADDR, &U256::from(18), CleanupMode::NoEmpty).unwrap();
+		let mut info = EnvInfo::default();
+		info.gas_limit = U256::from(1_000_000);
+		let machine = make_byzantium_machine(0); 
+		let schedule = machine.schedule(info.number);
+
+		let executed = {
+			let mut ex = Executive::new(&mut state, &info, &machine, &schedule);
+			let opts = TransactOptions::with_no_tracing();
+			ex.transact(&t, opts).unwrap()
+		};
+
+		println!("executed: {:?}", executed);
+		// assert_eq!(executed.gas, U256::from(100_000));
+		// assert_eq!(executed.gas_used, U256::from(41_301));
+		// assert_eq!(executed.refunded, U256::from(58_699));
+		// assert_eq!(executed.cumulative_gas_used, U256::from(41_301));
+		// assert_eq!(executed.logs.len(), 0);
+		// assert_eq!(executed.contracts_created.len(), 0);
+		// assert_eq!(state.balance(&sender).unwrap(), U256::from(1));
+		// assert_eq!(state.balance(&contract).unwrap(), U256::from(17));
+		// assert_eq!(state.nonce(&sender).unwrap(), U256::from(1));
+		// assert_eq!(state.storage_at(&contract, &H256::new()).unwrap(), H256::from(&U256::from(1)));
 	}
 
 	evm_test!{test_transact_invalid_nonce: test_transact_invalid_nonce_int}

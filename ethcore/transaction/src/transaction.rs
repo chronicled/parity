@@ -553,6 +553,13 @@ pub struct ZkOriginTransaction {
 	sig:  H512,
 }
 
+impl Deref for ZkOriginTransaction {
+	type Target = UnverifiedTransaction;
+	fn deref(&self) -> &Self::Target {
+		&self.unverified
+	}
+}
+
 /// TODO: allow k to be empty, either Option, Enum or Vec
 impl ZkOriginTransaction {
 	pub fn new(tx: &UnverifiedTypedTransaction) -> Result<Self, DecoderError> {
@@ -645,12 +652,12 @@ impl ZkOriginTransaction {
 		// unsigned_stream.out()
 	}
 
-	pub fn verify_signature(&self, chain_id: Option<u64>) -> bool {
-		ed25519::verify(&self.get_unsigned_msg(chain_id), &self.eph_pk as &[u8], &self.sig as &[u8])
-	}
-
 	pub fn sign(&self, sk: &[u8]) -> [u8; 64] {
 		ed25519::signature(&self.get_unsigned_msg(None), &sk)
+	}
+
+	pub fn verify_signature(&self, chain_id: Option<u64>) -> bool {
+		ed25519::verify(&self.get_unsigned_msg(chain_id), &self.eph_pk as &[u8], &self.sig as &[u8])
 	}
 }
 
@@ -669,21 +676,6 @@ impl Verifiable for ZkOriginTransaction {
 		}
 
 		Ok(())
-	}
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum TypedTransaction {
-	ZkOrigin(ZkOriginTransaction),
-}
-
-impl TypedTransaction {
-	pub fn get_verifiable(&self) -> Result<&impl Verifiable, error::Error> {
-		match &self {
-			TypedTransaction::ZkOrigin(ref tx) => Ok(tx),
-			// No need for default, compliler's check is exhaustve
-			// _ => Err(ethkey::Error::Custom(format!("No verifiable for {:?}", &self)).into()),
-		}
 	}
 }
 
@@ -758,6 +750,30 @@ impl SignedTransaction {
 	/// Deconstructs this transaction back into `UnverifiedTransaction`
 	pub fn deconstruct(self) -> (UnverifiedTransaction, Address, Option<Public>) {
 		(self.transaction, self.sender, self.public)
+	}
+
+	pub fn get_typed_tx(&self) -> Result<TypedTransaction, error::Error> {
+		match self.transaction.is_typed() {
+			false => Ok(TypedTransaction::Regular(self.clone())),
+			true => UnverifiedTypedTransaction::new(&self.transaction)?.get_typed_tx(),
+		}
+	}
+}
+
+// Consider using ref with lifetime if appropriate
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum TypedTransaction {
+	Regular(SignedTransaction),
+	ZkOrigin(ZkOriginTransaction),
+}
+
+impl TypedTransaction {
+	pub fn get_verifiable(&self) -> Result<&impl Verifiable, error::Error> {
+		match &self {
+			TypedTransaction::ZkOrigin(ref tx) => Ok(tx),
+			// No need for default, compliler's check is exhaustve
+			_ => Err(ethkey::Error::Custom(format!("No verifiable for {:?}", &self)).into()),
+		}
 	}
 }
 
