@@ -1,5 +1,5 @@
 [package]
-description = "Parity RabbitMQ server"
+description = "Parity RabbitMQ client"
 name = "parity-rabbitmq"
 version = "0.1.0"
 

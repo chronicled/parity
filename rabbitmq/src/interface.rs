@@ -9,6 +9,8 @@ use std::net::{ToSocketAddrs};
 use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
 
+use TOPIC_EXCHANGE;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RabbitMqConfig {
 	pub hostname: String,
@@ -29,7 +31,10 @@ impl RabbitMqInterface {
 
 	/// Publish a new message to a topic exchange
 	pub fn topic_publish(&self, serialized_data: String, exchange_name: &'static str, routing_key: &'static str) {
-		let mut socket_addrs = format!("{}:{}", self.config.hostname, self.config.port).to_socket_addrs().unwrap().filter(|addr| addr.is_ipv4());;
+		let mut socket_addrs = format!("{}:{}", self.config.hostname, self.config.port)
+			.to_socket_addrs()
+			.unwrap()
+			.filter(|addr| addr.is_ipv4());
 		Runtime::new().unwrap().block_on_all(
 			TcpStream::connect(&socket_addrs.next().unwrap()).map_err(Error::from).and_then(|stream| {
 				Client::connect(stream, ConnectionOptions {
@@ -38,16 +43,19 @@ impl RabbitMqInterface {
 					..Default::default()
 				}).map_err(Error::from)
 			}).and_then(move |(client, _ /*heartbeat*/)| {
-				client.create_confirm_channel(ConfirmSelectOptions::default())
-					.and_then(move |channel| {
-						channel.clone().exchange_declare(exchange_name, "topic", ExchangeDeclareOptions::default(), FieldTable::new()).map(move |_| channel)
-					}).and_then(move |channel| {
-						channel.basic_publish(exchange_name, routing_key, serialized_data.into_bytes(), BasicPublishOptions::default(), BasicProperties::default()).map(|confirmation| {
-							println!("got confirmation of publication: {:?}", confirmation);
-						})
-					})
+				client.create_confirm_channel(ConfirmSelectOptions::default()).map_err(Error::from)
+			}).and_then(move |channel| {
+				channel.clone().exchange_declare(exchange_name, TOPIC_EXCHANGE, ExchangeDeclareOptions::default(), FieldTable::new())
 					.map_err(Error::from)
-			}).map_err(|err| eprintln!("An error occured: {}", err))
+					.map(move |_| channel)
+			}).and_then(move |channel| {
+				channel.basic_publish(exchange_name, routing_key, serialized_data.into_bytes(), BasicPublishOptions::default(), BasicProperties::default())
+				.map_err(Error::from)
+				.map(|confirmation| {
+					println!("got confirmation of publication: {:?}", confirmation);
+				})
+			})
+			.map_err(|err| eprintln!("An error occured: {}", err))
 		).expect("runtime exited with failure");
 	}
 

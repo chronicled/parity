@@ -17,4 +17,8 @@ extern crate rlp;
 
 pub mod client;
 pub mod interface;
-pub mod types;
+mod types;
+
+const NEW_BLOCK_EXCHANGE_NAME: &'static str = "BlockchainInterface.Output";
+const NEW_BLOCK_ROUTING_KEY: &'static str = "interface.in.new-block";
+const TOPIC_EXCHANGE: &'static str = "topic";

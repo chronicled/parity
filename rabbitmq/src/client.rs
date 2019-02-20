@@ -3,10 +3,11 @@
 use std::sync::Arc;
 use serde_json;
 use interface::RabbitMqInterface;
-
-
 use ethcore::client::{BlockChainClient, ChainNotify, NewBlocks, ChainRouteType, BlockId};
 use types::{Block, BlockTransactions, RichBlock, Transaction};
+
+use NEW_BLOCK_EXCHANGE_NAME;
+use NEW_BLOCK_ROUTING_KEY;
 
 /// Eth PubSub implementation.
 pub struct PubSubClient<C> {
@@ -63,7 +64,7 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 		for ref rich_block in blocks {
 			let serialized_block = serde_json::to_string(&rich_block).unwrap();
 			println!("Serialized: {:?}", serialized_block);
-			self.interface.topic_publish(serialized_block, "BlockchainInterface.Output", "interface.in.new-block");
+			self.interface.topic_publish(serialized_block, NEW_BLOCK_EXCHANGE_NAME, NEW_BLOCK_ROUTING_KEY);
 		}
 	}
 }

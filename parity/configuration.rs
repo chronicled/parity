@@ -132,7 +132,7 @@ impl Configuration {
 		let http_conf = self.http_config()?;
 		let ipc_conf = self.ipc_config()?;
 		let net_conf = self.net_config()?;
-		let rabbitmq_conf = self.rabbitmq_config()?;
+		let rabbitmq_conf = self.rabbitmq_config();
 		let network_id = self.network_id();
 		let cache_config = self.cache_config();
 		let tracing = self.args.arg_tracing.parse()?;
@@ -745,12 +745,11 @@ impl Configuration {
 		Ok(ret)
 	}
 
-	fn rabbitmq_config(&self) -> Result<RabbitMqConfig, String> {
-		let conf = RabbitMqConfig {
+	fn rabbitmq_config(&self) -> RabbitMqConfig {
+		RabbitMqConfig {
 			hostname: self.args.arg_rabbitmq_hostname.clone(),
 			port: self.args.arg_rabbitmq_port
-		};
-		Ok(conf)
+		}
 	}
 
 

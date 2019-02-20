@@ -752,11 +752,11 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	let ws_server = rpc::new_ws(cmd.ws_conf.clone(), &dependencies)?;
 	let ipc_server = rpc::new_ipc(cmd.ipc_conf, &dependencies)?;
 	let http_server = rpc::new_http("HTTP JSON-RPC", "jsonrpc", cmd.http_conf.clone(), &dependencies)?;
-	let rabbitmq_server = Arc::new(PubSubClient {
+	let rabbitmq_client = Arc::new(PubSubClient {
 		client: client.clone(),
 		interface: RabbitMqInterface::new(cmd.rabbitmq_conf)
 	});
-	service.add_notify(rabbitmq_server.clone());
+	service.add_notify(rabbitmq_client.clone());
 
 	// secret store key server
 	let secretstore_deps = secretstore::Dependencies {
@@ -829,7 +829,7 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 			informant,
 			client,
 			client_service: Arc::new(service),
-			keep_alive: Box::new((watcher, updater, ws_server, http_server, ipc_server, secretstore_key_server, ipfs_server, runtime, rabbitmq_server)),
+			keep_alive: Box::new((watcher, updater, ws_server, http_server, ipc_server, secretstore_key_server, ipfs_server, runtime, rabbitmq_client)),
 		}
 	})
 }
