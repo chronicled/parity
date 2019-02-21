@@ -19,3 +19,5 @@ ethcore-transaction = { path = "../ethcore/transaction" }
 ethereum-types = "0.4"
 rlp = { version = "0.3.0", features = ["ethereum"] }
 
+[dev-dependencies]
+macros = { path = "../util/macros" }

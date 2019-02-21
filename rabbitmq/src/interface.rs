@@ -11,7 +11,7 @@ use tokio::runtime::Runtime;
 
 use TOPIC_EXCHANGE;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct RabbitMqConfig {
 	pub hostname: String,
 	pub port: u16
@@ -23,14 +23,24 @@ pub struct RabbitMqInterface {
 }
 
 impl RabbitMqInterface {
+	// Create a new RabbitMQ Interface
 	pub fn new(config: RabbitMqConfig) -> Self {
 		Self {
 			config: config
 		}
 	}
+}
 
+pub trait Interface {
+	// Publish a new message to a topic exchange
+	fn topic_publish(&self, serialized_data: String, exchange_name: &'static str, routing_key: &'static str);
+	// Listen and consume incoming message
+	fn consume();
+}
+
+impl Interface for RabbitMqInterface {
 	/// Publish a new message to a topic exchange
-	pub fn topic_publish(&self, serialized_data: String, exchange_name: &'static str, routing_key: &'static str) {
+	fn topic_publish(&self, serialized_data: String, exchange_name: &'static str, routing_key: &'static str) {
 		let mut socket_addrs = format!("{}:{}", self.config.hostname, self.config.port)
 			.to_socket_addrs()
 			.unwrap()
