@@ -1,0 +1,72 @@
+version: 2
+defaults: &defaults
+  working_directory: ~/parity
+  docker:
+    - image: alpine:edge
+
+jobs:
+  test:
+    <<: *defaults
+    steps:
+      - checkout
+      - run:
+          name: Calculate dependencies
+          command: cargo generate-lockfile
+      - restore_cache:
+          keys:
+            - cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+      - run:
+        name: Add packages for alpine
+        command: apk add --no-cache \
+              build-base \
+              cargo \
+              cmake \
+              eudev-dev \
+              linux-headers \
+              perl \
+              rust
+      - run: 
+        name: Run the tests
+        command: exec ./test.sh
+      - save_cache:
+          key: cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+          paths:
+            - /usr/local/cargo/registry
+            - target/release/.fingerprint
+            - target/release/build
+            - target/release/deps
+  deploy_docker_image:
+    <<: *defaults
+    steps:
+      - checkout
+      - run:
+          name: Calculate dependencies
+          command: cargo generate-lockfile
+      - restore_cache:
+          keys:
+            - cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+      - run: 
+        name: Setup Docker credentials
+        command: mkdir -p ~/.docker; echo -n "${REGISTRY_AUTH}" > ~/.docker/config.json;
+      - run:
+          name: Build docker image
+          command: |
+            SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
+            docker build -f scripts/docker/alpine/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" .
+      - run:
+          name: Deploy to dockerhub
+          command: |
+            SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
+            mkdir -p ~/.docker;
+            echo -n "${REGISTRY_AUTH}" > ~/.docker/config.json;
+            docker push "${FINAL_IMAGE}:${SHORT_COMMIT}" ;
+            docker logout ;
+
+workflows:
+  version: 2
+  blockchain-interface-workflow:
+    jobs:
+      - test
+      - deploy_docker_image:
+          requires:
+            - test
