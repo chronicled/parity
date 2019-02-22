@@ -13,28 +13,20 @@ jobs:
           name: Calculate dependencies
           command: cargo generate-lockfile
       - restore_cache:
-          keys:
-            - cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+          key: cargo-test-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
       - run:
-        name: Add packages for alpine
-        command: apk add --no-cache \
-              build-base \
-              cargo \
-              cmake \
-              eudev-dev \
-              linux-headers \
-              perl \
-              rust
+          name: Add packages for alpine
+          command: apk add --no-cache build-base cargo cmake eudev-dev linux-headers perl rust
       - run: 
-        name: Run the tests
-        command: exec ./test.sh
+          name: Run the tests
+          command: exec ./test.sh
       - save_cache:
-          key: cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+          key: cargo-test-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
           paths:
             - /usr/local/cargo/registry
-            - target/release/.fingerprint
-            - target/release/build
-            - target/release/deps
+            - target/debug/.fingerprint
+            - target/debug/build
+            - target/debug/deps
   deploy_docker_image:
     <<: *defaults
     steps:
@@ -43,24 +35,30 @@ jobs:
           name: Calculate dependencies
           command: cargo generate-lockfile
       - restore_cache:
-          keys:
-            - cargo-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+          key: cargo-docker-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
       - run: 
-        name: Setup Docker credentials
-        command: mkdir -p ~/.docker; echo -n "${REGISTRY_AUTH}" > ~/.docker/config.json;
+          name: Setup Docker credentials
+          command: mkdir -p ~/.docker; echo -n "${REGISTRY_AUTH}" > ~/.docker/config.json;
+      - run:
+          name: Load Docker image layer cache
+          command: |
+            if [ -f /caches/parity-image.tar ]; then docker load -i /caches/parity-image.tar; fi
       - run:
           name: Build docker image
           command: |
-            SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
-            docker build -f scripts/docker/alpine/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" .
+            export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
+            export PREV_IMAGE=`docker images registry.dev.infra.chronicled.com/parity --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
+            docker build --rm=false -f scripts/docker/alpine/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" . --cache-from="${PREV_IMAGE}";
       - run:
           name: Deploy to dockerhub
           command: |
             SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
-            mkdir -p ~/.docker;
-            echo -n "${REGISTRY_AUTH}" > ~/.docker/config.json;
             docker push "${FINAL_IMAGE}:${SHORT_COMMIT}";
             docker logout;
+      - save_cache:
+          key: cargo-docker-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+          paths:
+            - /caches/parity-image.tar
 
 workflows:
   version: 2
