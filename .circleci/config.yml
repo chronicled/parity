@@ -2,7 +2,7 @@ version: 2
 defaults: &defaults
   working_directory: ~/parity
   docker:
-    - image: alpine:edge
+    - image: rust:1.30.1
 
 jobs:
   test:
@@ -10,8 +10,12 @@ jobs:
     steps:
       - checkout
       - run:
-          name: Add packages for alpine
-          command: apk add --no-cache build-base cargo cmake eudev-dev linux-headers perl rust
+          name: Install cmake
+          working_directory: /
+          command: |
+            wget https://cmake.org/files/v3.4/cmake-3.4.1-Linux-x86_64.tar.gz;
+            tar xf cmake-3.4.1-Linux-x86_64.tar.gz;
+            echo 'export PATH="/cmake-3.4.1-Linux-x86_64/bin:$PATH"' >> $BASH_ENV;
       - run:
           name: Calculate dependencies
           command: cargo generate-lockfile
