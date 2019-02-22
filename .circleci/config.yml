@@ -10,13 +10,13 @@ jobs:
     steps:
       - checkout
       - run:
+          name: Add packages for alpine
+          command: apk add --no-cache build-base cargo cmake eudev-dev linux-headers perl rust
+      - run:
           name: Calculate dependencies
           command: cargo generate-lockfile
       - restore_cache:
           key: cargo-test-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
-      - run:
-          name: Add packages for alpine
-          command: apk add --no-cache build-base cargo cmake eudev-dev linux-headers perl rust
       - run: 
           name: Run the tests
           command: exec ./test.sh
@@ -28,12 +28,15 @@ jobs:
             - target/debug/build
             - target/debug/deps
   deploy_docker_image:
-    <<: *defaults
+    environment:
+      FINAL_IMAGE: registry.dev.infra.chronicled.com/blockchain-interface
+    working_directory: ~/parity
+    docker:
+      - image: docker/compose:1.22.0
     steps:
       - checkout
-      - run:
-          name: Calculate dependencies
-          command: cargo generate-lockfile
+      - setup_remote_docker:
+          docker_layer_caching: true
       - restore_cache:
           key: cargo-docker-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
       - run: 
@@ -47,7 +50,7 @@ jobs:
           name: Build docker image
           command: |
             export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
-            export PREV_IMAGE=`docker images registry.dev.infra.chronicled.com/parity --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
+            export PREV_IMAGE=`docker images "${FINAL_IMAGE}" --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
             docker build --rm=false -f scripts/docker/alpine/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" . --cache-from="${PREV_IMAGE}";
       - run:
           name: Deploy to dockerhub
