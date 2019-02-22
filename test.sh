@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Running Parity Full Test Suite
 
 FEATURES="json-tests,ci-skip-issue"
