@@ -59,8 +59,8 @@ jobs:
             SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             mkdir -p ~/.docker;
             echo -n "${REGISTRY_AUTH}" > ~/.docker/config.json;
-            docker push "${FINAL_IMAGE}:${SHORT_COMMIT}" ;
-            docker logout ;
+            docker push "${FINAL_IMAGE}:${SHORT_COMMIT}";
+            docker logout;
 
 workflows:
   version: 2
