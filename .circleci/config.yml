@@ -11,11 +11,7 @@ jobs:
       - checkout
       - run:
           name: Install cmake
-          working_directory: /
-          command: |
-            wget https://cmake.org/files/v3.4/cmake-3.4.1-Linux-x86_64.tar.gz;
-            tar xf cmake-3.4.1-Linux-x86_64.tar.gz;
-            echo 'export PATH="/cmake-3.4.1-Linux-x86_64/bin:$PATH"' >> $BASH_ENV;
+          command: apt-get update && apt-get install -y libudev-dev cmake
       - run:
           name: Calculate dependencies
           command: cargo generate-lockfile
@@ -23,14 +19,14 @@ jobs:
           key: cargo-test-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
       - run: 
           name: Run the tests
-          command: exec ./test.sh
+          command: cargo test --release --locked --all
       - save_cache:
           key: cargo-test-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
           paths:
             - /usr/local/cargo/registry
-            - target/debug/.fingerprint
-            - target/debug/build
-            - target/debug/deps
+            - target/release/.fingerprint
+            - target/release/build
+            - target/release/deps
   deploy_docker_image:
     environment:
       FINAL_IMAGE: registry.dev.infra.chronicled.com/blockchain-interface
@@ -43,6 +39,8 @@ jobs:
           docker_layer_caching: true
       - restore_cache:
           key: cargo-docker-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+          paths:
+            - /caches/parity-image.tar
       - run: 
           name: Setup Docker credentials
           command: mkdir -p ~/.docker; echo -n "${REGISTRY_AUTH}" > ~/.docker/config.json;
