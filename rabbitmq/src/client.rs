@@ -1,9 +1,9 @@
 //! RabbitMQ ChainNotfiy implementation
 
-use std::sync::Arc;
-use serde_json;
+use ethcore::client::{BlockChainClient, BlockId, ChainNotify, ChainRouteType, NewBlocks};
 use interface::Interface;
-use ethcore::client::{BlockChainClient, ChainNotify, NewBlocks, ChainRouteType, BlockId};
+use serde_json;
+use std::sync::Arc;
 use types::{Block, BlockTransactions, RichBlock, Transaction};
 
 use NEW_BLOCK_EXCHANGE_NAME;
@@ -15,24 +15,27 @@ pub struct PubSubClient<C, I> {
 	pub interface: I,
 }
 
-impl<C: BlockChainClient, I:  Interface + Sync + Send> ChainNotify for PubSubClient<C, I> {
+impl<C: BlockChainClient, I: Interface + Sync + Send> ChainNotify for PubSubClient<C, I> {
 	fn new_blocks(&self, new_blocks: NewBlocks) {
 		fn cast<O, T: Copy + Into<O>>(t: &T) -> O {
 			(*t).into()
 		}
 
-		let blocks = new_blocks.route.route()
+		let blocks = new_blocks
+			.route
+			.route()
 			.iter()
-			.filter_map(|&(hash, ref typ)| {
-				match typ {
-					&ChainRouteType::Retracted => None,
-					&ChainRouteType::Enacted => self.client.block(BlockId::Hash(hash))
-				}
+			.filter_map(|&(hash, ref typ)| match typ {
+				&ChainRouteType::Retracted => None,
+				&ChainRouteType::Enacted => self.client.block(BlockId::Hash(hash)),
 			})
 			.map(|block| {
 				let hash = block.hash();
 				let header = block.decode_header();
-				let extra_info = self.client.block_extra_info(BlockId::Hash(hash)).expect("Extra info from block");
+				let extra_info = self
+					.client
+					.block_extra_info(BlockId::Hash(hash))
+					.expect("Extra info from block");
 				RichBlock {
 					inner: Block {
 						hash: Some(hash.into()),
@@ -52,7 +55,14 @@ impl<C: BlockChainClient, I:  Interface + Sync + Send> ChainNotify for PubSubCli
 						total_difficulty: None,
 						seal_fields: header.seal().into_iter().cloned().map(Into::into).collect(),
 						uncles: block.uncle_hashes().into_iter().map(Into::into).collect(),
-						transactions: BlockTransactions::Full(block.view().localized_transactions().into_iter().map(Transaction::from_localized).collect()),
+						transactions: BlockTransactions::Full(
+							block
+								.view()
+								.localized_transactions()
+								.into_iter()
+								.map(Transaction::from_localized)
+								.collect(),
+						),
 						transactions_root: cast(header.transactions_root()),
 						extra_data: header.extra_data().clone().into(),
 					},
@@ -63,8 +73,12 @@ impl<C: BlockChainClient, I:  Interface + Sync + Send> ChainNotify for PubSubCli
 
 		for ref rich_block in blocks {
 			let serialized_block = serde_json::to_string(&rich_block).unwrap();
-			println!("Serialized: {:?}", serialized_block);
-			self.interface.topic_publish(serialized_block, NEW_BLOCK_EXCHANGE_NAME, NEW_BLOCK_ROUTING_KEY);
+			info!("Serialized: {:?}", serialized_block);
+			self.interface.topic_publish(
+				serialized_block,
+				NEW_BLOCK_EXCHANGE_NAME,
+				NEW_BLOCK_ROUTING_KEY,
+			);
 		}
 	}
 }

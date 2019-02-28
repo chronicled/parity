@@ -41,7 +41,8 @@ use light::Cache as LightDataCache;
 use miner::external::ExternalMiner;
 use node_filter::NodeFilter;
 use parity_rabbitmq::client::PubSubClient;
-use parity_rabbitmq::interface::{RabbitMqInterface, RabbitMqConfig};
+use parity_rabbitmq::handler::Sender;
+use parity_rabbitmq::interface::{Interface, RabbitMqInterface, RabbitMqConfig};
 use parity_runtime::Runtime;
 use parity_rpc::{Origin, Metadata, NetworkSettings, informant, is_major_importing};
 use updater::{UpdatePolicy, Updater};
@@ -757,6 +758,8 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 		interface: RabbitMqInterface::new(cmd.rabbitmq_conf),
 	});
 	service.add_notify(rabbitmq_client.clone());
+	let sender_handler = Box::new(Sender::new(client.clone(), miner.clone()));
+	rabbitmq_client.interface.consume("blockchain-interface", "BlockchainInterface.public-tx", sender_handler);
 
 	// secret store key server
 	let secretstore_deps = secretstore::Dependencies {
