@@ -1,0 +1,68 @@
+version: 2
+defaults: &defaults
+  working_directory: ~/parity
+  docker:
+    - image: docker/compose:1.22.0
+
+jobs:
+  test:
+    <<: *defaults
+    steps:
+      - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - run:
+          name: Run the tests
+          command: |
+            docker build --tag=test_env -f ./.circleci/Dockerfile.test .
+            docker run test_env
+  deploy_docker_image:
+    <<: *defaults
+    environment:
+      FINAL_IMAGE: registry.dev.infra.chronicled.com/blockchain-interface
+    steps:
+      - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - restore_cache:
+          key: cargo-docker-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+          paths:
+            - /caches/parity-image.tar
+      - run: 
+          name: Setup Docker credentials
+          command: mkdir -p ~/.docker; echo -n "${REGISTRY_AUTH}" > ~/.docker/config.json;
+      - run:
+          name: Load Docker image layer cache
+          command: |
+            if [ -f /caches/parity-image.tar ]; then docker load -i /caches/parity-image.tar; fi
+      - run:
+          name: Build docker image
+          command: |
+            export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
+            export PREV_IMAGE=`docker images "${FINAL_IMAGE}" --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
+            docker build --rm=false -f scripts/docker/alpine/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" . --cache-from="${PREV_IMAGE}";
+      - run:
+          name: Deploy to dockerhub
+          command: |
+            SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
+            docker push "${FINAL_IMAGE}:${SHORT_COMMIT}";
+            docker logout;
+      - run:
+          name: Save docker image layers for next build
+          command: |
+            export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)" ;
+            mkdir -p /caches;
+            if [ ! -f /caches/parity-image.tar ]; then docker save -o /caches/parity-image.tar "${FINAL_IMAGE}:${SHORT_COMMIT}"; fi
+      - save_cache:
+          key: cargo-docker-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+          paths:
+            - /caches/parity-image.tar
+
+workflows:
+  version: 2
+  blockchain-interface-workflow:
+    jobs:
+      - test
+      - deploy_docker_image:
+          requires:
+            - test

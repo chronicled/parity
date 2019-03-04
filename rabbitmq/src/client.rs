@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 use serde_json;
-use interface::RabbitMqInterface;
+use interface::Interface;
 use ethcore::client::{BlockChainClient, ChainNotify, NewBlocks, ChainRouteType, BlockId};
 use types::{Block, BlockTransactions, RichBlock, Transaction};
 
@@ -10,12 +10,12 @@ use NEW_BLOCK_EXCHANGE_NAME;
 use NEW_BLOCK_ROUTING_KEY;
 
 /// Eth PubSub implementation.
-pub struct PubSubClient<C> {
+pub struct PubSubClient<C, I> {
 	pub client: Arc<C>,
-	pub interface: RabbitMqInterface
+	pub interface: I,
 }
 
-impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
+impl<C: BlockChainClient, I:  Interface + Sync + Send> ChainNotify for PubSubClient<C, I> {
 	fn new_blocks(&self, new_blocks: NewBlocks) {
 		fn cast<O, T: Copy + Into<O>>(t: &T) -> O {
 			(*t).into()

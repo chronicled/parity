@@ -206,7 +206,7 @@ impl<T: Serialize> Serialize for Rich<T> {
 mod tests {
 	use std::collections::BTreeMap;
 	use serde_json;
-	use v1::types::{Transaction, H64, H160, H256, H2048, Bytes, U256};
+	use types::{Transaction, H64, H160, H256, H2048, Bytes, U256};
 	use super::{Block, RichBlock, BlockTransactions, Header, RichHeader};
 
 	#[test]

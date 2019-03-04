@@ -754,7 +754,7 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	let http_server = rpc::new_http("HTTP JSON-RPC", "jsonrpc", cmd.http_conf.clone(), &dependencies)?;
 	let rabbitmq_client = Arc::new(PubSubClient {
 		client: client.clone(),
-		interface: RabbitMqInterface::new(cmd.rabbitmq_conf)
+		interface: RabbitMqInterface::new(cmd.rabbitmq_conf),
 	});
 	service.add_notify(rabbitmq_client.clone());
 

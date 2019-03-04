@@ -15,9 +15,14 @@ extern crate ethcore_transaction as transaction;
 extern crate ethereum_types;
 extern crate rlp;
 
+#[cfg(test)]
+#[macro_use]
+extern crate macros;
+
 pub mod client;
 pub mod interface;
 mod types;
+pub mod tests;
 
 const NEW_BLOCK_EXCHANGE_NAME: &'static str = "BlockchainInterface.Output";
 const NEW_BLOCK_ROUTING_KEY: &'static str = "interface.in.new-block";

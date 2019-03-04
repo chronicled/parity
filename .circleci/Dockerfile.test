@@ -1,0 +1,20 @@
+FROM alpine:edge
+
+# show backtraces
+ENV RUST_BACKTRACE 1
+
+RUN apk add --no-cache \
+  build-base \
+  cargo \
+  cmake \
+  eudev-dev \
+  linux-headers \
+  perl \
+  rust
+
+WORKDIR /parity
+COPY . /parity
+
+RUN  cargo generate-lockfile
+
+CMD cargo test --release --locked --target x86_64-alpine-linux-musl --package parity-rabbitmq;
