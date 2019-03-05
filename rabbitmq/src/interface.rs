@@ -1,21 +1,24 @@
 //! RabbitMQ broker interface
 
-use failure::Error;
-use futures::future::Future;
+use failure::{err_msg, Error};
+use futures::future::{Future, IntoFuture};
 use futures::Stream;
 use lapin::channel::{
-	BasicConsumeOptions, BasicGetOptions, BasicProperties, BasicPublishOptions,
-	ConfirmSelectOptions, ExchangeDeclareOptions, QueueDeclareOptions,
+	BasicConsumeOptions, BasicProperties, BasicPublishOptions,
+	ConfirmSelectOptions, ExchangeDeclareOptions, QueueDeclareOptions, Channel,
 };
 use lapin::client::{Client, ConnectionOptions};
-use lapin::message::Delivery;
+use lapin::consumer::Consumer;
+use lapin::queue::Queue;
 use lapin::types::FieldTable;
 use std::net::ToSocketAddrs;
-use tokio::{net::TcpStream, runtime::Runtime};
+use std::sync::{Arc, Mutex};
+use tokio::net::TcpStream;
+use tokio::runtime::Runtime;
 
 use handler::Handler;
-use ethereum_types::H256;
 
+use LOG_TARGET;
 use TOPIC_EXCHANGE;
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -27,12 +30,155 @@ pub struct RabbitMqConfig {
 /// RabbitMQ interface using lapin
 pub struct RabbitMqInterface {
 	config: RabbitMqConfig,
+	runtime: Option<Arc<Mutex<Runtime>>>,
+	client: Option<Client<TcpStream>>,
+	channel: Option<Channel<TcpStream>>,
+}
+
+impl Default for RabbitMqInterface {
+	fn default() -> RabbitMqInterface {
+		let config = RabbitMqConfig::default();
+		RabbitMqInterface {
+			config: config,
+			runtime: None,
+			client: None,
+			channel: None,
+		}
+	}
 }
 
 impl RabbitMqInterface {
 	// Create a new RabbitMQ Interface
 	pub fn new(config: RabbitMqConfig) -> Self {
-		Self { config: config }
+		let rt = Some(Arc::new(Mutex::new(Runtime::new().unwrap())));
+		RabbitMqInterface {
+			config: config,
+			runtime: rt,
+			..Default::default()
+		}
+	}
+
+	fn get_channel(&self) -> Result<&Channel<TcpStream>, Error> {
+		self.channel
+		.as_ref()
+		.ok_or(err_msg("No channel to RabbitMQ available"))
+	}
+
+	pub fn connect(&mut self) -> Result<&Self, Error> {
+		let socket_addrs = format!("{}:{}", self.config.hostname, self.config.port)
+		.to_socket_addrs()
+		.unwrap()
+		.filter(|addr| addr.is_ipv4())
+		.next()
+		.unwrap();
+		let runtime = self.runtime.clone().unwrap();
+		let mut lock = runtime.lock().unwrap();
+		let result = lock.block_on(
+			TcpStream::connect(&socket_addrs)
+			.map_err(Error::from)
+			.and_then(|stream| {
+				Client::connect(
+					stream,
+					ConnectionOptions {
+						frame_max: 65535,
+						heartbeat: 20,
+						..Default::default()
+					},
+				)
+				.map_err(Error::from)
+			})
+			.and_then(|(client, heartbeat)| {
+				tokio::spawn(heartbeat.map_err(|e| eprintln!("heartbeat error: {}", e)))
+				.into_future()
+				.map(|_| client)
+				.map_err(|_| err_msg("Couldn't spawn the heartbeat task"))
+			})
+			.and_then(|client| {
+				client
+				.create_confirm_channel(ConfirmSelectOptions::default())
+				.map_err(Error::from)
+				.map(|channel| (client, channel))
+			}),
+		)
+		.map_err(Error::from);
+
+	let (client, channel) = result?;
+	info!(
+		target: LOG_TARGET,
+		"Connected to RabbitMQ server at {}:{}", self.config.hostname, self.config.port
+	);
+	self.client = Some(client);
+	self.channel = Some(channel);
+	Ok(self)
+	}
+
+	fn create_topic_exchange(&self, name: &'static str) -> Result<&Self, Error> {
+		let channel = self.get_channel()?.clone();
+		let runtime = self.runtime.clone().unwrap();
+		let mut lock = runtime.lock().unwrap();
+		lock.block_on(channel.exchange_declare(
+			name,
+			TOPIC_EXCHANGE,
+			ExchangeDeclareOptions {
+				durable: true,
+				..Default::default()
+			},
+			FieldTable::new(),
+		))
+		.map_err(Error::from)?;
+		info!(target: LOG_TARGET, "Created a topic exchange \"{}\"", name);
+		Ok(self)
+	}
+
+	pub fn create_queue(&self, name: &'static str) -> Result<&Self, Error> {
+		let channel = self.get_channel()?.clone();
+		let runtime = self.runtime.clone().unwrap();
+		let mut lock = runtime.lock().unwrap();
+		lock.block_on(channel.queue_declare(
+			name,
+			QueueDeclareOptions {
+				durable: true,
+				..Default::default()
+			},
+			FieldTable::new(),
+		))
+		.map_err(Error::from)?;
+		info!(target: LOG_TARGET, "Created a queue \"{}\"", name);
+		Ok(self)
+	}
+
+	fn register_consumer(
+		&self,
+		queue_name: &'static str,
+		consumer_name: &'static str,
+	) -> Result<impl Future<Item = Consumer<TcpStream>, Error = lapin::error::Error>, Error> {
+		let channel = self.get_channel()?.clone();
+		let queue = Queue::new(queue_name.to_string(), 0, 0);
+		let consumer = channel.basic_consume(
+			&queue,
+			&consumer_name,
+			BasicConsumeOptions::default(),
+			FieldTable::new(),
+		);
+		Ok(consumer)
+	}
+
+	fn disconnect(self) -> Result<(), Error> {
+		let runtime = self.runtime.clone().unwrap();
+		let mut lock = runtime.lock().unwrap();
+		lock.block_on(self.get_channel()?.close(200, "Bye"))
+		.map_err(Error::from)?;
+		Ok(())
+	}
+
+	fn spawn<F>(&self, future: F) -> Result<(), Error>
+	where
+	F: Future<Item = (), Error = ()> + 'static + std::marker::Send,
+	{
+		let runtime = self.runtime.clone().unwrap();
+		let mut lock = runtime.lock().unwrap();
+		lock.spawn(future);
+		Ok(())
 	}
 }
 
@@ -43,9 +189,9 @@ pub trait Interface {
 		serialized_data: String,
 		exchange_name: &'static str,
 		routing_key: &'static str,
-	);
+	) -> Result<&Self, Error>;
 	// Listen and consume incoming message
-	fn consume(
+	fn spawn_consumer(
 		&self,
 		consumer_name: &'static str,
 		queue_name: &'static str,
@@ -58,148 +204,60 @@ impl Interface for RabbitMqInterface {
 	fn topic_publish(
 		&self,
 		serialized_data: String,
-		exchange_name: &'static str,
-		routing_key: &'static str,
-	) {
-		let mut socket_addrs = format!("{}:{}", self.config.hostname, self.config.port)
-			.to_socket_addrs()
-			.unwrap()
-			.filter(|addr| addr.is_ipv4());
-		Runtime::new()
-			.unwrap()
-			.block_on_all(
-				TcpStream::connect(&socket_addrs.next().unwrap())
-					.map_err(Error::from)
-					.and_then(|stream| {
-						Client::connect(
-							stream,
-							ConnectionOptions {
-								frame_max: 65535,
-								heartbeat: 20,
-								..Default::default()
-							},
-						)
-						.map_err(Error::from)
-					})
-					.and_then(move |(client, _ /*heartbeat*/)| {
-						client
-							.create_confirm_channel(ConfirmSelectOptions::default())
-							.map_err(Error::from)
-					})
-					.and_then(move |channel| {
-						channel
-							.clone()
-							.exchange_declare(
-								exchange_name,
-								TOPIC_EXCHANGE,
-								ExchangeDeclareOptions::default(),
-								FieldTable::new(),
-							)
-							.map_err(Error::from)
-							.map(move |_| channel)
-					})
-					.and_then(move |channel| {
-						channel
-							.basic_publish(
-								exchange_name,
-								routing_key,
-								serialized_data.into_bytes(),
-								BasicPublishOptions::default(),
-								BasicProperties::default(),
-							)
-							.map_err(Error::from)
-							.map(|confirmation| {
-								info!("got confirmation of publication: {:?}", confirmation);
-							})
-					})
-					.map_err(|err| eprintln!("An error occured: {}", err)),
+		exchange: &'static str,
+		topic: &'static str,
+	) -> Result<&Self, Error> {
+		let runtime = self.runtime.clone().unwrap();
+		let mut lock = runtime.lock().unwrap();
+		lock.block_on(
+			self.get_channel()?
+			.basic_publish(
+				exchange,
+				topic,
+				serialized_data.into_bytes(),
+				BasicPublishOptions::default(),
+				BasicProperties::default(),
 			)
-			.expect("runtime exited with failure");
+			.map(|confirmation| {
+				info!(
+					target: LOG_TARGET,
+					"publish got confirmation: {:?}", confirmation
+				)
+			}),
+		)
+		.map_err(Error::from)?;
+		info!(
+			target: LOG_TARGET,
+			"Published message {}, {}", exchange, topic
+		);
+		Ok(self)
 	}
-
 	/// Listen and consume incoming message
-	fn consume(
+	fn spawn_consumer(
 		&self,
 		consumer_name: &'static str,
 		queue_name: &'static str,
 		handler: Box<Handler>,
 	) -> Result<(), Error> {
-		let mut socket_addrs = format!("{}:{}", self.config.hostname, self.config.port)
-			.to_socket_addrs()
-			.unwrap()
-			.filter(|addr| addr.is_ipv4());
-
-		let rt = TcpStream::connect(&socket_addrs.next().unwrap())
-			.map_err(Error::from)
+		let channel = self.get_channel().unwrap().clone();
+		let consumer = self.register_consumer(queue_name, consumer_name)?
 			.and_then(|stream| {
-				lapin::client::Client::connect(
-					stream,
-					ConnectionOptions {
-						frame_max: 65535,
-						heartbeat: 20,
-						..Default::default()
-					},
-				)
-				.map_err(Error::from)
+				info!(target: LOG_TARGET, "got consumer stream");
+				 stream.for_each(move |message| {
+					debug!(target: LOG_TARGET, "got message: {:?}", message);
+					info!(
+						target: LOG_TARGET,
+						"decoded message: {}",
+						std::str::from_utf8(&message.data).unwrap()
+					);
+					let payload = std::str::from_utf8(&message.data).unwrap();
+					if let Err(e) = handler.send_transaction(&payload) {
+						error!(target: LOG_TARGET, "failed to send transaction: {:?}", e);
+					}
+					channel.basic_ack(message.delivery_tag, false)
+				})
 			})
-			.and_then(move |(client, heartbeat)| {
-				tokio::spawn(heartbeat.map_err(|e| error!("heartbeat error: {}", e)));
-				client
-					.create_channel()
-					.and_then(move |channel| {
-						let id = channel.id;
-						info!("created channel with id: {}", id);
-
-						let c = channel.clone();
-						channel
-							.queue_declare(
-								queue_name,
-								QueueDeclareOptions::default(),
-								FieldTable::new(),
-							)
-							.and_then(move |queue| {
-								info!("channel {} declared queue {:?}", id, queue);
-								let ch = channel.clone();
-								channel
-									.basic_get(queue_name, BasicGetOptions::default())
-									.and_then(move |message| {
-										info!("got message: {:?}", message);
-										channel.basic_ack(message.delivery.delivery_tag, false)
-									})
-									.and_then(move |_| {
-										ch.basic_consume(
-											&queue,
-											consumer_name,
-											BasicConsumeOptions::default(),
-											FieldTable::new(),
-										)
-									})
-							})
-							.and_then(|stream| {
-								info!("got consumer stream");
-								stream.for_each(move |message| {
-									let tag = message.delivery_tag;
-									if let Err(e) = handle_message(message, &handler) {
-										error!("failed to send transaction: {:?}", e);
-									}
-									c.basic_ack(tag, false)
-								})
-							})
-					})
-					.map_err(Error::from)
-			});
-
-		Runtime::new()?.block_on_all(rt)?;
-		Ok(())
+			.map_err(|e| eprintln!("heartbeat error: {}", e));
+		self.spawn(consumer)
 	}
-}
-
-pub fn handle_message(msg: Delivery, hnd: &Box<Handler>) -> Result<H256, Error> {
-	let id: Result<String, Error> = match msg.properties.message_id() {
-		Some(v) => Ok(v.to_string()),
-		None => Err(format_err!("Empty message id")),
-	};
-	let id = id?;
-	info!("consume message {}", id);
-	hnd.send_transaction(id, &msg.data)
 }

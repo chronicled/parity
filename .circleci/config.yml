@@ -2,39 +2,24 @@ version: 2
 defaults: &defaults
   working_directory: ~/parity
   docker:
-    - image: alpine:edge
+    - image: docker/compose:1.22.0
 
 jobs:
   test:
     <<: *defaults
     steps:
       - checkout
+      - setup_remote_docker:
+          docker_layer_caching: true
       - run:
-          name: Install cmake
-          command: apk add --no-cache build-base cargo cmake eudev-dev linux-headers perl rust
-      - run:
-          name: Calculate dependencies
-          command: cargo generate-lockfile
-      #- restore_cache:
-      #    key: cargo-test-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
-      #- run:
-      #    name: Run the tests
-      #    command: |
-      #      export CARGO_TARGET="x86_64-alpine-linux-musl";
-      #      cargo test --release --locked --target "${CARGO_TARGET}" --package parity-rabbitmq;
-      #- save_cache:
-      #    key: cargo-test-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
-      #    paths:
-      #      - /usr/local/cargo/registry
-      #      - target/release/.fingerprint
-      #      - target/release/build
-      #      - target/release/deps
+          name: Run the tests
+          command: |
+            docker build --tag=test_env -f ./.circleci/Dockerfile.test .
+            docker run test_env
   deploy_docker_image:
+    <<: *defaults
     environment:
       FINAL_IMAGE: registry.dev.infra.chronicled.com/blockchain-interface
-    working_directory: ~/parity
-    docker:
-      - image: docker/compose:1.22.0
     steps:
       - checkout
       - setup_remote_docker:
@@ -62,6 +47,12 @@ jobs:
             SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             docker push "${FINAL_IMAGE}:${SHORT_COMMIT}";
             docker logout;
+      - run:
+          name: Save docker image layers for next build
+          command: |
+            export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)" ;
+            mkdir -p /caches;
+            if [ ! -f /caches/parity-image.tar ]; then docker save -o /caches/parity-image.tar "${FINAL_IMAGE}:${SHORT_COMMIT}"; fi
       - save_cache:
           key: cargo-docker-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
           paths:

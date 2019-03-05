@@ -1,18 +1,37 @@
 //! RabbitMQ ChainNotfiy implementation
 
 use ethcore::client::{BlockChainClient, BlockId, ChainNotify, ChainRouteType, NewBlocks};
-use interface::Interface;
+use ethcore::miner;
+use failure::Error;
+use handler::Sender;
+use interface::{Interface, RabbitMqConfig, RabbitMqInterface};
 use serde_json;
 use std::sync::Arc;
 use types::{Block, BlockTransactions, RichBlock, Transaction};
 
 use NEW_BLOCK_EXCHANGE_NAME;
 use NEW_BLOCK_ROUTING_KEY;
+use PUBLIC_TRANSACTION_QUEUE;
+use TRANSACTION_CONSUMER;
 
 /// Eth PubSub implementation.
 pub struct PubSubClient<C, I> {
 	pub client: Arc<C>,
 	pub interface: I,
+}
+
+impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C, RabbitMqInterface> {
+	pub fn new(client: Arc<C>, miner: Arc<miner::Miner>, conf: RabbitMqConfig) -> Result<Self, Error> {
+		let mut interface = RabbitMqInterface::new(conf);
+		interface.connect()?;
+		let sender_handler = Box::new(Sender::new(client.clone(), miner.clone()));
+		interface.create_queue(PUBLIC_TRANSACTION_QUEUE)?;
+		interface.spawn_consumer(TRANSACTION_CONSUMER, PUBLIC_TRANSACTION_QUEUE, sender_handler)?;
+		Ok(Self {
+			client: client,
+			interface: interface,
+		})
+	}
 }
 
 impl<C: BlockChainClient, I: Interface + Sync + Send> ChainNotify for PubSubClient<C, I> {

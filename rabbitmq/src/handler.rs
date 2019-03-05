@@ -4,6 +4,7 @@ use std::sync::Arc;
 use ethcore::client::BlockChainClient;
 use ethcore::miner::{self, MinerService};
 use ethereum_types::H256;
+use hex;
 use rlp::Rlp;
 use transaction::{PendingTransaction, SignedTransaction};
 
@@ -22,12 +23,13 @@ impl<C, M> Sender<C, M> {
 }
 
 pub trait Handler: Sync + Send {
-	fn send_transaction(&self, id: String, payload: &Vec<u8>) -> Result<H256, Error>;
+	fn send_transaction(&self, payload: &str) -> Result<H256, Error>;
 }
 
 impl<C: miner::BlockChainClient + BlockChainClient, M: MinerService> Handler for Sender<C, M> {
-	fn send_transaction(&self, id: String, payload: &Vec<u8>) -> Result<H256, Error> {
-		let signed_transaction = Rlp::new(&payload)
+	fn send_transaction(&self, payload: &str) -> Result<H256, Error> {
+		let decoded: &[u8] = &hex::decode(payload).expect("Decoding failed");
+		let signed_transaction = Rlp::new(decoded)
 			.as_val()
 			.map_err(Error::from)
 			.and_then(|tx| SignedTransaction::new(tx).map_err(Error::from))?;

@@ -18,16 +18,17 @@ impl Interface for DummyRabbitMqInterface {
 		serialized_data: String,
 		exchange_name: &'static str,
 		routing_key: &'static str,
-	) {
+	) -> Result<&Self, Error> {
 		println!(
 			"supposed to publish to the {:?}, exchange with the routing key: {:?}",
 			exchange_name, routing_key
 		);
 		self.sender.send(serialized_data);
+		Ok(self)
 	}
 
 	/// Listen and consume incoming message
-	fn consume(
+	fn spawn_consumer(
 		&self,
 		consumer_name: &'static str,
 		queue_name: &'static str,

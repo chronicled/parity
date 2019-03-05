@@ -1,4 +1,5 @@
 extern crate futures;
+extern crate hex;
 extern crate lapin_futures as lapin;
 extern crate rustc_hex;
 extern crate serde;
@@ -28,6 +29,9 @@ pub mod interface;
 pub mod tests;
 mod types;
 
+const LOG_TARGET: &'static str = "rabbitmq";
+const TRANSACTION_CONSUMER: &'static str = "blockchain-interface";
 const NEW_BLOCK_EXCHANGE_NAME: &'static str = "BlockchainInterface.Output";
 const NEW_BLOCK_ROUTING_KEY: &'static str = "interface.in.new-block";
+const PUBLIC_TRANSACTION_QUEUE: &'static str = "BlockchainInterface.public-tx";
 const TOPIC_EXCHANGE: &'static str = "topic";
