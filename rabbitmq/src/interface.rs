@@ -1,6 +1,6 @@
 //! RabbitMQ broker interface
 
-use failure::{err_msg, Error};
+use failure::{err_msg, Error, ResultExt};
 use futures::future::{Future, IntoFuture};
 use futures::Stream;
 use lapin::channel::{
@@ -67,10 +67,10 @@ impl RabbitMqInterface {
 	pub fn connect(&mut self) -> Result<&Self, Error> {
 		let socket_addrs = format!("{}:{}", self.config.hostname, self.config.port)
 		.to_socket_addrs()
-		.unwrap()
+		.context("Failed to get the socket address from the hostname parameter")?
 		.filter(|addr| addr.is_ipv4())
 		.next()
-		.unwrap();
+		.ok_or(err_msg("Couldn't find the RabbitMQ server socket address"))?;
 		let runtime = self.runtime.clone().unwrap();
 		let mut lock = runtime.lock().unwrap();
 		let result = lock.block_on(
@@ -163,45 +163,7 @@ impl RabbitMqInterface {
 		Ok(consumer)
 	}
 
-	fn disconnect(self) -> Result<(), Error> {
-		let runtime = self.runtime.clone().unwrap();
-		let mut lock = runtime.lock().unwrap();
-		lock.block_on(self.get_channel()?.close(200, "Bye"))
-		.map_err(Error::from)?;
-		Ok(())
-	}
-
-	fn spawn<F>(&self, future: F) -> Result<(), Error>
-	where
-	F: Future<Item = (), Error = ()> + 'static + std::marker::Send,
-	{
-		let runtime = self.runtime.clone().unwrap();
-		let mut lock = runtime.lock().unwrap();
-		lock.spawn(future);
-		Ok(())
-	}
-}
-
-pub trait Interface {
-	// Publish a new message to a topic exchange
-	fn topic_publish(
-		&self,
-		serialized_data: String,
-		exchange_name: &'static str,
-		routing_key: &'static str,
-	) -> Result<&Self, Error>;
-	// Listen and consume incoming message
-	fn spawn_consumer(
-		&self,
-		consumer_name: &'static str,
-		queue_name: &'static str,
-		handler: Box<Handler>,
-	) -> Result<(), Error>;
-}
-
-impl Interface for RabbitMqInterface {
-	/// Publish a new message to a topic exchange
-	fn topic_publish(
+	pub fn publish(
 		&self,
 		serialized_data: String,
 		exchange: &'static str,
@@ -232,6 +194,54 @@ impl Interface for RabbitMqInterface {
 		);
 		Ok(self)
 	}
+
+	fn disconnect(self) -> Result<(), Error> {
+		let runtime = self.runtime.clone().unwrap();
+		let mut lock = runtime.lock().unwrap();
+		lock.block_on(self.get_channel()?.close(200, "Bye"))
+		.map_err(Error::from)?;
+		Ok(())
+	}
+
+	fn spawn<F>(&self, future: F) -> Result<(), Error>
+	where
+	F: Future<Item = (), Error = ()> + 'static + std::marker::Send,
+	{
+		let runtime = self.runtime.clone().unwrap();
+		let mut lock = runtime.lock().unwrap();
+		lock.spawn(future);
+		Ok(())
+	}
+}
+
+pub trait Interface {
+	// Publish a new message to a topic exchange
+	fn topic_publish(
+		&self,
+		serialized_data: String,
+		exchange_name: &'static str,
+		routing_key: &'static str,
+	) -> Result<(), Error>;
+	// Listen and consume incoming message
+	fn spawn_consumer(
+		&self,
+		consumer_name: &'static str,
+		queue_name: &'static str,
+		handler: Box<Handler>,
+	) -> Result<(), Error>;
+}
+
+impl Interface for RabbitMqInterface {
+	/// Publish a new message to a topic exchange
+	fn topic_publish(
+		&self,
+		serialized_data: String,
+		exchange: &'static str,
+		topic: &'static str,
+	) -> Result<(), Error> {
+		self.publish(serialized_data, exchange, topic);
+		Ok(())
+	}
 	/// Listen and consume incoming message
 	fn spawn_consumer(
 		&self,
@@ -244,20 +254,15 @@ impl Interface for RabbitMqInterface {
 			.and_then(|stream| {
 				info!(target: LOG_TARGET, "got consumer stream");
 				 stream.for_each(move |message| {
-					debug!(target: LOG_TARGET, "got message: {:?}", message);
-					info!(
-						target: LOG_TARGET,
-						"decoded message: {}",
-						std::str::from_utf8(&message.data).unwrap()
-					);
 					let payload = std::str::from_utf8(&message.data).unwrap();
+					debug!(target: LOG_TARGET, "got message: {:?}", payload);
 					if let Err(e) = handler.send_transaction(&payload) {
 						error!(target: LOG_TARGET, "failed to send transaction: {:?}", e);
 					}
 					channel.basic_ack(message.delivery_tag, false)
 				})
 			})
-			.map_err(|e| eprintln!("heartbeat error: {}", e));
+			.map_err(|_| eprintln!("Error while processing message"));
 		self.spawn(consumer)
 	}
 }

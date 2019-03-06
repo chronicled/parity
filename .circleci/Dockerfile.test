@@ -15,4 +15,4 @@ RUN apk add --no-cache \
 WORKDIR /parity
 COPY . /parity
 
-CMD cargo test --release --locked --target x86_64-alpine-linux-musl --package parity-rabbitmq;
+CMD cargo test --release --target x86_64-alpine-linux-musl --package parity-rabbitmq;

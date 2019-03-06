@@ -9,6 +9,7 @@ use serde_json;
 use std::sync::Arc;
 use types::{Block, BlockTransactions, RichBlock, Transaction};
 
+use LOG_TARGET;
 use NEW_BLOCK_EXCHANGE_NAME;
 use NEW_BLOCK_ROUTING_KEY;
 use PUBLIC_TRANSACTION_QUEUE;
@@ -92,7 +93,7 @@ impl<C: BlockChainClient, I: Interface + Sync + Send> ChainNotify for PubSubClie
 
 		for ref rich_block in blocks {
 			let serialized_block = serde_json::to_string(&rich_block).unwrap();
-			info!("Serialized: {:?}", serialized_block);
+			info!(target: LOG_TARGET, "Serialized: {:?}", serialized_block);
 			self.interface.topic_publish(
 				serialized_block,
 				NEW_BLOCK_EXCHANGE_NAME,

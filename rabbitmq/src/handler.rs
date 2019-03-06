@@ -28,7 +28,7 @@ pub trait Handler: Sync + Send {
 
 impl<C: miner::BlockChainClient + BlockChainClient, M: MinerService> Handler for Sender<C, M> {
 	fn send_transaction(&self, payload: &str) -> Result<H256, Error> {
-		let decoded: &[u8] = &hex::decode(payload).expect("Decoding failed");
+		let decoded: &[u8] = &hex::decode(payload).map_err(Error::from)?;
 		let signed_transaction = Rlp::new(decoded)
 			.as_val()
 			.map_err(Error::from)
