@@ -1,4 +1,4 @@
-use failure::Error;
+use failure::{Error, ResultExt};
 use std::sync::Arc;
 
 use ethcore::client::BlockChainClient;
@@ -28,7 +28,7 @@ pub trait Handler: Sync + Send {
 
 impl<C: miner::BlockChainClient + BlockChainClient, M: MinerService> Handler for Sender<C, M> {
 	fn send_transaction(&self, payload: &str) -> Result<H256, Error> {
-		let decoded: &[u8] = &hex::decode(payload).map_err(Error::from)?;
+		let decoded: &[u8] = &hex::decode(payload).context("Failed to decode transaction payload")?;
 		let signed_transaction = Rlp::new(decoded)
 			.as_val()
 			.map_err(Error::from)

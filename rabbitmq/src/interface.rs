@@ -261,8 +261,7 @@ impl Interface for RabbitMqInterface {
 					}
 					channel.basic_ack(message.delivery_tag, false)
 				})
-			})
-			.map_err(|_| eprintln!("Error while processing message"));
+			}).map_err(|_| eprintln!("Error while processing the stream"));
 		self.spawn(consumer)
 	}
 }
