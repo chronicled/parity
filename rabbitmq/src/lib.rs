@@ -13,9 +13,9 @@ extern crate failure;
 #[macro_use]
 extern crate serde_derive;
 
+extern crate common_types;
 extern crate ethcore;
 extern crate ethcore_miner as miner;
-extern crate ethcore_transaction as transaction;
 extern crate ethereum_types;
 extern crate rlp;
 

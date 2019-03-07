@@ -14,17 +14,17 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
-use transaction;
+use common_types::transaction;
 
 /// Represents condition on minimum block number or block timestamp.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum TransactionCondition {
 	/// Valid at this minimum block number.
-	#[serde(rename="block")]
+	#[serde(rename = "block")]
 	Number(u64),
 	/// Valid at given unix time.
-	#[serde(rename="time")]
+	#[serde(rename = "time")]
 	Timestamp(u64),
 }
 

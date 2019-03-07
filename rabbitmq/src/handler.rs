@@ -6,7 +6,7 @@ use ethcore::miner::{self, MinerService};
 use ethereum_types::H256;
 use hex;
 use rlp::Rlp;
-use transaction::{PendingTransaction, SignedTransaction};
+use common_types::transaction::{PendingTransaction, SignedTransaction};
 
 /// A Sender which uses references to a client and miner in order to send transactions
 #[derive(Debug)]

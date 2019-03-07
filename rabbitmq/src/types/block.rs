@@ -17,10 +17,10 @@
 use std::ops::Deref;
 use std::collections::BTreeMap;
 
-use ethcore::encoded::Header as EthHeader;
-
-use serde::{Serialize, Serializer};
 use serde::ser::Error;
+use serde::{Serialize, Serializer};
+use common_types::encoded::Header as EthHeader;
+
 use types::{Bytes, Transaction, H160, H256, H2048, U256};
 
 /// Block Transactions
@@ -44,14 +44,14 @@ impl Serialize for BlockTransactions {
 
 /// Block representation
 #[derive(Debug, Serialize)]
-#[serde(rename_all="camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct Block {
 	/// Hash of the block
 	pub hash: Option<H256>,
 	/// Hash of the parent
 	pub parent_hash: H256,
 	/// Hash of the uncles
-	#[serde(rename="sha3Uncles")]
+	#[serde(rename = "sha3Uncles")]
 	pub uncles_hash: H256,
 	/// Authors address
 	pub author: H160,
@@ -91,14 +91,14 @@ pub struct Block {
 
 /// Block header representation.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all="camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct Header {
 	/// Hash of the block
 	pub hash: Option<H256>,
 	/// Hash of the parent
 	pub parent_hash: H256,
 	/// Hash of the uncles
-	#[serde(rename="sha3Uncles")]
+	#[serde(rename = "sha3Uncles")]
 	pub uncles_hash: H256,
 	/// Authors address
 	pub author: H160,
@@ -206,7 +206,7 @@ impl<T: Serialize> Serialize for Rich<T> {
 mod tests {
 	use std::collections::BTreeMap;
 	use serde_json;
-	use types::{Transaction, H64, H160, H256, H2048, Bytes, U256};
+	use v1::types::{Transaction, H64, H160, H256, H2048, Bytes, U256};
 	use super::{Block, RichBlock, BlockTransactions, Header, RichHeader};
 
 	#[test]

@@ -17,7 +17,7 @@ tokio = "0.1"
 
 ethcore = { path = "../ethcore", features = ["test-helpers"] }
 ethcore-miner = { path = "../miner" }
-ethcore-transaction = { path = "../ethcore/transaction" }
+common-types = { path = "../ethcore/types" }
 ethereum-types = "0.4"
 rlp = { version = "0.3.0", features = ["ethereum"] }
 

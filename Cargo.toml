@@ -53,6 +53,7 @@ cli-signer= { path = "cli-signer" }
 parity-hash-fetch = { path = "updater/hash-fetch" }
 parity-ipfs-api = { path = "ipfs" }
 parity-local-store = { path = "miner/local-store" }
+parity-rabbitmq = { path = "rabbitmq" }
 parity-runtime = { path = "util/runtime" }
 parity-rpc = { path = "rpc" }
 parity-updater = { path = "updater" }
