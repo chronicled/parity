@@ -1,18 +1,18 @@
-// Copyright 2015-2018 Parity Technologies (UK) Ltd.
-// This file is part of Parity.
+// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// This file is part of Parity Ethereum.
 
-// Parity is free software: you can redistribute it and/or modify
+// Parity Ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Parity is distributed in the hope that it will be useful,
+// Parity Ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Parity.  If not, see <http://www.gnu.org/licenses/>.
+// along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 //! JSON VM output.
 
@@ -74,6 +74,8 @@ impl Informant {
 }
 
 impl vm::Informant for Informant {
+	type Sink = ();
+
 	fn before_test(&mut self, name: &str, action: &str) {
 		println!("{}", json!({"action": action, "test": name}));
 	}
@@ -82,7 +84,9 @@ impl vm::Informant for Informant {
 		self.gas_used = gas;
 	}
 
-	fn finish(result: vm::RunResult<Self::Output>) {
+	fn clone_sink(&self) -> Self::Sink { () }
+
+	fn finish(result: vm::RunResult<Self::Output>, _sink: &mut Self::Sink) {
 		match result {
 			Ok(success) => {
 				for trace in success.traces.unwrap_or_else(Vec::new) {

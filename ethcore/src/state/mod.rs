@@ -1,18 +1,18 @@
-// Copyright 2015-2018 Parity Technologies (UK) Ltd.
-// This file is part of Parity.
+// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// This file is part of Parity Ethereum.
 
-// Parity is free software: you can redistribute it and/or modify
+// Parity Ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Parity is distributed in the hope that it will be useful,
+// Parity Ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Parity.  If not, see <http://www.gnu.org/licenses/>.
+// along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 //! A mutable state representation suitable to execute transactions.
 //! Generic over a `Backend`. Deals with `Account`s.
@@ -26,7 +26,7 @@ use std::fmt;
 use std::sync::Arc;
 use hash::{KECCAK_NULL_RLP, KECCAK_EMPTY};
 
-use receipt::{Receipt, TransactionOutcome};
+use types::receipt::{Receipt, TransactionOutcome};
 use machine::EthereumMachine as Machine;
 use vm::EnvInfo;
 use error::Error;
@@ -38,7 +38,7 @@ use pod_state::{self, PodState};
 use types::basic_account::BasicAccount;
 use executed::{Executed, ExecutionError};
 use types::state_diff::StateDiff;
-use transaction::SignedTransaction;
+use types::transaction::SignedTransaction;
 use state_db::StateDB;
 use factory::VmFactory;
 
@@ -500,7 +500,12 @@ impl<B: Backend> State<B> {
 	/// it will have its code reset, ready for `init_code()`.
 	pub fn new_contract(&mut self, contract: &Address, balance: U256, nonce_offset: U256) -> TrieResult<()> {
 		let original_storage_root = self.original_storage_root(contract)?;
-		self.insert_cache(contract, AccountEntry::new_dirty(Some(Account::new_contract(balance, self.account_start_nonce + nonce_offset, original_storage_root))));
+		let (nonce, overflow) = self.account_start_nonce.overflowing_add(nonce_offset);
+		if overflow {
+			return Err(Box::new(TrieError::DecoderError(H256::from(contract),
+				rlp::DecoderError::Custom("Nonce overflow".into()))));
+		}
+		self.insert_cache(contract, AccountEntry::new_dirty(Some(Account::new_contract(balance, nonce, original_storage_root))));
 		Ok(())
 	}
 
@@ -537,6 +542,13 @@ impl<B: Backend> State<B> {
 	pub fn nonce(&self, a: &Address) -> TrieResult<U256> {
 		self.ensure_cached(a, RequireCache::None, true,
 			|a| a.as_ref().map_or(self.account_start_nonce, |account| *account.nonce()))
+	}
+
+	/// Whether the base storage root of an account remains unchanged.
+	pub fn is_base_storage_root_unchanged(&self, a: &Address) -> TrieResult<bool> {
+		Ok(self.ensure_cached(a, RequireCache::None, true,
+			|a| a.as_ref().map(|account| account.is_base_storage_root_unchanged()))?
+			.unwrap_or(true))
 	}
 
 	/// Get the storage root of account `a`.
@@ -947,20 +959,77 @@ impl<B: Backend> State<B> {
 	}
 
 	/// Populate a PodAccount map from this state.
-	pub fn to_pod(&self) -> PodState {
+	fn to_pod_cache(&self) -> PodState {
 		assert!(self.checkpoints.borrow().is_empty());
-		// TODO: handle database rather than just the cache.
-		// will need fat db.
 		PodState::from(self.cache.borrow().iter().fold(BTreeMap::new(), |mut m, (add, opt)| {
 			if let Some(ref acc) = opt.account {
-				m.insert(add.clone(), PodAccount::from_account(acc));
+				m.insert(*add, PodAccount::from_account(acc));
 			}
 			m
 		}))
 	}
 
+	#[cfg(feature="to-pod-full")]
+	/// Populate a PodAccount map from this state.
+	/// Warning this is not for real time use.
+	/// Use of this method requires FatDB mode to be able
+	/// to iterate on accounts.
+	pub fn to_pod_full(&self) -> Result<PodState, Error> {
+
+		assert!(self.checkpoints.borrow().is_empty());
+		assert!(self.factories.trie.is_fat());
+
+		let mut result = BTreeMap::new();
+
+		let trie = self.factories.trie.readonly(self.db.as_hashdb(), &self.root)?;
+
+		// put trie in cache
+		for item in trie.iter()? {
+			if let Ok((addr, _dbval)) = item {
+				let address = Address::from_slice(&addr);
+				let _ = self.require(&address, true);
+			}
+		}
+
+		// Resolve missing part
+		for (add, opt) in self.cache.borrow().iter() {
+			if let Some(ref acc) = opt.account {
+				let pod_account = self.account_to_pod_account(acc, add)?;
+				result.insert(add.clone(), pod_account);
+			}
+		}
+
+		Ok(PodState::from(result))
+	}
+
+	/// Create a PodAccount from an account.
+	/// Differs from existing method by including all storage
+	/// values of the account to the PodAccount.
+	/// This function is only intended for use in small tests or with fresh accounts.
+	/// It requires FatDB.
+	#[cfg(feature="to-pod-full")]
+	fn account_to_pod_account(&self, account: &Account, address: &Address) -> Result<PodAccount, Error> {
+		let mut pod_storage = BTreeMap::new();
+		let addr_hash = account.address_hash(address);
+		let accountdb = self.factories.accountdb.readonly(self.db.as_hashdb(), addr_hash);
+		let root = account.base_storage_root();
+
+		let trie = self.factories.trie.readonly(accountdb.as_hashdb(), &root)?;
+		for o_kv in trie.iter()? {
+			if let Ok((key, val)) = o_kv {
+				pod_storage.insert(key[..].into(), rlp::decode::<U256>(&val[..]).expect("Decoded from trie which was encoded from the same type; qed").into());
+			}
+		}
+
+		let mut pod_account = PodAccount::from_account(&account);
+		// cached one first
+		pod_storage.append(&mut pod_account.storage);
+		pod_account.storage = pod_storage;
+		Ok(pod_account)
+	}
+
 	/// Populate a PodAccount map from this state, with another state as the account and storage query.
-	pub fn to_pod_diff<X: Backend>(&mut self, query: &State<X>) -> TrieResult<PodState> {
+	fn to_pod_diff<X: Backend>(&mut self, query: &State<X>) -> TrieResult<PodState> {
 		assert!(self.checkpoints.borrow().is_empty());
 
 		// Merge PodAccount::to_pod for cache of self and `query`.
@@ -1015,7 +1084,7 @@ impl<B: Backend> State<B> {
 	/// Returns a `StateDiff` describing the difference from `orig` to `self`.
 	/// Consumes self.
 	pub fn diff_from<X: Backend>(&self, mut orig: State<X>) -> TrieResult<StateDiff> {
-		let pod_state_post = self.to_pod();
+		let pod_state_post = self.to_pod_cache();
 		let pod_state_pre = orig.to_pod_diff(self)?;
 		Ok(pod_state::diff_pod(&pod_state_pre, &pod_state_post))
 	}
@@ -1220,6 +1289,13 @@ impl<B: Backend> fmt::Debug for State<B> {
 	}
 }
 
+impl State<StateDB> {
+	/// Get a reference to the underlying state DB.
+	pub fn db(&self) -> &StateDB {
+		&self.db
+	}
+}
+
 // TODO: cloning for `State` shouldn't be possible in general; Remove this and use
 // checkpoints where possible.
 impl Clone for State<StateDB> {
@@ -1258,8 +1334,7 @@ mod tests {
 	use machine::EthereumMachine;
 	use vm::EnvInfo;
 	use spec::*;
-	use transaction::*;
-	use ethcore_logger::init_log;
+	use types::transaction::*;
 	use trace::{FlatTrace, TraceError, trace};
 	use evm::CallType;
 
@@ -1275,7 +1350,7 @@ mod tests {
 
 	#[test]
 	fn should_apply_create_transaction() {
-		init_log();
+		let _ = env_logger::try_init();
 
 		let mut state = get_temp_state();
 
@@ -1315,7 +1390,7 @@ mod tests {
 
 	#[test]
 	fn should_work_when_cloned() {
-		init_log();
+		let _ = env_logger::try_init();
 
 		let a = Address::zero();
 
@@ -1333,7 +1408,7 @@ mod tests {
 
 	#[test]
 	fn should_trace_failed_create_transaction() {
-		init_log();
+		let _ = env_logger::try_init();
 
 		let mut state = get_temp_state();
 
@@ -1369,7 +1444,7 @@ mod tests {
 
 	#[test]
 	fn should_trace_call_transaction() {
-		init_log();
+		let _ = env_logger::try_init();
 
 		let mut state = get_temp_state();
 
@@ -1411,7 +1486,7 @@ mod tests {
 
 	#[test]
 	fn should_trace_basic_call_transaction() {
-		init_log();
+		let _ = env_logger::try_init();
 
 		let mut state = get_temp_state();
 
@@ -1452,7 +1527,7 @@ mod tests {
 
 	#[test]
 	fn should_trace_call_transaction_to_builtin() {
-		init_log();
+		let _ = env_logger::try_init();
 
 		let mut state = get_temp_state();
 
@@ -1493,7 +1568,7 @@ mod tests {
 
 	#[test]
 	fn should_not_trace_subcall_transaction_to_builtin() {
-		init_log();
+		let _ = env_logger::try_init();
 
 		let mut state = get_temp_state();
 
@@ -1534,8 +1609,8 @@ mod tests {
 	}
 
 	#[test]
-	fn should_not_trace_callcode() {
-		init_log();
+	fn should_trace_callcode_properly() {
+		let _ = env_logger::try_init();
 
 		let mut state = get_temp_state();
 
@@ -1576,7 +1651,7 @@ mod tests {
 			subtraces: 0,
 			action: trace::Action::Call(trace::Call {
 				from: 0xa.into(),
-				to: 0xa.into(),
+				to: 0xb.into(),
 				value: 0.into(),
 				gas: 4096.into(),
 				input: vec![],
@@ -1593,7 +1668,7 @@ mod tests {
 
 	#[test]
 	fn should_trace_delegatecall_properly() {
-		init_log();
+		let _ = env_logger::try_init();
 
 		let mut state = get_temp_state();
 
@@ -1652,7 +1727,7 @@ mod tests {
 
 	#[test]
 	fn should_trace_failed_call_transaction() {
-		init_log();
+		let _ = env_logger::try_init();
 
 		let mut state = get_temp_state();
 
@@ -1691,7 +1766,7 @@ mod tests {
 
 	#[test]
 	fn should_trace_call_with_subcall_transaction() {
-		init_log();
+		let _ = env_logger::try_init();
 
 		let mut state = get_temp_state();
 
@@ -1750,7 +1825,7 @@ mod tests {
 
 	#[test]
 	fn should_trace_call_with_basic_subcall_transaction() {
-		init_log();
+		let _ = env_logger::try_init();
 
 		let mut state = get_temp_state();
 
@@ -1804,7 +1879,7 @@ mod tests {
 
 	#[test]
 	fn should_not_trace_call_with_invalid_basic_subcall_transaction() {
-		init_log();
+		let _ = env_logger::try_init();
 
 		let mut state = get_temp_state();
 
@@ -1846,7 +1921,7 @@ mod tests {
 
 	#[test]
 	fn should_trace_failed_subcall_transaction() {
-		init_log();
+		let _ = env_logger::try_init();
 
 		let mut state = get_temp_state();
 
@@ -1901,7 +1976,7 @@ mod tests {
 
 	#[test]
 	fn should_trace_call_with_subcall_with_subcall_transaction() {
-		init_log();
+		let _ = env_logger::try_init();
 
 		let mut state = get_temp_state();
 
@@ -1975,7 +2050,7 @@ mod tests {
 
 	#[test]
 	fn should_trace_failed_subcall_with_subcall_transaction() {
-		init_log();
+		let _ = env_logger::try_init();
 
 		let mut state = get_temp_state();
 
@@ -2047,7 +2122,7 @@ mod tests {
 
 	#[test]
 	fn should_trace_suicide() {
-		init_log();
+		let _ = env_logger::try_init();
 
 		let mut state = get_temp_state();
 
@@ -2637,4 +2712,49 @@ mod tests {
 						.into_iter().collect(),
 				})).as_ref());
 	}
+
+	#[cfg(feature="to-pod-full")]
+	#[test]
+	fn should_get_full_pod_storage_values() {
+		use trie::{TrieFactory, TrieSpec};
+
+		let a = 10.into();
+		let db = get_temp_state_db();
+
+		let factories = Factories {
+			vm: Default::default(),
+			trie: TrieFactory::new(TrieSpec::Fat),
+			accountdb: Default::default(),
+		};
+
+		let get_pod_state_val = |pod_state : &PodState, ak, k| {
+			pod_state.get().get(ak).unwrap().storage.get(&k).unwrap().clone()
+		};
+
+		let storage_address = H256::from(&U256::from(1u64));
+
+		let (root, db) = {
+			let mut state = State::new(db, U256::from(0), factories.clone());
+			state.set_storage(&a, storage_address.clone(), H256::from(&U256::from(20u64))).unwrap();
+			let dump = state.to_pod_full().unwrap();
+			assert_eq!(get_pod_state_val(&dump, &a, storage_address.clone()), H256::from(&U256::from(20u64)));
+			state.commit().unwrap();
+			let dump = state.to_pod_full().unwrap();
+			assert_eq!(get_pod_state_val(&dump, &a, storage_address.clone()), H256::from(&U256::from(20u64)));
+			state.drop()
+		};
+
+		let mut state = State::from_existing(db, root, U256::from(0u8), factories).unwrap();
+		let dump = state.to_pod_full().unwrap();
+		assert_eq!(get_pod_state_val(&dump, &a, storage_address.clone()), H256::from(&U256::from(20u64)));
+		state.set_storage(&a, storage_address.clone(), H256::from(&U256::from(21u64))).unwrap();
+		let dump = state.to_pod_full().unwrap();
+		assert_eq!(get_pod_state_val(&dump, &a, storage_address.clone()), H256::from(&U256::from(21u64)));
+		state.commit().unwrap();
+		state.set_storage(&a, storage_address.clone(), H256::from(&U256::from(0u64))).unwrap();
+		let dump = state.to_pod_full().unwrap();
+		assert_eq!(get_pod_state_val(&dump, &a, storage_address.clone()), H256::from(&U256::from(0u64)));
+
+	}
+
 }

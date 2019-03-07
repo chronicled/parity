@@ -1,18 +1,18 @@
-// Copyright 2015-2018 Parity Technologies (UK) Ltd.
-// This file is part of Parity.
+// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// This file is part of Parity Ethereum.
 
-// Parity is free software: you can redistribute it and/or modify
+// Parity Ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Parity is distributed in the hope that it will be useful,
+// Parity Ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Parity.  If not, see <http://www.gnu.org/licenses/>.
+// along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 //! A blockchain engine that supports a non-instant BFT proof-of-authority.
 
@@ -34,7 +34,6 @@ use error::{Error, ErrorKind, BlockError};
 use ethjson;
 use machine::{AuxiliaryData, Call, EthereumMachine};
 use hash::keccak;
-use header::{Header, BlockNumber, ExtendedHeader};
 use super::signer::EngineSigner;
 use super::validator_set::{ValidatorSet, SimpleList, new_validator_set};
 use self::finality::RollingFinality;
@@ -44,6 +43,8 @@ use itertools::{self, Itertools};
 use rlp::{encode, Decodable, DecoderError, Encodable, RlpStream, Rlp};
 use ethereum_types::{H256, H520, Address, U128, U256};
 use parking_lot::{Mutex, RwLock};
+use types::BlockNumber;
+use types::header::{Header, ExtendedHeader};
 use types::ancestry_action::AncestryAction;
 use unexpected::{Mismatch, OutOfBounds};
 
@@ -1533,7 +1534,7 @@ mod tests {
 	use hash::keccak;
 	use ethereum_types::{Address, H520, H256, U256};
 	use ethkey::Signature;
-	use header::Header;
+	use types::header::Header;
 	use rlp::encode;
 	use block::*;
 	use test_helpers::{
@@ -1542,7 +1543,7 @@ mod tests {
 	};
 	use account_provider::AccountProvider;
 	use spec::Spec;
-	use transaction::{Action, Transaction};
+	use types::transaction::{Action, Transaction};
 	use engines::{Seal, Engine, EngineError, EthEngine};
 	use engines::validator_set::{TestSet, SimpleList};
 	use error::{Error, ErrorKind};

@@ -1,18 +1,18 @@
-// Copyright 2015-2018 Parity Technologies (UK) Ltd.
-// This file is part of Parity.
+// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// This file is part of Parity Ethereum.
 
-// Parity is free software: you can redistribute it and/or modify
+// Parity Ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Parity is distributed in the hope that it will be useful,
+// Parity Ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Parity.  If not, see <http://www.gnu.org/licenses/>.
+// along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 //! Ethcore client application.
 
@@ -28,6 +28,7 @@ extern crate parity_ethereum;
 extern crate parking_lot;
 
 #[cfg(windows)] extern crate winapi;
+extern crate ethcore_logger;
 
 use std::ffi::OsString;
 use std::fs::{remove_file, metadata, File, create_dir_all};
@@ -42,6 +43,7 @@ use dir::default_hypervisor_path;
 use fdlimit::raise_fd_limit;
 use parity_ethereum::{start, ExecutionAction};
 use parking_lot::{Condvar, Mutex};
+use ethcore_logger::setup_log;
 
 const PLEASE_RESTART_EXIT_CODE: i32 = 69;
 const PARITY_EXECUTABLE_NAME: &str = "parity";
@@ -183,6 +185,11 @@ fn main_direct(force_can_restart: bool) -> i32 {
 		let args = std::env::args().collect::<Vec<_>>();
 		parity_ethereum::Configuration::parse_cli(&args).unwrap_or_else(|e| e.exit())
 	};
+
+	let logger = setup_log(&conf.logger_config()).unwrap_or_else(|e| {
+		eprintln!("{}", e);
+		process::exit(2)
+	});
 
 	if let Some(spec_override) = take_spec_name_override() {
 		conf.args.flag_testnet = false;

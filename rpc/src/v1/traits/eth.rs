@@ -1,24 +1,24 @@
-// Copyright 2015-2018 Parity Technologies (UK) Ltd.
-// This file is part of Parity.
+// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// This file is part of Parity Ethereum.
 
-// Parity is free software: you can redistribute it and/or modify
+// Parity Ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Parity is distributed in the hope that it will be useful,
+// Parity Ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Parity.  If not, see <http://www.gnu.org/licenses/>.
+// along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 //! Eth rpc interface.
 use jsonrpc_core::{Result, BoxFuture};
 use jsonrpc_macros::Trailing;
 
-use v1::types::{RichBlock, BlockNumber, Bytes, CallRequest, Filter, FilterChanges, Index};
+use v1::types::{RichBlock, BlockNumber, Bytes, CallRequest, Filter, FilterChanges, Index, EthAccount};
 use v1::types::{Log, Receipt, SyncStatus, Transaction, Work};
 use v1::types::{H64, H160, H256, U256, U64};
 
@@ -68,6 +68,10 @@ build_rpc_trait! {
 		/// Returns balance of the given account.
 		#[rpc(name = "eth_getBalance")]
 		fn balance(&self, H160, Trailing<BlockNumber>) -> BoxFuture<U256>;
+
+		/// Returns the account- and storage-values of the specified account including the Merkle-proof
+		#[rpc(name = "eth_getProof")]
+		fn proof(&self, H160, Vec<H256>, Trailing<BlockNumber>) -> BoxFuture<EthAccount>;
 
 		/// Returns content of the storage at given address.
 		#[rpc(name = "eth_getStorageAt")]

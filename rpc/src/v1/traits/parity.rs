@@ -1,18 +1,18 @@
-// Copyright 2015-2018 Parity Technologies (UK) Ltd.
-// This file is part of Parity.
+// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// This file is part of Parity Ethereum.
 
-// Parity is free software: you can redistribute it and/or modify
+// Parity Ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Parity is distributed in the hope that it will be useful,
+// Parity Ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Parity.  If not, see <http://www.gnu.org/licenses/>.
+// along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 //! Parity-specific rpc interface.
 
@@ -21,8 +21,8 @@ use std::collections::BTreeMap;
 use jsonrpc_core::{BoxFuture, Result};
 use jsonrpc_macros::Trailing;
 use v1::types::{
-	H64, H160, H256, H512, U256, Bytes, CallRequest,
-	Peers, Transaction, RpcSettings, Histogram,
+	H160, H256, H512, U256, U64, H64, Bytes, CallRequest,
+	Peers, Transaction, RpcSettings, Histogram, RecoveredAccount,
 	TransactionStats, LocalTransactionStatus,
 	BlockNumber, ConsensusCapability, VersionInfo,
 	OperationsInfo, ChainStatus, Log, Filter,
@@ -226,6 +226,21 @@ build_rpc_trait! {
 		/// but returns block hash on success, and returns an explicit error message on failure).
 		#[rpc(name = "parity_submitWorkDetail")]
 		fn submit_work_detail(&self, H64, H256, H256) -> Result<H256>;
+
+		/// Returns the status of the node. Used as the health endpoint.
+		///
+		/// The RPC returns successful response if:
+		/// - The node have a peer (unless running a dev chain)
+		/// - The node is not syncing.
+		///
+		/// Otherwise the RPC returns error.
+		#[rpc(name = "parity_nodeStatus")]
+		fn status(&self) -> Result<()>;
+
+		/// Extracts Address and public key from signature using the r, s and v params. Equivalent to Solidity erecover
+		/// as well as checks the signature for chain replay protection
+		#[rpc(name = "parity_verifySignature")]
+		fn verify_signature(&self, bool, Bytes, H256, H256, U64) -> Result<RecoveredAccount>;
 
 		/// Returns logs matching given filter object.
 		/// Is allowed to skip filling transaction hash for faster query.

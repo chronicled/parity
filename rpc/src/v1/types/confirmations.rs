@@ -1,18 +1,18 @@
-// Copyright 2015-2018 Parity Technologies (UK) Ltd.
-// This file is part of Parity.
+// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// This file is part of Parity Ethereum.
 
-// Parity is free software: you can redistribute it and/or modify
+// Parity Ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Parity is distributed in the hope that it will be useful,
+// Parity Ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Parity.  If not, see <http://www.gnu.org/licenses/>.
+// along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 //! Types used in Confirmations queue (Trusted Signer)
 
@@ -192,12 +192,11 @@ pub struct ConfirmationResponseWithToken {
 /// Confirmation payload, i.e. the thing to be confirmed
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub enum ConfirmationPayload {
 	/// Send Transaction
-	#[serde(rename="sendTransaction")]
 	SendTransaction(TransactionRequest),
 	/// Sign Transaction
-	#[serde(rename="signTransaction")]
 	SignTransaction(TransactionRequest),
 	/// Signature
 	#[serde(rename = "sign")]
@@ -205,7 +204,6 @@ pub enum ConfirmationPayload {
 	/// signature without prefix
 	EIP191SignMessage(EIP191SignRequest),
 	/// Decryption
-	#[serde(rename="decrypt")]
 	Decrypt(DecryptRequest),
 }
 
@@ -233,11 +231,11 @@ impl From<helpers::ConfirmationPayload> for ConfirmationPayload {
 /// Possible modifications to the confirmed transaction sent by `Trusted Signer`
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct TransactionModification {
 	/// Modified transaction sender
 	pub sender: Option<H160>,
 	/// Modified gas price
-	#[serde(rename="gasPrice")]
 	pub gas_price: Option<U256>,
 	/// Modified gas
 	pub gas: Option<U256>,

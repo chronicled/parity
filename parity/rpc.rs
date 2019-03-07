@@ -1,18 +1,18 @@
-// Copyright 2015-2018 Parity Technologies (UK) Ltd.
-// This file is part of Parity.
+// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// This file is part of Parity Ethereum.
 
-// Parity is free software: you can redistribute it and/or modify
+// Parity Ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Parity is distributed in the hope that it will be useful,
+// Parity Ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Parity.  If not, see <http://www.gnu.org/licenses/>.
+// along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::io;
 use std::sync::Arc;
@@ -44,6 +44,7 @@ pub struct HttpConfiguration {
 	pub server_threads: usize,
 	pub processing_threads: usize,
 	pub max_payload: usize,
+	pub keep_alive: bool,
 }
 
 impl Default for HttpConfiguration {
@@ -58,6 +59,7 @@ impl Default for HttpConfiguration {
 			server_threads: 1,
 			processing_threads: 4,
 			max_payload: 5,
+			keep_alive: true,
 		}
 	}
 }
@@ -218,6 +220,7 @@ pub fn new_http<D: rpc_apis::Dependencies>(
 		rpc::RpcExtractor,
 		conf.server_threads,
 		conf.max_payload,
+		conf.keep_alive,
 	);
 
 	match start_result {

@@ -1,32 +1,11 @@
 #!/bin/sh
 # Running Parity Full Test Suite
+echo "________Running test.sh________"
 
 FEATURES="json-tests,ci-skip-issue"
 OPTIONS="--release"
 VALIDATE=1
 THREADS=8
-
-case $1 in
-  --no-json)
-    FEATURES="ipc"
-    shift # past argument=value
-    ;;
-  --no-release)
-    OPTIONS=""
-    shift
-    ;;
-  --no-validate)
-    VALIDATE=0
-    shift
-    ;;
-  --no-run)
-    OPTIONS="--no-run"
-    shift
-    ;;
-  *)
-    # unknown option
-    ;;
-esac
 
 set -e
 
@@ -52,15 +31,15 @@ cpp_test () {
     (x86_64-unknown-linux-gnu)
       # Running the C++ example
       echo "________Running the C++ example________"
-      cd parity-clib-examples/cpp && \
-        mkdir -p build && \
-        cd build && \
-        cmake .. && \
-        make -j $THREADS && \
-        ./parity-example && \
-        cd .. && \
-        rm -rf build && \
-        cd ../..
+      DIR=parity-clib/examples/cpp/build
+      mkdir -p $DIR
+      cd $DIR
+      cmake ..
+      make -j $THREADS
+      # Note: we don't try to run the example because it tries to sync Kovan, and we don't want
+      #       that to happen on CI
+      cd -
+      rm -rf $DIR
       ;;
     (*)
       echo "________Skipping the C++ example________"
@@ -98,4 +77,3 @@ then
 else
   cargo_test $@
 fi
-

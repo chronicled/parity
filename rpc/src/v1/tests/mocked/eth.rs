@@ -1,38 +1,38 @@
-// Copyright 2015-2018 Parity Technologies (UK) Ltd.
-// This file is part of Parity.
+// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// This file is part of Parity Ethereum.
 
-// Parity is free software: you can redistribute it and/or modify
+// Parity Ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Parity is distributed in the hope that it will be useful,
+// Parity Ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Parity.  If not, see <http://www.gnu.org/licenses/>.
+// along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::str::FromStr;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Instant, Duration, SystemTime, UNIX_EPOCH};
 
-use ethereum_types::{H160, H256, U256, Address};
-use parking_lot::Mutex;
 use ethcore::account_provider::AccountProvider;
 use ethcore::client::{BlockChainClient, BlockId, EachBlockWith, Executed, TestBlockChainClient, TransactionId};
-use ethcore::log_entry::{LocalizedLogEntry, LogEntry};
 use ethcore::miner::MinerService;
-use ethcore::receipt::{LocalizedReceipt, TransactionOutcome};
+use ethereum_types::{H160, H256, U256, Address};
 use ethkey::Secret;
-use sync::SyncState;
 use miner::external::ExternalMiner;
+use parity_runtime::Runtime;
+use parking_lot::Mutex;
 use rlp;
 use rustc_hex::{FromHex, ToHex};
-use transaction::{Transaction, Action};
-use parity_runtime::Runtime;
+use sync::SyncState;
+use types::transaction::{Transaction, Action};
+use types::log_entry::{LocalizedLogEntry, LogEntry};
+use types::receipt::{LocalizedReceipt, TransactionOutcome};
 
 use jsonrpc_core::IoHandler;
 use v1::{Eth, EthClient, EthClientOptions, EthFilter, EthFilterClient, EthSigning, SigningUnsafeClient};
@@ -94,9 +94,8 @@ impl EthTester {
 		let hashrates = Arc::new(Mutex::new(HashMap::new()));
 		let external_miner = Arc::new(ExternalMiner::new(hashrates.clone()));
 		let gas_price_percentile = options.gas_price_percentile;
-		let poll_lifetime = options.poll_lifetime;
 		let eth = EthClient::new(&client, &snapshot, &sync, &opt_ap, &miner, &external_miner, options).to_delegate();
-		let filter = EthFilterClient::new(client.clone(), miner.clone(), poll_lifetime).to_delegate();
+		let filter = EthFilterClient::new(client.clone(), miner.clone(), 60).to_delegate();
 		let reservations = Arc::new(Mutex::new(nonce::Reservations::new(runtime.executor())));
 
 		let dispatcher = FullDispatcher::new(client.clone(), miner.clone(), reservations, gas_price_percentile);
@@ -318,10 +317,26 @@ fn rpc_blocks_filter() {
 
 	tester.client.add_blocks(2, EachBlockWith::Nothing);
 
+	let hash1 = tester.client.block_hash(BlockId::Number(1)).unwrap();
+	let hash2 = tester.client.block_hash(BlockId::Number(2)).unwrap();
 	let response = format!(
 		r#"{{"jsonrpc":"2.0","result":["0x{:x}","0x{:x}"],"id":1}}"#,
-		tester.client.block_hash(BlockId::Number(1)).unwrap(),
-		tester.client.block_hash(BlockId::Number(2)).unwrap());
+		hash1,
+		hash2);
+
+	assert_eq!(tester.io.handle_request_sync(request_changes), Some(response.to_owned()));
+
+	// in the case of a re-org we get same block number if hash is different - BlockId::Number(2)
+	tester.client.blocks.write().remove(&hash2).unwrap();
+	tester.client.numbers.write().remove(&2).unwrap();
+	*tester.client.last_hash.write() = hash1;
+	tester.client.add_blocks(2, EachBlockWith::Uncle);
+
+	let request_changes = r#"{"jsonrpc": "2.0", "method": "eth_getFilterChanges", "params": ["0x0"], "id": 2}"#;
+	let response = format!(
+		r#"{{"jsonrpc":"2.0","result":["0x{:x}","0x{:x}"],"id":2}}"#,
+		tester.client.block_hash(BlockId::Number(2)).unwrap(),
+		tester.client.block_hash(BlockId::Number(3)).unwrap());
 
 	assert_eq!(tester.io.handle_request_sync(request_changes), Some(response.to_owned()));
 }
@@ -569,7 +584,7 @@ fn rpc_eth_transaction_count_by_number_pending() {
 fn rpc_eth_pending_transaction_by_hash() {
 	use ethereum_types::H256;
 	use rlp;
-	use transaction::SignedTransaction;
+	use types::transaction::SignedTransaction;
 
 	let tester = EthTester::default();
 	{

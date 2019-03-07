@@ -1,18 +1,18 @@
-// Copyright 2015-2018 Parity Technologies (UK) Ltd.
-// This file is part of Parity.
+// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// This file is part of Parity Ethereum.
 
-// Parity is free software: you can redistribute it and/or modify
+// Parity Ethereum is free software: you can redistribute it and/or modify
 // it under the terms of the GNU General Public License as published by
 // the Free Software Foundation, either version 3 of the License, or
 // (at your option) any later version.
 
-// Parity is distributed in the hope that it will be useful,
+// Parity Ethereum is distributed in the hope that it will be useful,
 // but WITHOUT ANY WARRANTY; without even the implied warranty of
 // MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 // GNU General Public License for more details.
 
 // You should have received a copy of the GNU General Public License
-// along with Parity.  If not, see <http://www.gnu.org/licenses/>.
+// along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 //! Parity-specific rpc implementation.
 use std::sync::Arc;
@@ -23,29 +23,32 @@ use ethereum_types::Address;
 use version::version_data;
 
 use crypto::DEFAULT_MAC;
-use ethkey::{crypto::ecies, Brain, Generator};
-use ethstore::random_phrase;
-use sync::{SyncProvider, ManageNetwork};
 use ethcore::account_provider::AccountProvider;
 use ethcore::client::{BlockChainClient, StateClient, Call};
-use ethcore::ids::BlockId;
 use ethcore::miner::{self, MinerService};
+use ethcore::snapshot::{SnapshotService, RestorationStatus};
 use ethcore::state::StateInfo;
 use ethcore_logger::RotatingLogger;
-use updater::{Service as UpdateService};
-use jsonrpc_core::{BoxFuture, Result};
+use ethkey::{crypto::ecies, Brain, Generator};
+use ethstore::random_phrase;
 use jsonrpc_core::futures::future;
+use jsonrpc_core::{BoxFuture, Result};
 use jsonrpc_macros::Trailing;
-use v1::helpers::{self, errors, fake_sign, ipfs, SigningQueue, SignerService, NetworkSettings};
+use sync::{SyncProvider, ManageNetwork};
+use types::ids::BlockId;
+use updater::{Service as UpdateService};
+
+use v1::helpers::block_import::is_major_importing;
+use v1::helpers::{self, errors, fake_sign, ipfs, SigningQueue, SignerService, NetworkSettings, verify_signature};
 use v1::metadata::Metadata;
 use v1::traits::Parity;
 use v1::types::{
-	Bytes, U256, H64, H160, H256, H512, CallRequest,
+	Bytes, U256, H64, U64, H160, H256, H512, CallRequest,
 	Peers, Transaction, RpcSettings, Histogram,
 	TransactionStats, LocalTransactionStatus,
 	BlockNumber, ConsensusCapability, VersionInfo,
 	OperationsInfo, ChainStatus, Log, Filter,
-	AccountInfo, HwAccountInfo, RichHeader, Receipt,
+	AccountInfo, HwAccountInfo, RichHeader, Receipt, RecoveredAccount,
 	block_number_to_id
 };
 use Host;
@@ -62,6 +65,7 @@ pub struct ParityClient<C, M, U> {
 	settings: Arc<NetworkSettings>,
 	signer: Option<Arc<SignerService>>,
 	ws_address: Option<Host>,
+	snapshot: Option<Arc<SnapshotService>>,
 }
 
 impl<C, M, U> ParityClient<C, M, U> where
@@ -79,6 +83,7 @@ impl<C, M, U> ParityClient<C, M, U> where
 		settings: Arc<NetworkSettings>,
 		signer: Option<Arc<SignerService>>,
 		ws_address: Option<Host>,
+		snapshot: Option<Arc<SnapshotService>>,
 	) -> Self {
 		ParityClient {
 			client,
@@ -91,6 +96,7 @@ impl<C, M, U> ParityClient<C, M, U> where
 			settings,
 			signer,
 			ws_address,
+			snapshot,
 		}
 	}
 }
@@ -161,6 +167,7 @@ impl<C, M, U, S> Parity for ParityClient<C, M, U> where
 	}
 
 	fn dev_logs(&self) -> Result<Vec<String>> {
+		warn!("This method is deprecated and will be removed in future. See PR #10102");
 		let logs = self.logger.logs();
 		Ok(logs.as_slice().to_owned())
 	}
@@ -482,9 +489,30 @@ impl<C, M, U, S> Parity for ParityClient<C, M, U> where
 		helpers::submit_work_detail(&self.client, &self.miner, nonce, pow_hash, mix_hash)
 	}
 
+	fn status(&self) -> Result<()> {
+		let has_peers = self.settings.is_dev_chain || self.sync.status().num_peers > 0;
+		let is_warping = match self.snapshot.as_ref().map(|s| s.status()) {
+			Some(RestorationStatus::Ongoing { .. }) => true,
+			_ => false,
+		};
+		let is_not_syncing =
+			!is_warping &&
+			!is_major_importing(Some(self.sync.status().state), self.client.queue_info());
+
+		if has_peers && is_not_syncing {
+			Ok(())
+		} else {
+			Err(errors::status_error(has_peers))
+		}
+	}
+
 	fn logs_no_tx_hash(&self, filter: Filter) -> BoxFuture<Vec<Log>> {
 		use v1::impls::eth::base_logs;
 		// only specific impl for lightclient
 		base_logs(&*self.client, &*self.miner, filter.into())
+	}
+
+	fn verify_signature(&self, is_prefixed: bool, message: Bytes, r: H256, s: H256, v: U64) -> Result<RecoveredAccount> {
+		verify_signature(is_prefixed, message, r, s, v, self.client.signing_chain_id())
 	}
 }
