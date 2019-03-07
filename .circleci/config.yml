@@ -66,3 +66,6 @@ workflows:
       - deploy_docker_image:
           requires:
             - test
+          filters:
+            branches:
+              only: chronicled-develop

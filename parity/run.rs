@@ -41,7 +41,7 @@ use light::Cache as LightDataCache;
 use miner::external::ExternalMiner;
 use node_filter::NodeFilter;
 use parity_rabbitmq::client::PubSubClient;
-use parity_rabbitmq::interface::{RabbitMqInterface, RabbitMqConfig};
+use parity_rabbitmq::interface::RabbitMqConfig;
 use parity_runtime::Runtime;
 use parity_rpc::{Origin, Metadata, NetworkSettings, informant, is_major_importing};
 use updater::{UpdatePolicy, Updater};
@@ -752,10 +752,11 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	let ws_server = rpc::new_ws(cmd.ws_conf.clone(), &dependencies)?;
 	let ipc_server = rpc::new_ipc(cmd.ipc_conf, &dependencies)?;
 	let http_server = rpc::new_http("HTTP JSON-RPC", "jsonrpc", cmd.http_conf.clone(), &dependencies)?;
-	let rabbitmq_client = Arc::new(PubSubClient {
-		client: client.clone(),
-		interface: RabbitMqInterface::new(cmd.rabbitmq_conf),
-	});
+
+	let rabbitmq_client = match PubSubClient::new(client.clone(), miner.clone(), cmd.rabbitmq_conf) {
+		Ok(client) => Arc::new(client),
+		Err(e) => return Err(format!("Failed to connect to the RabbitMQ Server: {}", e)),
+	};
 	service.add_notify(rabbitmq_client.clone());
 
 	// secret store key server
