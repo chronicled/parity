@@ -7,7 +7,7 @@ use handler::Sender;
 use interface::{Interface, RabbitMqConfig, RabbitMqInterface};
 use serde_json;
 use std::sync::Arc;
-use types::{Block, BlockTransactions, RichBlock, Transaction};
+use types::{Block, BlockTransactions, RichBlock, Transaction, Log};
 
 use LOG_TARGET;
 use NEW_BLOCK_EXCHANGE_NAME;
@@ -52,6 +52,8 @@ impl<C: BlockChainClient, I: Interface + Sync + Send> ChainNotify for PubSubClie
 			.map(|block| {
 				let hash = block.hash();
 				let header = block.decode_header();
+				let receipts =  self.client.localized_block_receipts(BlockId::Number(header.number()))
+					.expect("Receipts from the block");
 				let extra_info = self
 					.client
 					.block_extra_info(BlockId::Hash(hash))
@@ -75,6 +77,7 @@ impl<C: BlockChainClient, I: Interface + Sync + Send> ChainNotify for PubSubClie
 						total_difficulty: None,
 						seal_fields: header.seal().into_iter().cloned().map(Into::into).collect(),
 						uncles: block.uncle_hashes().into_iter().map(Into::into).collect(),
+						logs: receipts.into_iter().flat_map(|receipt| receipt.logs).map(Log::from).collect(),
 						transactions: BlockTransactions::Full(
 							block
 								.view()
