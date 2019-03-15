@@ -36,6 +36,8 @@ pub const UNSIGNED_SENDER: Address = H160([0xff; 20]);
 /// System sender address for internal state updates.
 pub const SYSTEM_ADDRESS: Address = H160([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,0xff, 0xff, 0xff, 0xff,0xff, 0xff, 0xff, 0xff,0xff, 0xff, 0xff, 0xfe]);
 
+const TX_TYPE_ZKO: U256 = U256([2, 0, 0, 0]);
+
 /// Transaction action type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -419,19 +421,27 @@ impl UnverifiedTransaction {
 	}
 
 	/// Verify basic signature params. Does not attempt sender recovery.
-	pub fn verify_basic(&self, check_low_s: bool, chain_id: Option<u64>, allow_empty_signature: bool, allow_typed_txs: bool) -> Result<(), error::Error> {
+	pub fn verify_basic(&self, check_low_s: bool, chain_id: Option<u64>, allow_empty_signature: bool, allow_typed_txs: bool) 
+		-> Result<(), error::Error> 
+	{
 		if check_low_s && !(allow_empty_signature && self.is_unsigned()) {
 			self.check_low_s()?;
 		}
+		
+		let pvn_empty = self.gas_price.is_zero() && self.value.is_zero() && self.nonce.is_zero();
 		// Disallow unsigned transactions in case EIP-86 is disabled.
 		if !allow_empty_signature && !allow_typed_txs && self.is_unsigned() {
 			return Err(ethkey::Error::InvalidSignature.into());
 		}
-		let pvn_empty = self.gas_price.is_zero() && self.value.is_zero() && self.nonce.is_zero();
 		// EIP-86: Transactions of this form MUST have gasprice = 0, nonce = 0, value = 0, and do NOT increment the nonce of account 0.
-		if allow_empty_signature && self.is_unsigned() && !allow_typed_txs && !pvn_empty {
+		if self.is_unsigned() && (
+			allow_empty_signature && !allow_typed_txs && !pvn_empty 
+			|| !allow_empty_signature && pvn_empty
+		)
+		{
 			return Err(ethkey::Error::InvalidSignature.into())
 		}
+
 		match (self.chain_id(), chain_id) {
 			(None, _) => {},
 			(Some(n), Some(m)) if n == m => {},
@@ -441,6 +451,7 @@ impl UnverifiedTransaction {
 		if allow_typed_txs && self.is_unsigned() && !pvn_empty {
 			UnverifiedTypedTransaction::new(&self)?.verify_basic()?;
 		}
+
 
 		Ok(())
 	}
@@ -481,7 +492,7 @@ impl UnverifiedTypedTransaction {
 		}
 		let tx_type = tx.get_type().unwrap();
 
-		if tx_type != U256([2, 0, 0, 0]) {
+		if tx_type != TX_TYPE_ZKO {
 			return Err(ethkey::Error::Custom("Unsupported type".to_string()));
 		}
 
@@ -504,12 +515,12 @@ impl UnverifiedTypedTransaction {
 	}
 
 	pub fn get_type(&self) -> U256 {
-		self.tx_type
+		self.tx_type.clone()
 	}
 
 	pub fn get_typed_tx(&self) -> Result<TypedTransaction, error::Error> {
-		match &self.get_type() {
-			U256([2, 0, 0, 0]) => Ok(TypedTransaction::ZkOrigin(ZkOriginTransaction::new(&self)?)),
+		match self.get_type() {
+			TX_TYPE_ZKO => Ok(TypedTransaction::ZkOrigin(ZkOriginTransaction::new(&self)?)),
 			_ => Err(ethkey::Error::Custom("Invalid type of transaction".to_string()).into())
 		}
 	}
@@ -540,17 +551,17 @@ const COINS_OUT_CNT: usize = 2;
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ZkOriginTransaction {
 	/// Plain Transaction.
-	unverified: UnverifiedTransaction,
-	rt: H256,
-	sn: [H256; COINS_IN_CNT],
-	cm: [H256; COINS_OUT_CNT],
-	eph_pk: H256,
-	glue: H256,
-	k: H256,
-	proof: Bytes,
+	pub unverified: UnverifiedTransaction,
+	pub rt: H256,
+	pub sn: [H256; COINS_IN_CNT],
+	pub cm: [H256; COINS_OUT_CNT],
+	pub eph_pk: H256,
+	pub glue: H256,
+	pub k: H256,
+	pub proof: Bytes,
 	// Ciphertext
-	ct: [Bytes; COINS_OUT_CNT],
-	sig:  H512,
+	pub ct: [Bytes; COINS_OUT_CNT],
+	pub sig:  H512,
 }
 
 impl Deref for ZkOriginTransaction {
@@ -565,7 +576,7 @@ impl ZkOriginTransaction {
 	pub fn new(tx: &UnverifiedTypedTransaction) -> Result<Self, DecoderError> {
 		// let dtoe = |e| ethkey::Error::Custom(format!("ZKO RLP error {:?}", e));
 
-	 	if tx.get_type() != U256([2, 0, 0, 0]) {
+	 	if tx.get_type() != TX_TYPE_ZKO {
 			return Err(DecoderError::Custom("Doesn't match ZKO tx type"))
 		}
 
@@ -620,8 +631,8 @@ impl ZkOriginTransaction {
 		(tx.gas_price * tx.gas + tx.value).as_u64()
 	}
 
-	pub fn rlp_append_unsigned_tz(&self, s: &mut RlpStream) {
-		s.begin_list(Self::fields_count() - 1);
+	pub fn rlp_append_unsigned_tz(&self, s: &mut RlpStream, with_sig: bool) {
+		s.begin_list(Self::fields_count() - if with_sig {0} else {1});
 		s.append(&self.rt);
 		for sn in &self.sn { s.append(sn); }
 		for cm in &self.cm { s.append(cm); }
@@ -630,11 +641,15 @@ impl ZkOriginTransaction {
 		s.append(&self.k);
 		s.append(&self.proof);
 		for ct in &self.ct { s.append(ct); }
+		if with_sig {
+			s.append(&self.sig);
+		}
 	}
 
-	pub fn get_unsigned_msg(&self, _chain_id: Option<u64>) -> Bytes {
+
+	pub fn as_unverified(&self, with_sig: bool) -> UnverifiedTransaction {
 		let mut zs = RlpStream::new();
-		self.rlp_append_unsigned_tz(&mut zs);
+		self.rlp_append_unsigned_tz(&mut zs, with_sig);
 		
 		let z: &Bytes = &zs.out();
 		let call_data = &self.unverified.unsigned.data;
@@ -643,7 +658,15 @@ impl ZkOriginTransaction {
 
 		let mut unverified = self.unverified.clone();
 		unverified.unsigned.data = d_prime;
-		rlp::encode(&unverified)
+		unverified
+	}
+
+	pub fn as_signed_transaction(&self) -> Result<SignedTransaction, ethkey::Error> {
+		Ok(SignedTransaction::new(self.as_unverified(true))?)
+	}
+
+	pub fn get_unsigned_msg(&self, _chain_id: Option<u64>) -> Bytes {
+		rlp::encode(&self.as_unverified(false))
 
 		// let chain_id_ensured = Some(chain_id.unwrap_or(0u64));
 		// let mut unsigned_stream = RlpStream::new();
@@ -654,6 +677,10 @@ impl ZkOriginTransaction {
 
 	pub fn sign(&self, sk: &[u8]) -> [u8; 64] {
 		ed25519::signature(&self.get_unsigned_msg(None), &sk)
+	}
+
+	pub fn sign_apply(&mut self, sk: &[u8]) {
+		self.sig = H512::from(self.sign(sk));
 	}
 
 	pub fn verify_signature(&self, chain_id: Option<u64>) -> bool {
@@ -769,8 +796,10 @@ pub enum TypedTransaction {
 
 impl TypedTransaction {
 	pub fn get_verifiable(&self) -> Result<&impl Verifiable, error::Error> {
+		use self::TypedTransaction::*;
+
 		match &self {
-			TypedTransaction::ZkOrigin(ref tx) => Ok(tx),
+			ZkOrigin(ref tx) => Ok(tx),
 			// No need for default, compliler's check is exhaustve
 			_ => Err(ethkey::Error::Custom(format!("No verifiable for {:?}", &self)).into()),
 		}
@@ -984,7 +1013,7 @@ mod tests {
 		let typed = FromHex::from_hex("ea020182520894095e7baea6a6c7c4c2dfeb977efac326af552d870a8bca841100110084aabbccdd1b8080").unwrap();
 		let t2: UnverifiedTransaction = rlp::decode(&typed).expect("decoding UnverifiedTransaction failed");
 		assert_eq!(t2.is_typed(), true);
-		assert_eq!(t2.get_type().unwrap(), U256([2, 0, 0, 0]));
+		assert_eq!(t2.get_type().unwrap(), TX_TYPE_ZKO);
 
 		let t2_typed = UnverifiedTypedTransaction::new(&t2).unwrap();
 		assert_eq!(&t2_typed.unverified.unsigned.data, &FromHex::from_hex("11001100").unwrap());

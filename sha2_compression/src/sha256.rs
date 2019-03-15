@@ -120,3 +120,29 @@ impl digest::FixedOutput for Sha224 {
         out
     }
 }
+
+/// Converts slice of bytes as 32bit unsigned representation to slice of bytes as u8
+pub fn array_u32_to_u8(input: [u32; 8]) -> [u8; 32] {
+	let mut res: [u8; 32] = [0; 32];
+	for i in 0..8 {
+		let x: u32 = input[i];
+		res[i*4]	 = ((x >> 24) & 0xff) as u8;
+		res[i*4 + 1] = ((x >> 16) & 0xff) as u8;
+		res[i*4 + 2] = ((x >> 8) & 0xff) as u8;
+		res[i*4 + 3] = (x & 0xff) as u8;
+	}
+
+	return res;
+}
+
+pub fn sha256_compress(left: &[u8], right: &[u8]) -> [u8; 32] {
+    use digest::Digest;
+    use std::vec::Vec;
+
+	let mut hasher = Sha256::default();
+	let mut bytes: Vec<u8> = left.to_vec();
+	bytes.extend(right.to_vec());
+	hasher.input(&bytes);
+	let state: [u32; 8] = hasher.engine.state.h;
+	return array_u32_to_u8(state);
+}

@@ -71,6 +71,7 @@ extern crate block_buffer;
 extern crate fake_simd as simd;
 #[cfg(feature = "asm")]
 extern crate sha2_asm;
+extern crate std;
 
 mod consts;
 #[cfg(not(feature = "asm"))]
@@ -81,5 +82,5 @@ mod sha256;
 mod sha512;
 
 pub use digest::Digest;
-pub use sha256::{Sha256, Sha224};
+pub use sha256::{Sha256, Sha224, sha256_compress};
 pub use sha512::{Sha512, Sha384, Sha512Trunc224, Sha512Trunc256};

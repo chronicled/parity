@@ -18,9 +18,9 @@
 use std::cmp;
 use std::sync::Arc;
 use hash::keccak;
-use ethereum_types::{H160, H256, U256, U512, Address};
+use ethereum_types::*;//{H160, H256, U256, U512, Address};
 use bytes::{Bytes, BytesRef};
-use state::{Backend as StateBackend, State, Substate, CleanupMode, StateInfo};
+use state::{Backend as StateBackend, State, Substate, CleanupMode};
 use error::ExecutionError;
 use machine::EthereumMachine as Machine;
 use evm::{CallType, Finalize, FinalizationResult};
@@ -31,9 +31,13 @@ use vm::{
 use factory::VmFactory;
 use externalities::*;
 use trace::{self, Tracer, VMTracer};
-use transaction::{Action, SignedTransaction, UnverifiedTransaction, TypedTransaction, ZkOriginTransaction};
+use transaction::{Action, SignedTransaction, TypedTransaction, ZkOriginTransaction};
 use crossbeam;
 pub use executed::{Executed, ExecutionResult};
+use ethabi::FunctionOutputDecoder;
+use sha2_compression::{sha256_compress};
+
+use_contract!(zkotx_precompiled, "res/contracts/confidential_payments_native.json");
 
 #[cfg(debug_assertions)]
 /// Roughly estimate what stack size each level of evm depth will use. (Debug build)
@@ -51,7 +55,12 @@ const STACK_SIZE_ENTRY_OVERHEAD: usize = 100 * 1024;
 /// Entry stack overhead prior to execution.
 const STACK_SIZE_ENTRY_OVERHEAD: usize = 20 * 1024;
 
-const ZKO_PRECOMPILED_ADDR: Address = H160([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,0xff, 0xff, 0xff, 0xff,0xff, 0xff, 0xff, 0xff,0xff, 0xff, 0xff, 0x02]);
+const ZKO_PRECOMPILED_ADDR: Address = 
+H160([0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x01]);
+const ZKO_SYS_ADDR: Address = 
+H160([0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01]);
+
+
 
 /// Returns new address created from address, nonce, and code hash
 pub fn contract_address(address_scheme: CreateContractAddress, sender: &Address, nonce: &U256, code: &[u8]) -> (Address, Option<H256>) {
@@ -605,7 +614,7 @@ impl<'a> CallCreateExecutive<'a> {
 	}
 
 	/// Execute and consume the current executive. This function handles resume traps and sub-level tracing. The caller is expected to handle current-level tracing.
-	pub fn consume<B: 'a + StateBackend, T: Tracer, V: VMTracer>(self, state: &mut State<B>, top_substate: &mut Substate, tracer: &mut T, vm_tracer: &mut V) -> vm::Result<FinalizationResult> {
+	pub fn  consume<B: 'a + StateBackend, T: Tracer, V: VMTracer>(self, state: &mut State<B>, top_substate: &mut Substate, tracer: &mut T, vm_tracer: &mut V) -> vm::Result<FinalizationResult> {
 		let mut last_res = Some((false, self.gas, self.exec(state, top_substate, tracer, vm_tracer)));
 
 		let mut callstack: Vec<(Option<Address>, CallCreateExecutive<'a>)> = Vec::new();
@@ -752,24 +761,42 @@ pub struct PreExecution {
 	nonce: U256,
 }
 
+/// Pre and post-execution handling, depending on kind of a transaction
 pub trait ExecutableTx<'a, B: 'a> {
-	fn pre_execution(&self, executive: &'a mut Executive<B>, substate: &mut Substate, check_nonce: bool, total_cost: &U512) ->
-		Result<PreExecution, ExecutionError>;
+	/// Validate transaction according to state before execution
+	/// the substate can be modified to reflect any necessary changes
+	fn pre_execution(&self, executive: &'a mut Executive<B>, substate: &mut Substate, check_nonce: bool, total_cost: &U512) 
+		-> Result<PreExecution, ExecutionError>;
+
+	/// Complete unfishined routines after main tx is executed
+	fn post_execution(&self, executive: &'a mut Executive<B>, substate: &mut Substate, result: &vm::Result<FinalizationResult>, refund_value: &U256, fees_value: &U256) 
+		-> Result<(), ExecutionError>;
 }
 
 impl<'a, B: 'a + StateBackend> ExecutableTx<'a, B> for TypedTransaction {
 	fn pre_execution(&self, executive: &'a mut Executive<B>, substate: &mut Substate, check_nonce: bool, total_cost: &U512) 
 		-> Result<PreExecution, ExecutionError> 
 	{
+		use transaction::TypedTransaction::*;
 		match &self {
-			TypedTransaction::Regular(tx) => tx.pre_execution(executive, substate, check_nonce, &total_cost),
-			TypedTransaction::ZkOrigin(tx) => tx.pre_execution(executive, substate, check_nonce, &total_cost),
+			Regular(tx) => tx.pre_execution(executive, substate, check_nonce, &total_cost),
+			ZkOrigin(tx) => tx.pre_execution(executive, substate, check_nonce, &total_cost),
+		}
+	}
+
+	fn post_execution(&self, executive: &'a mut Executive<B>, substate: &mut Substate, result: &vm::Result<FinalizationResult>, refund_value: &U256, fees_value: &U256) 
+		-> Result<(), ExecutionError>
+	{
+		use transaction::TypedTransaction::*;
+		match &self {
+			Regular(tx) => tx.post_execution(executive, substate, &result, &refund_value, &fees_value),
+			ZkOrigin(tx) => tx.post_execution(executive, substate, &result, &refund_value, &fees_value),
 		}
 	}
 }
 
 impl<'a, B: 'a + StateBackend> ExecutableTx<'a, B> for SignedTransaction {
-	fn pre_execution(&self, executive: &'a mut Executive<B>, substate: &mut Substate, check_nonce: bool, total_cost: &U512) 
+	fn pre_execution(&self, executive: &'a mut Executive<B>, _substate: &mut Substate, check_nonce: bool, total_cost: &U512) 
 		-> Result<PreExecution, ExecutionError> 
 	{
 		let schedule = executive.schedule;
@@ -801,27 +828,65 @@ impl<'a, B: 'a + StateBackend> ExecutableTx<'a, B> for SignedTransaction {
 
 		Ok(PreExecution {sender: sender, data: self.data.clone(), nonce})
 	}
+
+	fn post_execution(&self, executive: &'a mut Executive<B>, substate: &mut Substate, _result: &vm::Result<FinalizationResult>, refund_value: &U256, fees_value: &U256) -> 
+		Result<(), ExecutionError> 
+	{
+		let sender = self.sender();
+		trace!("exec::finalize: Refunding refund_value={}, sender={}\n", refund_value, sender);
+		// Below: NoEmpty is safe since the sender must already be non-null to have sent this transaction
+		executive.state.add_balance(&sender, &refund_value, CleanupMode::NoEmpty)?;
+		trace!("exec::finalize: Compensating author: fees_value={}, author={}\n", fees_value, &executive.info.author);
+		executive.state.add_balance(&executive.info.author, &fees_value, substate.to_cleanup_mode(&executive.schedule))?;
+
+		Ok(())
+	}
 }
 
 impl<'a, B: 'a + StateBackend> ExecutableTx<'a, B> for ZkOriginTransaction {
-	fn pre_execution(&self, executive: &'a mut Executive<B>, substate: &mut Substate, check_nonce: bool, total_cost: &U512) 
+	fn pre_execution(&self, executive: &'a mut Executive<B>, _substate: &mut Substate, _check_nonce: bool, total_cost: &U512) 
 		-> Result<PreExecution, ExecutionError> 
 	{
-		let schedule = executive.schedule;
-
 		// avoid unaffordable transactions
 		let balance = executive.state.balance(&ZKO_PRECOMPILED_ADDR)?;
 
 		let balance512 = U512::from(balance);
 		if balance512 < *total_cost {
+			// Should never happen if system works properly
 			return Err(ExecutionError::NotEnoughZkoCash { required: *total_cost, got: balance512 });
 		}
 
-		if self.action != Action::Create {
+		if let Action::Call(_) = self.action {} else {
 			return Err(ExecutionError::NotAllowedAction);
 		}
 
-		// TODO call precompiled
+		let v_pub = U256::from(*total_cost);
+		// ciphertext is temporary omitted due to ethabi issues
+		let (mut data, decoder) = zkotx_precompiled::functions::transfer::call(
+			self.rt, 
+			self.sn,
+			self.cm,
+			v_pub,
+			self.eph_pk,
+			self.glue,
+			self.proof.clone()
+		);
+
+		// Correct signature, due to interface adjustment to parity types
+		// e312a294
+		data[0] = 0xe3;
+		data[1] = 0x12;
+		data[2] = 0xa2;
+		data[3] = 0x94;
+
+		let transfer_valid = match executive.call_contract_as_zksys(&ZKO_PRECOMPILED_ADDR, &data) {
+			Ok(ref out) if out.len() > 0 => decoder.decode(&out).unwrap(),
+			_ => false,
+		};
+
+		if !transfer_valid {
+			return Err(ExecutionError::InvalidConfidentialFunds);
+		}
 		// TODO: add empty k and value check
 
 		Ok(PreExecution {
@@ -829,6 +894,122 @@ impl<'a, B: 'a + StateBackend> ExecutableTx<'a, B> for ZkOriginTransaction {
 			data: self.data.clone(), 
 			nonce: U256::from(0)
 		})
+	}
+
+	fn post_execution(&self, executive: &'a mut Executive<B>, substate: &mut Substate, result: &vm::Result<FinalizationResult>, refund_value: &U256, fees_value: &U256) -> 
+		Result<(), ExecutionError> 
+	{
+		let failed = match result {
+			Ok(FinalizationResult { apply_state: true, .. }) => false,
+			_ => true
+		};
+
+		// Value should be refunded already
+		let change = refund_value + if failed {self.value} else {U256::zero()};
+
+		trace!("exec::finalize: Refunding refund_value={}, sender={}\n", refund_value, ZKO_PRECOMPILED_ADDR);
+		// Below: NoEmpty is safe since the sender must already be non-null to have sent this transaction
+		executive.state.add_balance(&ZKO_PRECOMPILED_ADDR, &refund_value, CleanupMode::NoEmpty)?;
+
+		if change != U256::zero() {
+			// Change value cannot exceed 64bits, since zko tx's total cost is 64bit 
+			let mut change_bytes: [u8; 32] = [0; 32];
+			change.to_big_endian(&mut change_bytes);
+
+			let cm = sha256_compress(&self.k, &change_bytes);
+			let (mint_data, decoder) = zkotx_precompiled::functions::mint::call(cm, self.k);
+			// Mint call should always succeed, otherwise it's a system's error
+			// TODO: verify edge-cases (e.g. accumulator is full)
+			let mint_valid = match executive.call_contract(&ZKO_PRECOMPILED_ADDR, &ZKO_PRECOMPILED_ADDR, &change, &mint_data) {
+				Ok(ref out) if out.len() > 0 => decoder.decode(&out).unwrap(),
+				_ => false,
+			};
+			assert_eq!(mint_valid, true);
+		}
+
+		trace!("exec::finalize: Compensating author: fees_value={}, author={}\n", fees_value, &executive.info.author);
+		executive.state.add_balance(&executive.info.author, &fees_value, substate.to_cleanup_mode(&executive.schedule))?;
+
+		Ok(())
+	}
+}
+
+use_contract!(zksnark_verifier, "res/contracts/zksnark_verifier.json");
+
+/// Extension of Executive to perform zko-tx related calls
+pub trait ZkoPrecompileCallable {
+	#[cfg(test)]
+	fn create_contract(&mut self, address: &Address, code: &Bytes) -> Result<(), ExecutionError>;
+	/// Calling contract from the ZKO system caller
+	fn call_contract_as_zksys(&mut self, address: &Address, data: &Bytes) -> Result<Bytes, ExecutionError>;
+	/// Call a destination contract with the corresponding data
+	fn call_contract(&mut self, sender: &Address, address: &Address, value: &U256, data: &Bytes) -> Result<Bytes, ExecutionError>;
+}
+
+impl<'a, B: 'a + StateBackend> ZkoPrecompileCallable for Executive<'a, B> {
+	#[cfg(test)]
+	fn create_contract(&mut self, address: &Address, code: &Bytes) -> Result<(), ExecutionError> {
+		let mut substate = Substate::new();
+		let mut opts = TransactOptions::with_no_tracing();
+
+		let sender = &ZKO_SYS_ADDR;
+
+		let params = ActionParams {
+			code_address: address.clone(),
+			code_hash: Some(keccak(code)),
+			address: address.clone(),
+			sender: sender.clone(),
+			origin: sender.clone(),
+			gas: 50_000_000.into(),
+			gas_price: 0.into(),
+			value: ActionValue::Transfer(Default::default()),
+			code: Some(Arc::new(code.clone())),
+			data: None,
+			call_type: CallType::None,
+			params_type: vm::ParamsType::Embedded,
+		};
+
+		self.create(params, &mut substate, &mut opts.tracer, &mut opts.vm_tracer).unwrap();
+
+		// println!("Contract create result {:?}", res);
+		// println!("Substate: {:?}", substate);
+		// println!("Tracer: {:?}", opts.tracer.drain());
+		// println!("VM Tracer: {:?}", opts.vm_tracer.drain());
+		Ok(())	
+	}
+
+	fn call_contract_as_zksys(&mut self, address: &Address, data: &Bytes) -> Result<Bytes, ExecutionError> {
+		self.call_contract(&ZKO_SYS_ADDR, address, &0.into(), data)
+	}
+
+	fn call_contract(&mut self, sender: &Address, address: &Address, value: &U256, data: &Bytes) -> Result<Bytes, ExecutionError> {
+		let mut substate = Substate::new();
+		let mut opts = TransactOptions::with_no_tracing();
+
+		let params = ActionParams {
+			code_address: address.clone(),
+			address: address.clone(),
+			sender: sender.clone(),
+			origin: sender.clone(),
+			gas: 2_000_000.into(),
+			gas_price: 0.into(),
+			value: ActionValue::Transfer(value.clone()),
+			code: self.state.code(address)?,
+			code_hash: self.state.code_hash(address)?,
+			data: Some(data.clone()),
+			call_type: CallType::Call,
+			params_type: vm::ParamsType::Separate,
+		};
+		let res = self.call(params, &mut substate, &mut opts.tracer, &mut opts.vm_tracer);
+		let out = match &res {
+			Ok(res) => res.return_data.to_vec(),
+			_ => Vec::new(),
+		};
+
+		println!("Contract call result {:?}; return: {:?}", res, out);
+		println!("Substate: {:?}", substate);
+		
+		Ok(out)
 	}
 }
 
@@ -981,7 +1162,7 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 		};
 
 		// finalize here!
-		Ok(self.finalize(t, substate, result, output, tracer.drain(), vm_tracer.drain())?)
+		Ok(self.finalize(t, &tt, substate, result, output, tracer.drain(), vm_tracer.drain())?)
 	}
 
 	/// Calls contract function with given contract params and stack depth.
@@ -1155,6 +1336,7 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 	fn finalize<T, V>(
 		&mut self,
 		t: &SignedTransaction,
+		tt: &TypedTransaction,
 		mut substate: Substate,
 		result: vm::Result<FinalizationResult>,
 		output: Bytes,
@@ -1182,12 +1364,8 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 		trace!("exec::finalize: t.gas={}, sstore_refunds={}, suicide_refunds={}, refunds_bound={}, gas_left_prerefund={}, refunded={}, gas_left={}, gas_used={}, refund_value={}, fees_value={}\n",
 			t.gas, sstore_refunds, suicide_refunds, refunds_bound, gas_left_prerefund, refunded, gas_left, gas_used, refund_value, fees_value);
 
-		let sender = t.sender();
-		trace!("exec::finalize: Refunding refund_value={}, sender={}\n", refund_value, sender);
-		// Below: NoEmpty is safe since the sender must already be non-null to have sent this transaction
-		self.state.add_balance(&sender, &refund_value, CleanupMode::NoEmpty)?;
-		trace!("exec::finalize: Compensating author: fees_value={}, author={}\n", fees_value, &self.info.author);
-		self.state.add_balance(&self.info.author, &fees_value, substate.to_cleanup_mode(&schedule))?;
+		// Post-execution
+		tt.post_execution(self, &mut substate, &result, &refund_value, &fees_value)?;
 
 		// perform suicides
 		for address in &substate.suicides {
@@ -1252,7 +1430,7 @@ mod tests {
 	use trace::trace;
 	use trace::{FlatTrace, Tracer, NoopTracer, ExecutiveTracer};
 	use trace::{VMTrace, VMOperation, VMExecutedOperation, MemoryDiff, StorageDiff, VMTracer, NoopVMTracer, ExecutiveVMTracer};
-	use transaction::{Action, Transaction};
+	use transaction::{Action, Transaction, UnverifiedTransaction};
 
 	fn make_frontier_machine(max_depth: usize) -> EthereumMachine {
 		let mut machine = ::ethereum::new_frontier_test_machine();
@@ -1262,6 +1440,12 @@ mod tests {
 
 	fn make_byzantium_machine(max_depth: usize) -> EthereumMachine {
 		let mut machine = ::ethereum::new_byzantium_test_machine();
+		machine.set_schedule_creation_rules(Box::new(move |s, _| s.max_depth = max_depth));
+		machine
+	}
+
+	fn make_byzantium_zk_zkotx_machine(max_depth: usize) -> EthereumMachine {
+		let mut machine = ::ethereum::new_byzantium_zk_zkotx_test_machine();
 		machine.set_schedule_creation_rules(Box::new(move |s, _| s.max_depth = max_depth));
 		machine
 	}
@@ -1959,41 +2143,7 @@ mod tests {
 		assert_eq!(state.balance(&contract).unwrap(), U256::from(17));
 		assert_eq!(state.nonce(&sender).unwrap(), U256::from(1));
 		assert_eq!(state.storage_at(&contract, &H256::new()).unwrap(), H256::from(&U256::from(1)));
-	}
-
-	evm_test!{test_transact_zko: test_transact_zko_int}
-	fn test_transact_zko(factory: Factory) {
-		let tx_bytes = FromHex::from_hex("f904f5020183019a2894095e7baea6a6c7c4c2dfeb977efac326af552d870ab904d3f904d0b90265f90262a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12a0379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96a03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db840b8e768655fd075c064809348bd759a9cbc5055eafd1860e9498ca8ab2a373b888de62f48fbb1b0864e9b11ca5c5c882db2310ae80a1e27cc099c7ce6e778de0db90265f90262a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12a0379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96a03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db8401d99585328392b581c3bc11a04d08e35fd197d95f2bc7da17a7c16884529ee0cb6d138d06d476676caa53857600a39fff1597fabf5777ae3da6e895c05cab307028080").unwrap();
-		let t_unverified: UnverifiedTransaction = rlp::decode(&tx_bytes).expect("decoding UnverifiedTransaction failed");
-		let t = SignedTransaction::new(t_unverified).unwrap();
-
-		let contract = contract_address(CreateContractAddress::FromSenderAndNonce, &H160([0xff; 20]), &U256::zero(), &[]).0;
-
-		let mut state = get_temp_state_with_factory(factory);
-		state.add_balance(&ZKO_PRECOMPILED_ADDR, &U256::from(18), CleanupMode::NoEmpty).unwrap();
-		let mut info = EnvInfo::default();
-		info.gas_limit = U256::from(1_000_000);
-		let machine = make_byzantium_machine(0); 
-		let schedule = machine.schedule(info.number);
-
-		let executed = {
-			let mut ex = Executive::new(&mut state, &info, &machine, &schedule);
-			let opts = TransactOptions::with_no_tracing();
-			ex.transact(&t, opts).unwrap()
-		};
-
-		println!("executed: {:?}", executed);
-		// assert_eq!(executed.gas, U256::from(100_000));
-		// assert_eq!(executed.gas_used, U256::from(41_301));
-		// assert_eq!(executed.refunded, U256::from(58_699));
-		// assert_eq!(executed.cumulative_gas_used, U256::from(41_301));
-		// assert_eq!(executed.logs.len(), 0);
-		// assert_eq!(executed.contracts_created.len(), 0);
-		// assert_eq!(state.balance(&sender).unwrap(), U256::from(1));
-		// assert_eq!(state.balance(&contract).unwrap(), U256::from(17));
-		// assert_eq!(state.nonce(&sender).unwrap(), U256::from(1));
-		// assert_eq!(state.storage_at(&contract, &H256::new()).unwrap(), H256::from(&U256::from(1)));
-	}
+	}	
 
 	evm_test!{test_transact_invalid_nonce: test_transact_invalid_nonce_int}
 	fn test_transact_invalid_nonce(factory: Factory) {
@@ -2282,5 +2432,417 @@ mod tests {
 		assert_eq!(result, U256::from(20025));
 		// Since transaction errored due to wasm was not activated, result is just empty
 		assert_eq!(output[..], [0u8; 20][..]);
+	}
+
+	// Tests:
+	// + incorrect proof
+	// + correct amount is refunded
+	// + whole gas is consumed, but value is refunded
+	// + whole gas consumed and no value to refund (no cm is created)
+	// + spending more than contract has (e.g. more than minted)
+	fn read_into_string(path: &str) -> String {
+		use std::fs::File;
+		use std::io::prelude::*;
+		let mut file = File::open(path).unwrap();
+		let mut contents = String::new();
+		file.read_to_string(&mut contents).unwrap();
+		contents
+	}
+
+	fn prepare_zko_env(factory: Factory) 
+		-> (State<::state_db::StateDB>, EnvInfo, EthereumMachine, Schedule, Address, Address, Address) 
+	{
+		use regex::Regex;
+		// # Alternative using spec file
+		// use factory::Factories;
+		// use memorydb::MemoryDB;
+		// use spec::Spec;
+		// use tempdir::TempDir;
+		//
+		// let spec_data = include_str!("../res/ethereum/byzantium_test_zk_zkotx.json").as_bytes();
+		// let tempdir = TempDir::new("").unwrap();
+		// let spec = Spec::load(&tempdir.path(), spec_data).unwrap();
+		// let mut factories = Factories::default();
+		// factories.vm = factory.into();
+		// let mut db = spec.ensure_db_good(get_temp_state_db(), &factories).unwrap();
+		// let mut state = State::new(db, U256::from(0), factories);
+
+
+		let sha256_compression_address = Address::from_str("0000000000000000000000000000000000001002").unwrap();
+		let snark_verify_address = Address::from_str("0000000000000000000000000000000000001001").unwrap();
+		let merkle_tree_address_str = "c000000000000000000000000000000000000200";
+		let merkle_tree_address = Address::from_str(merkle_tree_address_str).unwrap();
+
+		let vk = "10b204fd34aed54bfc39645ad903580da04ab26cfd5a0e4683d19e0233829e1d67bce0539adc2eedf79a43f48b4203c111ae67d2a3531326ec5d1eca606f321b7b36101b1a13859dcf7bf533530e7264f0e58a059208846ce4a70d99a274522d6e73443dccae293a14363d9d02463782dcf2dfea4667c930024049cfe01e6e00b664de3ac8348d29b5895816142c04ba8b9688157011ed00735909ed7b13e5090622a3c095d3e429e487d640b7de1c072ca73a28850691afdf73ef6d1f788a2ca1887c8352a5a737ff041b1b5e9d668dbb6e9b92424cede6dbac2284ab4b6320694018634f994fedee950a0225a73579cb444ba1fe07e9667bd9ae265fb3d401f72c3f0860e0dbdb9685a5f093fac295a7b3aa3b0bcb09405fb05fab9a04f31df9ce3d5f31e5015c8e440565a9320f7bf233ef46960f9f6f4a2a747248ba77217c7e8c4cc47b1f63cba9cd045a706c1432bbed885a82bbd0780e7184d70c2b1818bf099578f58a76f7bf050e87c19cf76cfad215c21fedef477c8e225099971f308def443b1a51534d650b2233f5560209a51881e12bf9b9f097bfcc6ac135801f227df72979027e256d2af9eefd0a86962f79c1a0f37263681875a5338d404e233030e09f1c9b023de585a608650603adab56153a70c2bda1a2113edcf6b6923f602fc4fae25eae39250ea619450f0ed71d337903f6d9c86f7a5260fbfe4171ce2c08303057a365577fafb469ee062be92fc9c1c6f9c73d9ee3ace5926f8ebcdf7f36331431370a370a300a310a320a330a340a350a360a370a30e1a39d149672ffc551f10585dd762df428279780db91f36e444424ec2bb7dc183130a6ac699447228865ee20bbd57de8459117d4f7a7f5e9cc5ca9416ea437297e1730301e4a6cc130ed5d75eee0c3a1f5b5d8bf27c8d010711eb0a26d6feb6e30feb0213030b302ac2d3193abd0a04757ac7e04798a615a9fc848285d83dd638c71aa9c1426303016fd5cdf87f222077af05922afb8b9394188c31fb16733911ccb37d2e50fd6163030e53be8a4593ff9fd642e6e00d32327e60c617a42c7374bc1a21771b0a72fb6033130457d005a873a6c18f9bec933e54995db50d616c494c2a6bfb8e8007e0861d90131".from_hex().unwrap();
+
+		let re = Regex::new(r"__.{36}__").unwrap();
+		let zko_precompiled_linked = re.replace_all(
+			// include_str!("../res/contracts/confidential_payments_native.bytecode"), 
+			&read_into_string("res/contracts/confidential_payments_native.bytecode"),
+			merkle_tree_address_str
+		).from_hex().unwrap();
+
+		let zko_precompiled_constructor = zkotx_precompiled::constructor(
+			zko_precompiled_linked,
+			U256::from(4), 
+			sha256_compression_address.clone(), 
+			snark_verify_address.clone(), 
+			vk.clone()
+		);
+
+		let merkle_tree_code = read_into_string("res/contracts/merkle_tree_lib.bytecode").from_hex().unwrap();
+		// let mut info = EnvInfo::default();
+		// info.gas_limit = U256::from(100_000_000);
+		let info = EnvInfo {
+				number: 0,
+				author: Address::from(0),
+				timestamp: 0u64,
+				difficulty: 0.into(),
+				last_hashes: Default::default(),
+				gas_used: U256::zero(),
+				gas_limit: U256::max_value(),
+			};
+
+		let machine = make_byzantium_zk_zkotx_machine(1024); 
+		let mut state = get_temp_state_with_factory(factory);
+		let schedule = machine.schedule(info.number);
+
+		{
+			let builtsha = machine.builtin(&sha256_compression_address, info.number);
+			assert_eq!(builtsha.is_some(), true);
+			assert_eq!(builtsha.unwrap().is_active(info.number), true);
+		}
+
+		state.init_code(&sha256_compression_address, vec![0]).unwrap();
+		state.init_code(&snark_verify_address, vec![0]).unwrap();
+		{
+			Executive::new(&mut state, &info, &machine, &schedule).create_contract(&merkle_tree_address, &merkle_tree_code).unwrap();
+			Executive::new(&mut state, &info, &machine, &schedule).create_contract(&ZKO_PRECOMPILED_ADDR, &zko_precompiled_constructor).unwrap();
+		}
+
+		(state, info, machine, schedule, sha256_compression_address, snark_verify_address, merkle_tree_address)
+	}
+
+	fn construct_zko_tx(gas: &U256, value: &U256, address: &Address, data: &Bytes) -> ZkOriginTransaction {
+		// sk 6f88a747b5956074ed8d5364bb4fbba9b7319986b07642cc8127fa82d9ba229d379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96
+		// pk 379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96
+		let eph_sk = FromHex::from_hex("6f88a747b5956074ed8d5364bb4fbba9b7319986b07642cc8127fa82d9ba229d379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96").unwrap();
+		
+		let mut zkotx = ZkOriginTransaction {
+			/// Plain Transaction.
+			unverified: Transaction {
+				/// Nonce.
+				nonce: 2.into(),
+				/// Gas price.
+				gas_price: 1.into(),
+				/// Gas paid up front for transaction execution.
+				gas: gas.clone(),
+				/// Action, can be either call or contract create.
+				action: Action::Call(address.clone()),
+				/// Transfered value.
+				value: value.clone(),
+				/// Transaction data.
+				data: data.clone(),
+			}.null_sign(1).into(),
+			rt: H256::from_str("4015a7e4b75a882815982995b77b3ca609e1d2f5ef23415bdb10151aeef9f78e").unwrap(),
+			sn: [
+				H256::from_str("662699a85f3ce574455bc7cac2587486bd2bee30e1d575d2cc9973b712c4367f").unwrap(), 
+				H256::from_str("87fb718c1f8c8fd5f22d72972c8f06e5c9d5339ca8882088ddc3484acf59e8a4").unwrap()
+			],
+			cm: [
+				H256::from_str("8559030ce458398f9d621ee4945d73f192983b638f0d9d9f4dd0f37a274d9f12").unwrap(),
+				H256::from_str("eeb5f370ad6f69bffce7333b07414b1753909a3bd417ed092cd8f4bd0b3c48a9").unwrap()
+			],
+			eph_pk: H256::from_str("379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96").unwrap(),
+			glue: H256::from_str("660066c5c5ae1bca0663199244f803632507f6015dd9797a3ee67ab3891a0f4e").unwrap(),
+			k: H256::from_str("33d7e0ba7f83a9c07f4d60bebc1eec8cc6d45fa8ca7e233dcae6341b91239fbe").unwrap(),
+			proof: FromHex::from_hex("30f42526fa95b86567f64702949d2f7b6bc9a17ff088317f4340117e89f564861a3130a73ff71edfa3a7fccb13db66ba084c5e96fee46dea701d32b59a7cee0764471a07652fa35642b5bb7a398a259fe93dcfa708a27737e4b728cb77021ec89f9e0d313042ba839c7ed76ebb25cfd3924f609ee8b6f684a3ddbf4475d90464027549d42831").unwrap(),
+			// Ciphertext
+			ct: [vec![1], vec![1]],
+			sig:  H512::default(),
+		};
+
+		zkotx.sign_apply(&eph_sk);
+		zkotx
+	}
+
+	fn construct_mint_tx_1m15() -> SignedTransaction {
+		// ZK params
+		// Coin 1
+		// sk: 1b9b785890669541e1664b4b9d875e1bc023ff8773317b544ffe23c2d5da54f3
+		// pk: f15f0e72dcbf9ffb464393f9f2041d02fe63a1a2c81765a3ba7e245bc85aabd1
+		// r:  eb1523590e40a9f087cc2294185acee951ba94f4347cbf41b0f0a995027dda70
+		// rho:ecadf1506ddbd704e9cabe6c7c5e6f1d66acf50e552efa8269e654e125acd4c
+		// v:  00000000000f424f
+		// k:  3aa385b0ff94ffa396b89fc2c470747e5ba7be9832251fd211e71070bf9228d1
+		// cm: 58ad11d237140be7a5f2c9d3ff6a2a1eb24e2908ccc147b562a6bded0e655390
+		// sn: 662699a85f3ce574455bc7cac2587486bd2bee30e1d575d2cc9973b712c4367f
+        let k = H256::from_str("3aa385b0ff94ffa396b89fc2c470747e5ba7be9832251fd211e71070bf9228d1").unwrap();
+		let cm = H256::from_str("58ad11d237140be7a5f2c9d3ff6a2a1eb24e2908ccc147b562a6bded0e655390").unwrap();
+
+		let mint_data = zkotx_precompiled::functions::mint::encode_input(cm, k);
+		let keypair = Random.generate().unwrap();
+		let gas = 800_000;
+		let value = 1_000_015;
+
+		Transaction {
+			action: Action::Call(ZKO_PRECOMPILED_ADDR),
+			value: U256::from(value),
+			data: mint_data.clone(),
+			gas: U256::from(gas),
+			gas_price: U256::one(),
+			nonce: U256::zero()
+		}.sign(keypair.secret(), None)
+	}
+
+	evm_test!{test_zko_env_is_correct: test_zko_env_is_correct_int}
+	fn test_zko_env_is_correct(factory: Factory) {
+		let (mut state, info, machine, schedule, sha256_compression_address, snark_verify_address, _merkle_tree_address) =
+			prepare_zko_env(factory);
+		// Test snark verifier
+		{
+			println!("Test snark verifier");
+			let vk = "9c82a80a5ef185128a8cadccee7c92f0433ed74be217d394334144cfa9545d239af3b9b22816fb28bdf0092d59cee6caa56b84099ecc9abf30a092c09652f1258df9721075104e16bc036d111280e3feb67c85e0e6596c118da7ef5f64e9d30fedd1eb2cf22a99be285292718f5254a26db1885fce95d03a8651536d60230f29fda542fde06f5fbe3957f9940e5e9943dfeb50c32d3a66d277065efac14f1c171fbdd357c84d22b3bf864da5b3814af7a479ce1f9d25a69b45355cb55b556022c8605829024be62487a4eeb92324dbfa0537a009ad835ed9c6d65db38016b91a9d5ddcc8b251fbc3f85d6f506f17a173a8c6c9503e159cf434318a0577dc002433f35ceddc8dad9e42fd3df22315b308557afa66d04f011a34997f56c34f7c0b89af135fc582853081a82e2421806e6048c8908bd1a9921a70128ecb27873a2ff448603e0b5b5f97f2f24d47c3792c54b96769c44cc1a1db8131970730e9e31811efa3a1474f4b116b9b145cbcab055400a02c444508a6cf2d382341c9d2460e306f6d6a612b566d3c6b0e57d881034088d3b615bec79f360071e27a0628338827c988cf6b2cd635db60141886e59f3439d7673aecdff3a9cceaeca3f328d5b0183030bf9d8da1fe9e124f9850335866e87715fa198c715b281442ab3a5222ba1006043efa87faf65a71f3283927154d5d338c9ce8c37217ca64953c0447afffc46815313020b870f41beff3d0d661d1d6509688d3789ae62eba8e7e5f11497747ddc99a0831320a320a300a310a320a3011c9f60032f5d86e5309230bf6e1161daf3a1b66359e13dcc51e2517c6e559143130306c3300cb6618ea340c1ed0e708a0f3b79d22b608e75891698faf2cea461a1131".from_hex().unwrap();
+			let primary = "bdd4972ea30d60237c2e3688fd4a226bc465de07cb9059809027f82bd96746a8".from_hex().unwrap();
+			let proof = "3057473899bfbf104f4f0cd8a9603bbf5c462307e21b388c17739b818a2ff2ee133130174ef8a5e981e3f69d401619fafc1a8eb07d18b6389e99cd072868648e67d10ba2a79cf3902ad9a8eff12928fccbe22562c5efd1b963b89b908b9ee3782e9b073130712569f7ad3310c084213cbfb417912fe52b31deb357f16036b046aecdd38f2031".from_hex().unwrap();
+
+			let data = zksnark_verifier::functions::verify::encode_input(vk, primary, proof);
+			let result: U256 = Executive::new(&mut state, &info, &machine, &schedule)
+				.call_contract_as_zksys(&snark_verify_address, &data).unwrap()[0..32].into();
+			assert_eq!(result, 1.into());
+		}
+
+		// Test sha256compression
+		{
+			println!("Test sha256compression");
+			let data = [
+				"00000000",
+				"aefc24a194a505b19a33de962c51dd912350d75689d297c28afcf89128e836ea",
+				"000000000000000000000000000000000000000000000000000000000000000f"
+			].concat().from_hex().unwrap();
+
+			let result: H256 = Executive::new(&mut state, &info, &machine, &schedule)
+				.call_contract_as_zksys(&sha256_compression_address, &data).unwrap()[0..32].into();
+			assert_eq!(result, H256::from_str("bb80cd7944641077e8ded9c4aedd906b5a895e03eb38fc5ace879cd7e6f51749").unwrap());
+		}
+	}
+
+	evm_test!{test_transact_zko: test_transact_zko_int}
+	fn test_transact_zko(factory: Factory) {		
+		let (mut state, info, machine, schedule, ..) =
+			prepare_zko_env(factory);
+
+		{
+			let tx_mint = construct_mint_tx_1m15();
+			state.add_balance(&tx_mint.sender(), &U256::from(1_800_015), CleanupMode::NoEmpty).unwrap();
+
+			let executed = {
+				let opts = TransactOptions::with_tracing();
+				Executive::new(&mut state, &info, &machine, &schedule).transact(&tx_mint, opts).unwrap()
+			};
+
+			assert_eq!(executed.exception, None);
+		}
+
+		{
+			let last_root_data = zkotx_precompiled::functions::get_last_root::encode_input();
+			// TODO: assert root
+			let expected = H256::from_str("4015a7e4b75a882815982995b77b3ca609e1d2f5ef23415bdb10151aeef9f78e").unwrap();
+			let result: H256 = Executive::new(&mut state, &info, &machine, &schedule)
+				.call_contract_as_zksys(&ZKO_PRECOMPILED_ADDR, &last_root_data).unwrap()[0..32].into();
+			assert_eq!(result, expected);
+		}
+
+		// Invalid funds
+		let executed = {
+			let tx_bytes = FromHex::from_hex("f904f5020183019a2894095e7baea6a6c7c4c2dfeb977efac326af552d870ab904d3f904d0b90265f90262a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12a0379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96a03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db840b8e768655fd075c064809348bd759a9cbc5055eafd1860e9498ca8ab2a373b888de62f48fbb1b0864e9b11ca5c5c882db2310ae80a1e27cc099c7ce6e778de0db90265f90262a03a6fc31fbd331deb703849999592c8ea6a7bb9fb3a7f0c7e948a9bc97d4d7fd3a0ca20d232804cfac1dd676951803bbda9fede314cc2d913cb616ce144eb032352a02018b9d628f92be176992bb761021c8750fed0a43dca3ec2c82f3ac95762a802a0826e8170ceee7675414ec9945be697c1719a5d3fc5a66591d427cb1b8a23de8fa0dfd10dd0ab1342304bd8a85a40ca376aece5fc74ea77031866d78e893df71b12a0379f8f2594df7d4a09481615e27c869dcc68e5819330dfccaeb87733e1c19f96a03f7a942c28c8d497c7575989efe7a809b9950eada377a83d1a86cb7bff7e436ea0be3db515a9572200a8f4e377df1137fa5b5ad0b3962c581a4551848fcc7b51a2b886683ee16c40833d5bf2550b660d5d9eb772840030a59253722e954d9cb56c5c806a75e44924e26c528ae587bfbcfdaa7c73b004ce5d4779c1fcda7e009eca43cd8fcf471b40b10cc6dac5da75ee6e698022ed90a6a3e9fc028a5bdcac17a22dd4eaa35b320a20d1c42d19bc348ca2eb93d5dd4becf291715f27d0b8bc90b9f142f2f2fa9eedbab84638d04eae18760f7b111c258de48737eb86593df858e7e61c640191a1bcbeb6b1595b441156e3a672f0f4e5f86bb065ddb39060e2d61dbee7b21663d58c8d03c9c5285836e5e8b84659d4a0377662c152b24b9ac86c764eead180e1db217a52935f6f823abc6337709513a48f63b5a5957d9057b0b5a597b4e83b67cff1e149887cd23fa17e00b2b205c673466d4db8401d99585328392b581c3bc11a04d08e35fd197d95f2bc7da17a7c16884529ee0cb6d138d06d476676caa53857600a39fff1597fabf5777ae3da6e895c05cab307028080").unwrap();
+			let t_unverified: UnverifiedTransaction = rlp::decode(&tx_bytes).expect("decoding UnverifiedTransaction failed");
+			let t = SignedTransaction::new(t_unverified).unwrap();
+
+			let mut ex = Executive::new(&mut state, &info, &machine, &schedule);
+			let opts = TransactOptions::with_no_tracing();
+			ex.transact(&t, opts)
+		};
+		assert_eq!(executed, Err(ExecutionError::InvalidConfidentialFunds));
+
+		// Valid zko tx
+		{
+			// no contract
+			let dummy_addr = Address::from_str("0000000000000000000000000000000000001003").unwrap();
+			let zkotx = construct_zko_tx(&1_000_000.into(), &15.into(), &dummy_addr, &vec![0,0,0,0]);
+			let tx = zkotx.as_signed_transaction().unwrap();
+
+			let opts = TransactOptions::with_tracing();
+			let result = Executive::new(&mut state, &info, &machine, &schedule).transact(&tx, opts).unwrap();
+			assert_eq!(result.exception, None);
+			assert_eq!(state.balance(&dummy_addr).unwrap(), U256::from(15));
+
+			let mut change_bytes: [u8; 32] = [0; 32];
+			((zkotx.gas - result.gas_used) * zkotx.gas_price).to_big_endian(&mut change_bytes);
+			let change_cm = sha256_compress(&zkotx.k, &change_bytes);
+
+			let mut cms = zkotx.cm.to_vec();
+			cms.append(&mut vec![change_cm.into()]);
+			let mut index = U256([2,0,0,0]);
+			// Checks 1) correct spending of a coin and 2) correct refund
+			cms.into_iter()
+				.for_each(|cm| {
+					let (data, decoder) = zkotx_precompiled::functions::get_auth_path::call(cm);
+					let output = Executive::new(&mut state, &info, &machine, &schedule)
+						.call_contract_as_zksys(&ZKO_PRECOMPILED_ADDR, &data).unwrap();
+					let (_rt, address, _path) = decoder.decode(&output).unwrap();
+
+					assert_eq!(address, index);
+					index += 1.into();
+				});
+
+			assert_eq!(state.balance(&ZKO_PRECOMPILED_ADDR).unwrap(), zkotx.gas - result.gas_used);
+		}
+	}
+
+	evm_test!{test_zko_tx_consumed: test_zko_tx_consumed_int}
+	fn test_zko_tx_consumed(factory: Factory) {
+		let thrower_address = Address::from_str("0000000000000000000000000000000000001003").unwrap();
+		// Consumes whole gas
+		let thrower_code = FromHex::from_hex("6060604052600160006000505560188060186000396000f360606040523615600d57600d565b60165b6002565b565b00").unwrap();
+		// let consumer_code = FromHex::from_hex("606060405260016000553415601357600080fd5b608f806100216000396000f30060606040525b600115606157600260405180807f636f6e73756d6520616c6c206761730000000000000000000000000000000000815250600f0190506020604051808303816000865af11515605357600080fd5b505060405180519050506005565b0000a165627a7a72305820702f681a89264673aa7844f37471c34e4db278c413fe449ce06f1a95953cffc60029").unwrap();
+
+		let (mut state, info, machine, schedule, ..) =
+			prepare_zko_env(factory);
+		
+		// Init contract
+		Executive::new(&mut state, &info, &machine, &schedule).create_contract(&thrower_address, &thrower_code).unwrap();
+		// Mint source coin
+		let tx_mint = construct_mint_tx_1m15();
+		state.add_balance(&tx_mint.sender(), &U256::from(1_800_015), CleanupMode::NoEmpty).unwrap();
+		let opts = TransactOptions::with_tracing();
+		Executive::new(&mut state, &info, &machine, &schedule).transact(&tx_mint, opts).unwrap();
+
+		{
+			let zkotx = construct_zko_tx(&1_000_000.into(), &15.into(), &thrower_address, &vec![]);
+			let tx = zkotx.as_signed_transaction().unwrap();
+
+			let opts = TransactOptions::with_tracing();
+			let result = Executive::new(&mut state, &info, &machine, &schedule).transact(&tx, opts).unwrap();
+
+			assert_eq!(result.gas_used, zkotx.gas);
+
+			let mut change_bytes: [u8; 32] = [0; 32];
+			zkotx.value.to_big_endian(&mut change_bytes);
+			let change_cm = sha256_compress(&zkotx.k, &change_bytes);
+
+			let (data, decoder) = zkotx_precompiled::functions::get_auth_path::call(change_cm);
+			let output = Executive::new(&mut state, &info, &machine, &schedule)
+				.call_contract_as_zksys(&ZKO_PRECOMPILED_ADDR, &data).unwrap();
+			let (_rt, address, _path) = decoder.decode(&output).unwrap();
+
+			assert_eq!(address, U256::from(4));
+			assert_eq!(state.balance(&ZKO_PRECOMPILED_ADDR).unwrap(), zkotx.value);
+		}
+	}
+
+	evm_test!{test_zko_tx_valid_data: test_zko_tx_valid_data_int}
+	fn test_zko_tx_valid_data(factory: Factory) {
+		
+		let counter_address = Address::from_str("0000000000000000000000000000000000001003").unwrap();
+		// Consumes whole gas
+		let counter_code = FromHex::from_hex("60606040526001600055341561001457600080fd5b61014d806100236000396000f300606060405260043610610057576000357c0100000000000000000000000000000000000000000000000000000000900463ffffffff16806306661abd1461005c5780631003e2d21461008557806361bc221a146100bc575b600080fd5b341561006757600080fd5b61006f6100e5565b6040518082815260200191505060405180910390f35b341561009057600080fd5b6100a66004808035906020019091905050610100565b6040518082815260200191505060405180910390f35b34156100c757600080fd5b6100cf61011b565b6040518082815260200191505060405180910390f35b60008060008154809291906001019190505550600054905090565b60008160008082825401925050819055506000549050919050565b600054815600a165627a7a7230582096fc1e617ba6dc095b60e4913db5f2e9a103284f9695b3ba071e5b0225eea5cd0029").unwrap();
+
+		let (mut state, info, machine, schedule, ..) =
+			prepare_zko_env(factory);
+		
+		// Init contract
+		Executive::new(&mut state, &info, &machine, &schedule).create_contract(&counter_address, &counter_code).unwrap();
+		// Mint source coin
+		let tx_mint = construct_mint_tx_1m15();
+		state.add_balance(&tx_mint.sender(), &U256::from(1_800_015), CleanupMode::NoEmpty).unwrap();
+		let opts = TransactOptions::with_tracing();
+		Executive::new(&mut state, &info, &machine, &schedule).transact(&tx_mint, opts).unwrap();
+
+		{
+			let number = U256::from(7);
+			let mut number_bytes: [u8; 32] = [0; 32];
+			number.to_big_endian(&mut number_bytes);
+
+			let mut data: Bytes = vec![0x10, 0x03, 0xe2, 0xd2];
+			data.append(&mut number_bytes.to_vec());
+
+			let zkotx = construct_zko_tx(&1_000_015.into(), &0.into(), &counter_address, &data);
+			let tx = zkotx.as_signed_transaction().unwrap();
+
+			let opts = TransactOptions::with_tracing();
+			Executive::new(&mut state, &info, &machine, &schedule).transact(&tx, opts).unwrap();
+
+			let counter_sig = vec![0x61, 0xbc, 0x22, 0x1a];
+			let counter: U256 = Executive::new(&mut state, &info, &machine, &schedule)
+				.call_contract_as_zksys(&counter_address, &counter_sig).unwrap()[0..32].into();
+
+			assert_eq!(counter, U256::from(1) + number);
+		}
+	}
+
+	evm_test!{test_zko_no_change: test_zko_no_change_int}
+	fn test_zko_no_change(factory: Factory) {
+		let thrower_address = Address::from_str("0000000000000000000000000000000000001003").unwrap();
+		// Consumes whole gas
+		let thrower_code = FromHex::from_hex("6060604052600160006000505560188060186000396000f360606040523615600d57600d565b60165b6002565b565b00").unwrap();
+
+		let (mut state, info, machine, schedule, ..) =
+			prepare_zko_env(factory);
+		
+		// Init contract
+		Executive::new(&mut state, &info, &machine, &schedule).create_contract(&thrower_address, &thrower_code).unwrap();
+		// Mint source coin
+		let tx_mint = construct_mint_tx_1m15();
+		state.add_balance(&tx_mint.sender(), &U256::from(1_800_015), CleanupMode::NoEmpty).unwrap();
+		let opts = TransactOptions::with_tracing();
+		Executive::new(&mut state, &info, &machine, &schedule).transact(&tx_mint, opts).unwrap();
+
+		{
+			let zkotx = construct_zko_tx(&1_000_015.into(), &0.into(), &thrower_address, &vec![]);
+			let tx = zkotx.as_signed_transaction().unwrap();
+
+			let opts = TransactOptions::with_tracing();
+			let result = Executive::new(&mut state, &info, &machine, &schedule).transact(&tx, opts).unwrap();
+
+			assert_eq!(result.gas_used, zkotx.gas);
+
+			let (data, decoder) = zkotx_precompiled::functions::get_last_leaf_index::call();
+			let output = Executive::new(&mut state, &info, &machine, &schedule)
+				.call_contract_as_zksys(&ZKO_PRECOMPILED_ADDR, &data).unwrap();
+			let last_index = decoder.decode(&output).unwrap();
+
+			assert_eq!(last_index, U256::from(3));
+			assert_eq!(state.balance(&ZKO_PRECOMPILED_ADDR).unwrap(), 0.into());
+		}
+	}
+
+	evm_test!{test_zk_imbalance: test_zk_imbalance_int}
+	fn test_zk_imbalance(factory: Factory) {
+		let (mut state, info, machine, schedule, ..) =
+			prepare_zko_env(factory);
+		
+		// Mint source coin
+		let tx_mint = construct_mint_tx_1m15();
+		state.add_balance(&tx_mint.sender(), &U256::from(1_800_015), CleanupMode::NoEmpty).unwrap();
+		let opts = TransactOptions::with_no_tracing();
+		Executive::new(&mut state, &info, &machine, &schedule).transact(&tx_mint, opts).unwrap();
+
+		// Create imbalance
+		state.sub_balance(&ZKO_PRECOMPILED_ADDR, &U256::from(1), &mut CleanupMode::NoEmpty).unwrap();
+
+		{
+			let target = Address::from_str("0000000000000000000000000000000000001003").unwrap();
+			let zkotx = construct_zko_tx(&1_000_015.into(), &0.into(), &target, &vec![]);
+			let tx = zkotx.as_signed_transaction().unwrap();
+
+			let opts = TransactOptions::with_no_tracing();
+			let not_enough_zko_cash = match Executive::new(&mut state, &info, &machine, &schedule).transact(&tx, opts) {
+				Err(ExecutionError::NotEnoughZkoCash {..}) => true,
+				_ => false,
+			};
+
+			assert_eq!(not_enough_zko_cash, true);
+		}
 	}
 }

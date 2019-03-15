@@ -114,6 +114,8 @@ pub enum ExecutionError {
 		/// Actual balance.
 		got: U512
 	},
+	/// ZKO contract doesn't have enough cash to pay for the transaction execution
+	InvalidConfidentialFunds,
 	/// Transaction type isn't allowed (e.g. create/call)
 	NotAllowedAction,
 	/// When execution tries to modify the state in static context
@@ -155,6 +157,7 @@ impl fmt::Display for ExecutionError {
 			NotEnoughZkoCash { ref required, ref got } =>
 				format!("Cost of transaction exceeds ZKO contract's balance. {} is required \
 					but the contract only has {}", required, got),
+			InvalidConfidentialFunds => "Confidential funding of tx has not been confirmed".to_owned(),
 			NotAllowedAction => "Transaction action is not allowed".to_owned(),
 			MutableCallInStaticContext => "Mutable Call in static context".to_owned(),
 			SenderMustExist => "Transacting from an empty account".to_owned(),

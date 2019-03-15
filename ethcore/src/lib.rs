@@ -148,6 +148,9 @@ extern crate evm;
 extern crate env_logger;
 
 pub extern crate ethstore;
+extern crate regex;
+#[cfg(test)] #[macro_use]
+extern crate assert_matches;
 
 #[macro_use]
 pub mod views;

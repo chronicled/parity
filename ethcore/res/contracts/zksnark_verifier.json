@@ -1,0 +1,29 @@
+[
+    {
+        "constant": false,
+        "inputs": [
+            {
+                "name": "",
+                "type": "bytes"
+            },
+            {
+                "name": "",
+                "type": "bytes"
+            },
+            {
+                "name": "",
+                "type": "bytes"
+            }
+        ],
+        "name": "verify",
+        "outputs": [
+            {
+                "name": "",
+                "type": "bool"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "nonpayable",
+        "type": "function"
+    }
+]

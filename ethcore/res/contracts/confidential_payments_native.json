@@ -1,0 +1,146 @@
+[
+    {
+        "inputs": [
+            {
+                "name": "_tree_depth",
+                "type": "uint256"
+            },
+            {
+                "name": "_hasher_address",
+                "type": "address"
+            },
+            {
+                "name": "_snark_address",
+                "type": "address"
+            },
+            {
+                "name": "_vk",
+                "type": "bytes"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "nonpayable",
+        "type": "constructor"
+    },
+    {
+        "constant": true,
+        "inputs": [],
+        "name": "getLastRoot",
+        "outputs": [
+            {
+                "name": "",
+                "type": "bytes32"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "constant": true,
+        "inputs": [
+            {
+                "name": "_leaf",
+                "type": "bytes32"
+            }
+        ],
+        "name": "getAuthPath",
+        "outputs": [
+            {
+                "name": "_root",
+                "type": "bytes32"
+            },
+            {
+                "name": "_address",
+                "type": "uint256"
+            },
+            {
+                "name": "_path",
+                "type": "bytes32[]"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "constant": true,
+        "inputs": [],
+        "name": "getLastLeafIndex",
+        "outputs": [
+            {
+                "name": "",
+                "type": "uint256"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "constant": false,
+        "inputs": [
+            {
+                "name": "cm",
+                "type": "bytes32"
+            },
+            {
+                "name": "k",
+                "type": "bytes32"
+            }
+        ],
+        "name": "mint",
+        "outputs": [
+            {
+                "name": "result",
+                "type": "bool"
+            }
+        ],
+        "payable": true,
+        "stateMutability": "payable",
+        "type": "function"
+    },
+    {
+        "constant": false,
+        "inputs": [
+            {
+                "name": "rt",
+                "type": "bytes32"
+            },
+            {
+                "name": "sn",
+                "type": "uint256[2]"
+            },
+            {
+                "name": "cm_new",
+                "type": "uint256[2]"
+            },
+            {
+                "name": "v_pub",
+                "type": "uint64"
+            },
+            {
+                "name": "eph_pk",
+                "type": "bytes32"
+            },
+            {
+                "name": "glue",
+                "type": "bytes32"
+            },
+            {
+                "name": "proof",
+                "type": "bytes"
+            }
+        ],
+        "name": "transfer",
+        "outputs": [
+            {
+                "name": "results",
+                "type": "bool"
+            }
+        ],
+        "payable": false,
+        "stateMutability": "nonpayable",
+        "type": "function"
+    }
+]

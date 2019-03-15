@@ -75,6 +75,7 @@ kvdb-rocksdb = "0.1.3"
 serde = "1.0"
 serde_derive = "1.0"
 tempdir = {version="0.3", optional = true}
+regex = "1"
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android"))'.dependencies]
 hardware-wallet = { path = "../hw" }
@@ -89,6 +90,7 @@ env_logger = "0.4"
 tempdir = "0.3"
 trie-standardmap = "0.1"
 criterion = "0.2"
+assert_matches = "1.2"
 
 [features]
 parity = ["work-notify", "price-info", "stratum"]

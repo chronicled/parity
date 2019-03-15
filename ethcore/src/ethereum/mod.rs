@@ -165,6 +165,9 @@ pub fn new_eip210_test_machine() -> EthereumMachine { load_machine(include_bytes
 /// Create a new Foundation Byzantium era spec.
 pub fn new_byzantium_test_machine() -> EthereumMachine { load_machine(include_bytes!("../../res/ethereum/byzantium_test.json")) }
 
+/// Create a new Foundation Byzantium era test machine with ZK verification and ZKOTX.
+pub fn new_byzantium_zk_zkotx_test_machine() -> EthereumMachine { load_machine(include_bytes!("../../res/ethereum/byzantium_test_zk_zkotx.json")) }
+
 /// Create a new Foundation Constantinople era spec.
 pub fn new_constantinople_test_machine() -> EthereumMachine { load_machine(include_bytes!("../../res/ethereum/constantinople_test.json")) }
 
