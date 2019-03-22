@@ -9,14 +9,15 @@ extern crate tokio;
 #[macro_use]
 extern crate log;
 #[macro_use]
-extern crate failure;
-#[macro_use]
 extern crate serde_derive;
 
 extern crate common_types;
+extern crate enclose;
 extern crate ethcore;
 extern crate ethcore_miner as miner;
 extern crate ethereum_types;
+extern crate failure;
+extern crate rabbitmq_adaptor;
 extern crate rlp;
 
 #[cfg(test)]

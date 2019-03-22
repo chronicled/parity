@@ -784,10 +784,11 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	let ipc_server = rpc::new_ipc(cmd.ipc_conf, &dependencies)?;
 	let http_server = rpc::new_http("HTTP JSON-RPC", "jsonrpc", cmd.http_conf.clone(), &dependencies)?;
 
-	let rabbitmq_client = match PubSubClient::new(client.clone(), miner.clone(), cmd.rabbitmq_conf) {
+	let rabbitmq_client = match PubSubClient::new(client.clone(), cmd.rabbitmq_conf) {
 		Ok(client) => Arc::new(client),
 		Err(e) => return Err(format!("Failed to connect to the RabbitMQ Server: {}", e)),
 	};
+	rabbitmq_client.transaction_subscriber(miner.clone());
 	service.add_notify(rabbitmq_client.clone());
 
 	// secret store key server
