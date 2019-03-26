@@ -10,7 +10,9 @@ use interface::RabbitMqConfig;
 use rabbitmq_adaptor::{RabbitConnection, RabbitExt};
 use serde_json;
 use std::sync::Arc;
+use tokio::prelude::*;
 use tokio::runtime::current_thread::Runtime;
+use tokio::sync::mpsc::{channel, Receiver, Sender as ChannelSender};
 use types::{Block, BlockTransactions, RichBlock, Transaction, Log};
 
 use LOG_TARGET;
@@ -18,29 +20,26 @@ use NEW_BLOCK_EXCHANGE_NAME;
 use NEW_BLOCK_ROUTING_KEY;
 use PUBLIC_TRANSACTION_QUEUE;
 use TRANSACTION_CONSUMER;
+// TODO: use the config values
+static HOST: &str = "127.0.0.1";
+static PORT: u16 = 5672;
 
 /// Eth PubSub implementation.
 pub struct PubSubClient<C> {
 	pub client: Arc<C>,
-	rabbit: RabbitConnection,
+	sender: ChannelSender<Vec<u8>>,
 }
 
 impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
-	pub fn new(client: Arc<C>, conf: RabbitMqConfig) -> Result<Self, Error> {
-		let rabbit = RabbitConnection::new("127.0.0.1", 5672);
-		Ok(Self {
-			client,
-			rabbit,
-		})
-	}
-
-	pub fn transaction_subscriber(&self, miner: Arc<miner::Miner>) -> Result<(), Error> {
-		let sender_handler = Box::new(Sender::new(self.client.clone(), miner.clone()));
+	pub fn new(client: Arc<C>, miner: Arc<miner::Miner>, conf: RabbitMqConfig) -> Result<Self, Error> {
+		let (sender, receiver) = channel::<Vec<u8>>(100);
+		let sender_handler = Box::new(Sender::new(client.clone(), miner.clone()));
 		let mut runtime = Runtime::new().unwrap();
 		let result = runtime.block_on(lazy(move || {
+			let rabbit = RabbitConnection::new(HOST, PORT, "response");
 			// Consume to public transaction messages
 			tokio::spawn(
-				self.rabbit.clone()
+				rabbit.clone()
 					.register_consumer(
 						PUBLIC_TRANSACTION_QUEUE.to_string(),
 						enclose!(() move |message| {
@@ -52,10 +51,30 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 							true
 						}),
 					)
+					.map(|_| ())
 					.map_err(|_| ()),
+			);
+
+			// Send new block messages
+			tokio::spawn(
+				receiver.for_each(enclose!((rabbit) move |message| {
+					rabbit.clone()
+					.publish(
+						NEW_BLOCK_EXCHANGE_NAME,
+						NEW_BLOCK_ROUTING_KEY,
+						message,
+					);
+					Ok(())
+				}))
+				.map(|_| ())
+				.map_err(|_| ())
 			)
 		}));
-		Ok(())
+
+		Ok(Self {
+			client,
+			sender,
+		})
 	}
 }
 
@@ -121,11 +140,7 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 		for ref rich_block in blocks {
 			let serialized_block = serde_json::to_string(&rich_block).unwrap();
 			info!(target: LOG_TARGET, "Serialized: {:?} ", serialized_block);
-			&self.rabbit.clone().publish(
-				NEW_BLOCK_EXCHANGE_NAME,
-				NEW_BLOCK_ROUTING_KEY,
-				serialized_block.into(),
-			);
+			&self.sender.clone().send(serialized_block.into());
 		}
 	}
 }
