@@ -41,8 +41,7 @@ use journaldb::Algorithm;
 use light::Cache as LightDataCache;
 use miner::external::ExternalMiner;
 use node_filter::NodeFilter;
-use parity_rabbitmq::client::PubSubClient;
-use parity_rabbitmq::interface::RabbitMqConfig;
+use parity_rabbitmq::client::{PubSubClient, RabbitMqConfig};
 use parity_runtime::Runtime;
 use parity_rpc::{Origin, Metadata, NetworkSettings, informant, is_major_importing, PubSubSession, FutureResult,
 	FutureResponse, FutureOutput};
@@ -784,7 +783,7 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	let ipc_server = rpc::new_ipc(cmd.ipc_conf, &dependencies)?;
 	let http_server = rpc::new_http("HTTP JSON-RPC", "jsonrpc", cmd.http_conf.clone(), &dependencies)?;
 
-	let rabbitmq_client = match PubSubClient::new(client.clone(), miner.clone(), cmd.rabbitmq_conf) {
+	let rabbitmq_client = match PubSubClient::new(client.clone(), miner.clone(), runtime.executor(), cmd.rabbitmq_conf) {
 		Ok(client) => Arc::new(client),
 		Err(e) => return Err(format!("Failed to connect to the RabbitMQ Server: {}", e)),
 	};

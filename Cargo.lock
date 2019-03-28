@@ -1562,6 +1562,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "futures-executor"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "futures-channel 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "futures-core 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "futures-util 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "lazy_static 1.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "num_cpus 1.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "futures-io"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2865,10 +2877,12 @@ dependencies = [
  "ethereum-types 0.4.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "failure 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.25 (registry+https://github.com/rust-lang/crates.io-index)",
+ "futures-executor 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "hex 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "lapin-futures 0.15.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
  "macros 0.1.0",
+ "parity-runtime 0.1.0",
  "rabbitmq_adaptor 0.1.0",
  "rlp 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc-hex 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -4966,6 +4980,7 @@ dependencies = [
 "checksum futures-channel 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "bbb37ec6418c577b25f5b129c0f4456ad7ce8714ec43c59712aa7e4cd2cb6b85"
 "checksum futures-core 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "7455c91eb2eae38f33b013f77ebe766c75761af333efd9d550e154045c63e225"
 "checksum futures-cpupool 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)" = "ab90cde24b3319636588d0c35fe03b1333857621051837ed769faefb4c2162e4"
+"checksum futures-executor 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "5db1dd3979745f5e50b28fd604602f2715f9d5a28ab835a5f9686a9d84cd1315"
 "checksum futures-io 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "b6a0470fdba9dc87c27a3564ad6d5cc04e080f3afa26c93549728cce46ab21a2"
 "checksum futures-retry 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)" = "220a8998517238e8ccfbdb21ee74165648768099e0ccc93f77d874f1aab12609"
 "checksum futures-sink 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "a8a93a7c480876b8e02cdd70022e7eb9c8423575ea6a25a0b749b18834c16412"
