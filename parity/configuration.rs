@@ -36,7 +36,7 @@ use miner::pool;
 use num_cpus;
 
 use rpc::{IpcConfiguration, HttpConfiguration, WsConfiguration};
-use parity_rabbitmq::interface::RabbitMqConfig;
+use parity_rabbitmq::client::RabbitMqConfig;
 use parity_rpc::NetworkSettings;
 use cache::CacheConfig;
 use helpers::{to_duration, to_mode, to_block_id, to_u256, to_pending_set, to_price, geth_ipc_path, parity_ipc_path, to_bootnodes, to_addresses, to_address, to_queue_strategy, to_queue_penalization, passwords_from_files};

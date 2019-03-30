@@ -1,41 +1,86 @@
 //! RabbitMQ ChainNotfiy implementation
 
+use enclose::enclose;
 use ethcore::client::{BlockChainClient, BlockId, ChainNotify, ChainRouteType, NewBlocks};
 use ethcore::miner;
 use failure::Error;
-use handler::Sender;
-use interface::{Interface, RabbitMqConfig, RabbitMqInterface};
+use futures::future::{lazy};
+use handler::{Handler, Sender};
+use parity_runtime::Executor;
+use rabbitmq_adaptor::{RabbitConnection, RabbitExt};
 use serde_json;
 use std::sync::Arc;
+use tokio::prelude::*;
+use tokio::sync::mpsc::{channel, Sender as ChannelSender};
 use types::{Block, BlockTransactions, RichBlock, Transaction, Log};
 
+use DEFAULT_CHANNEL_SIZE;
+use DEFAULT_REPLY_QUEUE;
 use LOG_TARGET;
 use NEW_BLOCK_EXCHANGE_NAME;
 use NEW_BLOCK_ROUTING_KEY;
 use PUBLIC_TRANSACTION_QUEUE;
-use TRANSACTION_CONSUMER;
 
-/// Eth PubSub implementation.
-pub struct PubSubClient<C, I> {
-	pub client: Arc<C>,
-	pub interface: I,
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct RabbitMqConfig {
+	pub hostname: String,
+	pub port: u16,
 }
 
-impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C, RabbitMqInterface> {
-	pub fn new(client: Arc<C>, miner: Arc<miner::Miner>, conf: RabbitMqConfig) -> Result<Self, Error> {
-		let mut interface = RabbitMqInterface::new(conf);
-		interface.connect()?;
+/// Eth PubSub implementation.
+pub struct PubSubClient<C> {
+	pub client: Arc<C>,
+	pub sender: ChannelSender<Vec<u8>>,
+}
+
+impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
+	pub fn new(client: Arc<C>, miner: Arc<miner::Miner>, executor: Executor, config: RabbitMqConfig) -> Result<Self, Error> {
+		let (sender, receiver) = channel::<Vec<u8>>(DEFAULT_CHANNEL_SIZE);
 		let sender_handler = Box::new(Sender::new(client.clone(), miner.clone()));
-		interface.create_queue(PUBLIC_TRANSACTION_QUEUE)?;
-		interface.spawn_consumer(TRANSACTION_CONSUMER, PUBLIC_TRANSACTION_QUEUE, sender_handler)?;
+
+		executor.spawn(lazy(move || {
+			let rabbit = RabbitConnection::new(&config.hostname, config.port, DEFAULT_REPLY_QUEUE);
+			// Consume to public transaction messages
+			tokio::spawn(
+				rabbit.clone()
+					.register_consumer(
+						PUBLIC_TRANSACTION_QUEUE.to_string(),
+						enclose!(() move |message| {
+							let payload = std::str::from_utf8(&message.data).unwrap();
+							debug!(target: LOG_TARGET, "got message: {:?}", payload);
+							if let Err(e) = sender_handler.send_transaction(&payload) {
+								error!(target: LOG_TARGET, "failed to send transaction: {:?}", e);
+							}
+							true
+						}),
+					)
+					.map_err(|error| panic!("Error in consumer {:?}", error))
+			);
+
+			// Send new block messages
+			receiver.for_each(enclose!((rabbit) move |message| {
+				tokio::spawn(
+				rabbit.clone()
+				.publish(
+					NEW_BLOCK_EXCHANGE_NAME,
+					NEW_BLOCK_ROUTING_KEY,
+					message,
+				)
+				.map(|_| ())
+				.map_err(|_| ()));
+				Ok(())
+			}))
+			.map_err(|e| error!(target: LOG_TARGET, "failed to send message to channel: {:?}", e))
+		}));
+
 		Ok(Self {
-			client: client,
-			interface: interface,
+			client,
+			sender,
 		})
 	}
 }
 
-impl<C: BlockChainClient, I: Interface + Sync + Send> ChainNotify for PubSubClient<C, I> {
+impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 	fn new_blocks(&self, new_blocks: NewBlocks) {
 		fn cast<O, T: Copy + Into<O>>(t: &T) -> O {
 			(*t).into()
@@ -96,12 +141,8 @@ impl<C: BlockChainClient, I: Interface + Sync + Send> ChainNotify for PubSubClie
 
 		for ref rich_block in blocks {
 			let serialized_block = serde_json::to_string(&rich_block).unwrap();
-			info!(target: LOG_TARGET, "Serialized: {:?}", serialized_block);
-			self.interface.topic_publish(
-				serialized_block,
-				NEW_BLOCK_EXCHANGE_NAME,
-				NEW_BLOCK_ROUTING_KEY,
-			);
+			info!(target: LOG_TARGET, "Serialized: {:?} ", serialized_block);
+			&self.sender.clone().try_send(serialized_block.into()).unwrap();
 		}
 	}
 }

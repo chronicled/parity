@@ -13,12 +13,16 @@ rustc-hex = "1.0"
 serde = "1.0"
 serde_derive = "1.0"
 serde_json = "1.0"
-tokio = "0.1"
+tokio = "^0.1"
 
+enclose = "0.1.4"
 ethcore = { path = "../ethcore", features = ["test-helpers"] }
 ethcore-miner = { path = "../miner" }
 common-types = { path = "../ethcore/types" }
 ethereum-types = "0.4"
+futures-executor = "0.2.1"
+parity-runtime = { path = "../util/runtime" }
+rabbitmq_adaptor = { git = "ssh://git@github.com/chronicled/rabbitmq-adaptor.git", branch = "develop" }
 rlp = { version = "0.3.0", features = ["ethereum"] }
 
 [dev-dependencies]
