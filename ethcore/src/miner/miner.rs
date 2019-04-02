@@ -413,6 +413,7 @@ impl Miner {
 
 		let mut invalid_transactions = HashSet::new();
 		let mut not_allowed_transactions = HashSet::new();
+		let mut unsigned_transactions = HashSet::new();
 		let mut senders_to_penalize = HashSet::new();
 		let block_number = open_block.block().header().number();
 
@@ -521,7 +522,12 @@ impl Miner {
 					invalid_transactions.insert(hash);
 				},
 				// imported ok
-				_ => tx_count += 1,
+				_ => {
+					if tx.is_unsigned() {
+						unsigned_transactions.insert(hash);
+					}
+					tx_count += 1;
+				},
 			}
 		}
 		let elapsed = block_start.elapsed();
@@ -536,6 +542,9 @@ impl Miner {
 		};
 
 		{
+			// Removing successful unsigned txs, since there's no state to check against
+			// during culling
+			self.transaction_queue.remove(unsigned_transactions.iter(), false);
 			self.transaction_queue.remove(invalid_transactions.iter(), true);
 			self.transaction_queue.remove(not_allowed_transactions.iter(), false);
 			self.transaction_queue.penalize(senders_to_penalize.iter());

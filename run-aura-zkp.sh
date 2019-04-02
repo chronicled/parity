@@ -1,0 +1,1 @@
+sudo ./target/debug/parity --chain zkp-aura-genesis.json -l debug --reseal-min-period 0 --networkid 7721231 --datadir ~/parity-data --unlock 0x4315846e1ad8c7b3d746e69df918e0998fbbfa56 --password pass.conf --rpcapi "web3,eth,net,personal"  --rpccorsdomain "*" --jsonrpc-interface all --jsonrpc-hosts all --tracing on --engine-signer=0x4315846e1ad8c7b3d746e69df918e0998fbbfa56

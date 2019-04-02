@@ -72,9 +72,9 @@ impl<P> txpool::Scoring<P> for NonceAndGasPrice where P: ScoredTransaction + txp
 	type Event = ();
 
 	fn compare(&self, old: &P, other: &P) -> cmp::Ordering {
-		match txpool::VerifiedTransaction::is_unsigned(other) { 
-			true => cmp::Ordering::Less, // New is always added to the end
-			false => old.nonce().cmp(&other.nonce()),
+		match other.is_nonce_based() { 
+			false => old.hash().cmp(other.hash()), // cmp::Ordering::Less, // New is always added to the end
+			true => old.nonce().cmp(&other.nonce()),
 		}
 	}
 

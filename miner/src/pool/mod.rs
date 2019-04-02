@@ -119,8 +119,10 @@ pub trait ScoredTransaction {
 	/// Gets transaction nonce.
 	fn nonce(&self) -> U256;
 
-	/// Checks if transaction is unsigned
-	fn is_unsigned(&self) -> bool;
+	/// Is transaction relies on nonce.
+	fn is_nonce_based(&self) -> bool {
+		return true;
+	}
 }
 
 /// Verified transaction stored in the pool.
@@ -188,11 +190,6 @@ impl txpool::VerifiedTransaction for VerifiedTransaction {
 	fn sender(&self) -> &Address {
 		&self.sender
 	}
-
-	/// Checks is signature is empty.
-	fn is_unsigned(&self) -> bool {
-		self.is_unsigned()
-	}
 }
 
 impl ScoredTransaction for VerifiedTransaction {
@@ -210,8 +207,7 @@ impl ScoredTransaction for VerifiedTransaction {
 		self.transaction.nonce
 	}
 
-	/// Checks is signature is empty.
-	fn is_unsigned(&self) -> bool {
-		self.is_unsigned()
+	fn is_nonce_based(&self) -> bool {
+		!self.is_unsigned()
 	}
 }

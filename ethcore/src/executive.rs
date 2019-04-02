@@ -1006,8 +1006,8 @@ impl<'a, B: 'a + StateBackend> ZkoPrecompileCallable for Executive<'a, B> {
 			_ => Vec::new(),
 		};
 
-		println!("Contract call result {:?}; return: {:?}", res, out);
-		println!("Substate: {:?}", substate);
+		// println!("Contract call result {:?}; return: {:?}", res, out);
+		// println!("Substate: {:?}", substate);
 		
 		Ok(out)
 	}
