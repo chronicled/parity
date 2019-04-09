@@ -1,6 +1,7 @@
 version: 2
 defaults: &defaults
   working_directory: ~/parity
+  resource_class: xlarge
   docker:
     - image: circleci/rust:latest
 
@@ -16,11 +17,15 @@ jobs:
           command: |
             mkdir -p ~/.ssh/
             /usr/bin/ssh-keyscan -H github.com >> ~/.ssh/known_hosts
-            cargo test
+            sudo apt update
+            sudo apt upgrade -y
+            sudo apt install time build-essential libgflags-dev libsnappy-dev zlib1g-dev libbz2-dev \
+            liblz4-dev libzstd-dev perl python libsnappy1v5 libudev-dev cmake libgflags-dev linux-headers-amd64 \
+            libusb-dev -y
+            RUST_BACKTRACE=1 cargo test --package=parity-rabbitmq
+          no_output_timeout: 30m
   deploy_docker_image:
     <<: *defaults
-    docker:
-      - image: docker/compose:1.23.0
     environment:
       FINAL_IMAGE: registry.dev.infra.chronicled.com/blockchain-interface
     steps:
@@ -31,7 +36,7 @@ jobs:
           key: cargo-docker-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
           paths:
             - /caches/parity-image.tar
-      - run: 
+      - run:
           name: Setup Docker credentials
           command: mkdir -p ~/.docker; echo -n "${REGISTRY_AUTH}" > ~/.docker/config.json;
       - run:
@@ -43,6 +48,15 @@ jobs:
           command: |
             export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             export PREV_IMAGE=`docker images "${FINAL_IMAGE}" --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
+            mkdir -p ~/.ssh/
+            /usr/bin/ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+            sudo apt update
+            sudo apt upgrade -y
+            sudo apt install time build-essential libgflags-dev libsnappy-dev zlib1g-dev libbz2-dev \
+            liblz4-dev libzstd-dev perl python libsnappy1v5 libudev-dev cmake libgflags-dev linux-headers-amd64 \
+            libusb-dev -y
+            cargo build --release --target x86_64-unknown-linux-gnu --verbose
+            strip target/x86_64-unknown-linux-gnu/release/parity
             docker build --rm=false -f scripts/docker/alpine/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" . --cache-from="${PREV_IMAGE}";
       - run:
           name: Deploy to dockerhub
@@ -50,16 +64,16 @@ jobs:
             SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             docker push "${FINAL_IMAGE}:${SHORT_COMMIT}";
             docker logout;
-      - run:
-          name: Save docker image layers for next build
-          command: |
-            export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)" ;
-            mkdir -p /caches;
-            if [ ! -f /caches/parity-image.tar ]; then docker save -o /caches/parity-image.tar "${FINAL_IMAGE}:${SHORT_COMMIT}"; fi
-      - save_cache:
-          key: cargo-docker-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
-          paths:
-            - /caches/parity-image.tar
+      # - run:
+      #     name: Save docker image layers for next build
+      #     command: |
+      #       export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)" ;
+      #       mkdir -p /caches;
+      #       if [ ! -f /caches/parity-image.tar ]; then docker save -o /caches/parity-image.tar "${FINAL_IMAGE}:${SHORT_COMMIT}"; fi
+      # - save_cache:
+      #     key: cargo-docker-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+      #     paths:
+      #       - /caches/parity-image.tar
 
 workflows:
   version: 2
@@ -71,4 +85,4 @@ workflows:
             - test
           filters:
             branches:
-              only: chronicled-develop
+              only: blockchain-interface
