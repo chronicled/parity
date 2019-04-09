@@ -16,8 +16,8 @@ jobs:
           command: |
             mkdir -p ~/.ssh/
             /usr/bin/ssh-keyscan -H github.com >> ~/.ssh/known_hosts
-            sudo apt install libudev-dev cmake -y
-            cargo test
+            sudo apt install libudev-dev cmake libgflags-dev -y
+            cargo test --package=parity-rabbitmq
   deploy_docker_image:
     <<: *defaults
     docker:
