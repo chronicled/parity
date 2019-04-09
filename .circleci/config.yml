@@ -16,7 +16,7 @@ jobs:
           command: |
             mkdir -p ~/.ssh/
             /usr/bin/ssh-keyscan -H github.com >> ~/.ssh/known_hosts
-            sudo apt install build-essential perl python linux-headers-$(uname -r) libudev-dev cmake libgflags-dev -y
+            sudo apt install build-essential perl python linux-headers libudev-dev cmake libgflags-dev -y
             cargo test --package=parity-rabbitmq
   deploy_docker_image:
     <<: *defaults
