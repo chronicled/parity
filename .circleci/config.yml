@@ -18,7 +18,7 @@ jobs:
             /usr/bin/ssh-keyscan -H github.com >> ~/.ssh/known_hosts
             sudo apt update
             sudo apt upgrade -y
-            sudo apt install build-essential libsnappy-dev zlib1g-dev libbz2-dev liblz4-dev libzstd-dev perl python libudev-dev cmake libgflags-dev -y
+            sudo apt install build-essential libsnappy-dev gcc-6 zlib1g-dev libbz2-dev liblz4-dev libzstd-dev perl python libudev-dev cmake libgflags-dev -y
             cargo test --package=parity-rabbitmq
   deploy_docker_image:
     <<: *defaults
