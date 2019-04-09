@@ -16,7 +16,7 @@ jobs:
           command: |
             mkdir -p ~/.ssh/
             /usr/bin/ssh-keyscan -H github.com >> ~/.ssh/known_hosts
-            apk install eudev-dev
+            apt install libudev-dev -y
             cargo test
   deploy_docker_image:
     <<: *defaults
