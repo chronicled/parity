@@ -872,9 +872,6 @@ impl miner::MinerService for Miner {
 		trace!(target: "external_tx", "Importing external transactions");
 		let client = self.pool_client(chain);
 
-		let imp: Vec<H256> = transactions.clone().into_iter().map(|t| t.hash()).collect();
-		println!("Importing external {:?}", imp);
-
 		let results = self.transaction_queue.import(
 			client,
 			transactions.into_iter().map(pool::verifier::Transaction::Unverified).collect(),
@@ -1269,7 +1266,6 @@ impl miner::MinerService for Miner {
 				let engine = self.engine.clone();
 				let accounts = self.accounts.clone();
 				let refuse_service_transactions = self.options.refuse_service_transactions;
-				// let nonceless_txs_clone = nonceless_txs.clone();
 
 				let cull = move |chain: &::client::Client| {
 					let client = PoolClient::new(
