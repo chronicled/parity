@@ -76,4 +76,5 @@ fake-fetch = { path = "../util/fake-fetch" }
 kvdb-memorydb = "0.1"
 macros = { path = "../util/macros" }
 pretty_assertions = "0.1"
-transaction-pool = { path = "../../parity-common/transaction-pool" } #"1.13"
+# transaction-pool = { path = "../../parity-common/transaction-pool" } #"1.13"
+transaction-pool = "1.13"

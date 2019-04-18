@@ -25,6 +25,7 @@ use ethereum_types::{H256, U256, Address};
 use parking_lot::RwLock;
 use transaction;
 use txpool::{self, Verifier};
+use super::nonceless_pool::{PoolController, PendingMixerIterator};
 
 use pool::{
 	self, scoring, verifier, client, ready, listener,
@@ -33,7 +34,8 @@ use pool::{
 use pool::local_transactions::LocalTransactionsList;
 
 type Listener = (LocalTransactionsList, (listener::Notifier, listener::Logger));
-type Pool = txpool::Pool<pool::VerifiedTransaction, scoring::NonceAndGasPrice, Listener>;
+// type Pool = txpool::Pool<pool::VerifiedTransaction, scoring::NonceAndGasPrice, Listener>;
+type Pool = PoolController<pool::VerifiedTransaction, scoring::NonceAndGasPrice, Listener>;
 
 /// Max cache time in milliseconds for pending transactions.
 ///
@@ -215,7 +217,7 @@ impl TransactionQueue {
 		let max_count = limits.max_count;
 		TransactionQueue {
 			insertion_id: Default::default(),
-			pool: RwLock::new(txpool::Pool::new(Default::default(), scoring::NonceAndGasPrice(strategy), limits)),
+			pool: RwLock::new(Pool::new(Default::default(), scoring::NonceAndGasPrice(strategy), limits)),
 			options: RwLock::new(verification_options),
 			cached_pending: RwLock::new(CachedPending::none()),
 			recently_rejected: RecentlyRejected::new(cmp::max(MIN_REJECTED_CACHE_SIZE, max_count / 4)),
@@ -393,11 +395,19 @@ impl TransactionQueue {
 		collect: F,
 	) -> T where
 		C: client::NonceClient,
-		F: FnOnce(txpool::PendingIterator<
+		// F: FnOnce(txpool::PendingIterator<
+		// 	pool::VerifiedTransaction,
+		// 	(ready::Condition, ready::State<C>),
+		// 	scoring::NonceAndGasPrice,
+		// 	Listener,
+		// >) -> T,
+		F: FnOnce(PendingMixerIterator<
 			pool::VerifiedTransaction,
-			(ready::Condition, ready::State<C>),
-			scoring::NonceAndGasPrice,
-			Listener,
+			txpool::PendingIterator<
+				pool::VerifiedTransaction,
+				(ready::Condition, ready::State<C>),
+				scoring::NonceAndGasPrice,
+				Listener>,
 		>) -> T,
 	{
 		debug!(target: "txqueue", "Re-computing pending set for block: {}", block_number);
@@ -426,6 +436,7 @@ impl TransactionQueue {
 	pub fn cull<C: client::NonceClient + Clone>(
 		&self,
 		client: C,
+		nonceless_transactions: &Vec<H256>
 	) {
 		trace_time!("pool::cull");
 		// We don't care about future transactions, so nonce_cap is not important.
@@ -450,11 +461,17 @@ impl TransactionQueue {
 			let senders = pool.senders().cloned().collect();
 			senders
 		};
+		// {
+		// 	removed += self.pool.write().cull(Some(chunk), state_readiness, &empty);
+		// }
+		let empty = vec![];
 		for chunk in senders.chunks(CULL_SENDERS_CHUNK) {
 			trace_time!("pool::cull::chunk");
 			let state_readiness = ready::State::new(client.clone(), stale_id, nonce_cap);
-			removed += self.pool.write().cull(Some(chunk), state_readiness);
+			removed += self.pool.write().cull(Some(chunk), state_readiness, &empty);
 		}
+		let state_readiness = ready::State::new(client.clone(), stale_id, nonce_cap);
+		removed += self.pool.write().cull(Some(&[]), state_readiness, nonceless_transactions);
 		debug!(target: "txqueue", "Removed {} stalled transactions. {}", removed, self.status());
 	}
 

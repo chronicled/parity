@@ -219,6 +219,12 @@ impl txpool::Listener<Transaction> for LocalTransactionsList {
 			return;
 		}
 
+		if !tx.is_nonce_based() {
+			info!(target: "own_tx", "Transaction mined/processed (hash {:?})", tx.hash());
+			self.insert(*tx.hash(), Status::Mined(tx.clone()));
+			return;
+		}
+
 		let is_in_chain = self.in_chain.as_ref().map(|checker| checker(tx.hash())).unwrap_or(false);
 		if is_in_chain {
 			info!(target: "own_tx", "Transaction mined (hash {:?})", tx.hash());

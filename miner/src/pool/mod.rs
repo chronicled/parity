@@ -23,6 +23,7 @@ use txpool;
 
 mod listener;
 mod queue;
+mod nonceless_pool;
 mod ready;
 
 pub mod client;
@@ -125,6 +126,12 @@ pub trait ScoredTransaction {
 	}
 }
 
+/// A higher level of tx abstraction that enables new transaction types
+pub trait VerifiedGenericTransaction {
+	/// Is transaction's execution based on nonce
+	fn is_nonce_based(&self) -> bool;
+}
+
 /// Verified transaction stored in the pool.
 #[derive(Debug, PartialEq, Eq)]
 pub struct VerifiedTransaction {
@@ -173,6 +180,16 @@ impl VerifiedTransaction {
 	pub fn is_unsigned(&self) -> bool {
 		self.transaction.is_unsigned()
 	}
+
+	fn is_nonce_based(&self) -> bool {
+		!self.is_unsigned()
+	}
+}
+
+impl VerifiedGenericTransaction for VerifiedTransaction {
+	fn is_nonce_based(&self) -> bool {
+		self.is_nonce_based()
+	}
 }
 
 impl txpool::VerifiedTransaction for VerifiedTransaction {
@@ -208,6 +225,6 @@ impl ScoredTransaction for VerifiedTransaction {
 	}
 
 	fn is_nonce_based(&self) -> bool {
-		!self.is_unsigned()
+		self.is_nonce_based()
 	}
 }

@@ -1,0 +1,26 @@
+# 0x0597be8893e87388737c476dc6953d4234b3108d
+[parity]
+chain = "zkp-aura1of2-genesis.json"
+base_path = "/home/vagrant/parity-1of2-0"
+[network]
+port = 30300
+bootnodes = ["enode://4abaa068d9ef4055722c3b0c698207882b65d4626f6e217b35199ac7ce2a94b7a722eecb04c8fa253b91954bfe7385d427589b0e2dad804a8bbf8044c7b5c5b4@10.0.2.15:30301"]
+discovery = false
+[rpc]
+port = 8540
+apis = ["web3", "eth", "net", "personal", "parity", "parity_set", "traces", "rpc", "parity_accounts"]
+cors = ["*"]
+interface = "all"
+hosts = ["all"]
+[websockets]
+port = 8450
+[mining]
+engine_signer = "0x0597be8893e87388737c476dc6953d4234b3108d"
+reseal_on_txs = "none"
+reseal_min_period = 0
+reseal_max_period = 5000
+[account]
+unlock = ["0x0597be8893e87388737c476dc6953d4234b3108d"]
+password = ["node.pwds"]
+[misc]
+logging = "debug own_tx,tx_queue,external_tx=trace"

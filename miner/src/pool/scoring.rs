@@ -72,13 +72,18 @@ impl<P> txpool::Scoring<P> for NonceAndGasPrice where P: ScoredTransaction + txp
 	type Event = ();
 
 	fn compare(&self, old: &P, other: &P) -> cmp::Ordering {
-		match other.is_nonce_based() { 
-			false => old.hash().cmp(other.hash()), // cmp::Ordering::Less, // New is always added to the end
-			true => old.nonce().cmp(&other.nonce()),
-		}
+		// match other.is_nonce_based() { 
+		// 	false => old.hash().cmp(other.hash()), // cmp::Ordering::Less, // New is always added to the end
+		// 	true => old.nonce().cmp(&other.nonce()),
+		// }
+		old.nonce().cmp(&other.nonce())
 	}
 
 	fn choose(&self, old: &P, new: &P) -> scoring::Choice {
+		// if !new.is_nonce_based() {
+		// 	return scoring::Choice::InsertNew;
+		// }
+
 		if old.nonce() != new.nonce() {
 			return scoring::Choice::InsertNew
 		}
@@ -127,6 +132,11 @@ impl<P> txpool::Scoring<P> for NonceAndGasPrice where P: ScoredTransaction + txp
 
 	fn should_replace(&self, old: &P, new: &P) -> scoring::Choice {
 		if old.sender() == new.sender() {
+			// FIFO
+			// if !new.is_nonce_based() {
+			// 	return scoring::Choice::RejectNew;
+			// }
+
 			// prefer earliest transaction
 			match new.nonce().cmp(&old.nonce()) {
 				cmp::Ordering::Less => scoring::Choice::ReplaceOld,

@@ -542,9 +542,6 @@ impl Miner {
 		};
 
 		{
-			// Removing successful unsigned txs, since there's no state to check against
-			// during culling
-			self.transaction_queue.remove(unsigned_transactions.iter(), false);
 			self.transaction_queue.remove(invalid_transactions.iter(), true);
 			self.transaction_queue.remove(not_allowed_transactions.iter(), false);
 			self.transaction_queue.penalize(senders_to_penalize.iter());
@@ -874,6 +871,10 @@ impl miner::MinerService for Miner {
 	) -> Vec<Result<(), transaction::Error>> {
 		trace!(target: "external_tx", "Importing external transactions");
 		let client = self.pool_client(chain);
+
+		let imp: Vec<H256> = transactions.clone().into_iter().map(|t| t.hash()).collect();
+		println!("Importing external {:?}", imp);
+
 		let results = self.transaction_queue.import(
 			client,
 			transactions.into_iter().map(pool::verifier::Transaction::Unverified).collect(),
@@ -1246,12 +1247,29 @@ impl miner::MinerService for Miner {
 			// uncle rate.
 			// If the io_channel is available attempt to offload culling to a separate task
 			// to avoid blocking chain_new_blocks
+			
+			let nonceless_txs: Vec<H256> = enacted
+				.par_iter()
+				// Necessary for tests
+				.filter(|h| **h != 0.into())
+				.flat_map(|hash| {
+					let block = chain.block(BlockId::Hash(*hash))
+						.expect("Client is sending message after commit to db and inserting to chain; the block is available; qed");
+					block.transactions()
+						.into_iter()
+						.filter(|tx| tx.is_unsigned())
+						.map(|tx| tx.hash())
+						.collect::<Vec<_>>()
+				})
+				.collect::<Vec<_>>();
+
 			if let Some(ref channel) = *self.io_channel.read() {
 				let queue = self.transaction_queue.clone();
 				let nonce_cache = self.nonce_cache.clone();
 				let engine = self.engine.clone();
 				let accounts = self.accounts.clone();
 				let refuse_service_transactions = self.options.refuse_service_transactions;
+				// let nonceless_txs_clone = nonceless_txs.clone();
 
 				let cull = move |chain: &::client::Client| {
 					let client = PoolClient::new(
@@ -1261,14 +1279,14 @@ impl miner::MinerService for Miner {
 						accounts.as_ref().map(|x| &**x),
 						refuse_service_transactions,
 					);
-					queue.cull(client);
+					queue.cull(client, &nonceless_txs);
 				};
 
 				if let Err(e) = channel.send(ClientIoMessage::execute(cull)) {
 					warn!(target: "miner", "Error queueing cull: {:?}", e);
 				}
 			} else {
-				self.transaction_queue.cull(client);
+				self.transaction_queue.cull(client, &nonceless_txs);
 			}
 		}
 	}
@@ -1505,7 +1523,6 @@ mod tests {
 		// This method will let us know if pending block was created (before calling that method)
 		assert_eq!(miner.queued_transactions().len(), 1);
 
-		assert_eq!(miner.prepare_pending_block(&client), BlockPreparationStatus::Succeeded);
 		// Transaction is succefully fetched from pool for the block inclusion
 		let chain_info = client.chain_info();
 		let pending: Vec<Arc<_>> = miner.transaction_queue.pending(
@@ -1519,6 +1536,9 @@ mod tests {
 			}
 		);
 		assert_eq!(pending.len(), 1);
+		// zko_tx isn't valid for the state
+		assert_eq!(miner.prepare_pending_block(&client), BlockPreparationStatus::Succeeded);
+		// TODO: add state before executing zkotx
 	}
 
 	#[test]
