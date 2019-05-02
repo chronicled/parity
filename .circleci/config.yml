@@ -47,7 +47,13 @@ jobs:
           command: |
             export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             export PREV_IMAGE=`docker images "${FINAL_IMAGE}" --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
-            sudo apt install musl musl-dev musl-tools
+            mkdir -p ~/.ssh/
+            /usr/bin/ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+            sudo apt update
+            sudo apt upgrade -y
+            sudo apt install time build-essential libgflags-dev libsnappy-dev zlib1g-dev libbz2-dev \
+            liblz4-dev libzstd-dev perl python libsnappy1v5 libudev-dev cmake libgflags-dev linux-headers-amd64 \
+            musl musl-dev musl-tools -y
             rustup target add x86_64-unknown-linux-musl
             cargo build --release --target x86_64-unknown-linux-musl --verbose
             strip target/x86_64-unknown-linux-musl/release/parity
