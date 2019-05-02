@@ -52,7 +52,7 @@ jobs:
             sudo apt install musl musl-dev musl-tools
             rustup target add x86_64-unknown-linux-musl
             cargo build --release --target x86_64-unknown-linux-musl --verbose
-            strip target/x86_64-alpine-linux-musl/release/parity
+            strip target/x86_64-unknown-linux-musl/release/parity
             docker build --rm=false -f scripts/docker/alpine/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" . --cache-from="${PREV_IMAGE}";
       - run:
           name: Deploy to dockerhub
