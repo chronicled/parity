@@ -64,16 +64,16 @@ jobs:
             SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             docker push "${FINAL_IMAGE}:${SHORT_COMMIT}";
             docker logout;
-      - run:
-          name: Save docker image layers for next build
-          command: |
-            export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)" ;
-            mkdir -p /caches;
-            if [ ! -f /caches/parity-image.tar ]; then docker save -o /caches/parity-image.tar "${FINAL_IMAGE}:${SHORT_COMMIT}"; fi
-      - save_cache:
-          key: cargo-docker-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
-          paths:
-            - /caches/parity-image.tar
+      # - run:
+      #     name: Save docker image layers for next build
+      #     command: |
+      #       export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)" ;
+      #       mkdir -p /caches;
+      #       if [ ! -f /caches/parity-image.tar ]; then docker save -o /caches/parity-image.tar "${FINAL_IMAGE}:${SHORT_COMMIT}"; fi
+      # - save_cache:
+      #     key: cargo-docker-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
+      #     paths:
+      #       - /caches/parity-image.tar
 
 workflows:
   version: 2
