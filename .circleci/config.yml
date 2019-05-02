@@ -21,7 +21,7 @@ jobs:
             sudo apt upgrade -y
             sudo apt install time build-essential libgflags-dev libsnappy-dev zlib1g-dev libbz2-dev \
             liblz4-dev libzstd-dev perl python libsnappy1v5 libudev-dev cmake libgflags-dev linux-headers-amd64 -y
-            RUST_BACKTRACE=1 ./test.sh
+            RUST_BACKTRACE=1 cargo test --package=rabbitmq
           no_output_timeout: 30m
   deploy_docker_image:
     <<: *defaults
