@@ -1,7 +1,7 @@
 version: 2
 defaults: &defaults
   working_directory: ~/parity
-  resource_class: large
+  resource_class: xlarge
   docker:
     - image: circleci/rust:latest
 
