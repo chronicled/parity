@@ -77,4 +77,4 @@ workflows:
             - test
           filters:
             branches:
-              only: chronicled-develop
+              only: blockchain-interface
