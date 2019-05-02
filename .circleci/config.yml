@@ -26,7 +26,7 @@ jobs:
   deploy_docker_image:
     <<: *defaults
     docker:
-      - image: docker/compose:1.23.0
+      - image: circleci/rust:latest
     environment:
       FINAL_IMAGE: registry.dev.infra.chronicled.com/blockchain-interface
     steps:
