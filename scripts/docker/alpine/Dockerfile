@@ -11,7 +11,8 @@ RUN apk add --no-cache \
   linux-headers \
   perl \
   rust \
-  openssl
+  openssl \
+  git
 
 WORKDIR /parity
 COPY . /parity
