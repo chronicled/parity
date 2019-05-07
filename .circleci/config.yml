@@ -54,9 +54,10 @@ jobs:
             sudo apt upgrade -y
             sudo apt install time build-essential libgflags-dev libsnappy-dev zlib1g-dev libbz2-dev \
             liblz4-dev libzstd-dev perl python libsnappy1v5 libudev-dev cmake libgflags-dev linux-headers-amd64 \
-            libusb-dev -y
-            cargo build --release --target x86_64-unknown-linux-gnu --verbose
-            strip target/x86_64-unknown-linux-gnu/release/parity
+            musl musl-dev musl-tools libusb-dev -y
+            rustup target add x86_64-unknown-linux-musl
+            cargo build --release --target x86_64-unknown-linux-musl --verbose
+            strip target/x86_64-unknown-linux-musl/release/parity
             docker build --rm=false -f scripts/docker/alpine/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" . --cache-from="${PREV_IMAGE}";
       - run:
           name: Deploy to dockerhub
@@ -64,17 +65,6 @@ jobs:
             SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             docker push "${FINAL_IMAGE}:${SHORT_COMMIT}";
             docker logout;
-      # - run:
-      #     name: Save docker image layers for next build
-      #     command: |
-      #       export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)" ;
-      #       mkdir -p /caches;
-      #       if [ ! -f /caches/parity-image.tar ]; then docker save -o /caches/parity-image.tar "${FINAL_IMAGE}:${SHORT_COMMIT}"; fi
-      # - save_cache:
-      #     key: cargo-docker-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
-      #     paths:
-      #       - /caches/parity-image.tar
-
 workflows:
   version: 2
   blockchain-interface-workflow:
@@ -85,4 +75,4 @@ workflows:
             - test
           filters:
             branches:
-              only: blockchain-interface
+              only: ms/use-musl
