@@ -67,9 +67,9 @@ extern crate rlp;
 extern crate stats;
 extern crate vm;
 
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android"))]
-extern crate hardware_wallet;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android")))]
+extern crate hardware_wallet;
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android"))]
 extern crate fake_hardware_wallet as hardware_wallet;
 
 #[macro_use]
