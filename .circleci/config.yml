@@ -31,18 +31,11 @@ jobs:
     steps:
       - checkout
       - setup_remote_docker:
-          docker_layer_caching: true
-      - restore_cache:
-          key: cargo-docker-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
-          paths:
-            - /caches/parity-image.tar
+          docker_layer_caching: false
+          version: 18.09.3
       - run:
           name: Setup Docker credentials
           command: mkdir -p ~/.docker; echo -n "${REGISTRY_AUTH}" > ~/.docker/config.json;
-      - run:
-          name: Load Docker image layer cache
-          command: |
-            if [ -f /caches/parity-image.tar ]; then docker load -i /caches/parity-image.tar; fi
       - run:
           name: Build docker image
           command: |
