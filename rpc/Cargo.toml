@@ -62,7 +62,7 @@ eip-712 = { path = "../util/EIP-712" }
 stats = { path = "../util/stats" }
 vm = { path = "../ethcore/vm" }
 
-[target.'cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android"))'.dependencies]
+[target.'cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android")))'.dependencies]
 hardware-wallet = { path = "../accounts/hw" }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android"))'.dependencies]
