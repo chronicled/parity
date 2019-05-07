@@ -56,6 +56,7 @@ jobs:
             liblz4-dev libzstd-dev perl python libsnappy1v5 libudev-dev cmake libgflags-dev linux-headers-amd64 \
             musl musl-dev musl-tools libusb-dev -y
             rustup target add x86_64-unknown-linux-musl
+            sudo ln -s /usr/bin/musl-gcc /usr/bin/musl-g++
             cargo build --release --target x86_64-unknown-linux-musl --verbose
             strip target/x86_64-unknown-linux-musl/release/parity
             docker build --rm=false -f scripts/docker/alpine/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" . --cache-from="${PREV_IMAGE}";
