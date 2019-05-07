@@ -10,7 +10,8 @@ RUN apk add --no-cache \
   eudev-dev \
   linux-headers \
   perl \
-  rust
+  rust \
+  openssl
 
 WORKDIR /parity
 COPY . /parity
