@@ -50,16 +50,8 @@ jobs:
             export PREV_IMAGE=`docker images "${FINAL_IMAGE}" --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
             mkdir -p ~/.ssh/
             /usr/bin/ssh-keyscan -H github.com >> ~/.ssh/known_hosts
-            sudo apt update
-            sudo apt upgrade -y
-            sudo apt install time build-essential libgflags-dev libsnappy-dev zlib1g-dev libbz2-dev \
-            liblz4-dev libzstd-dev perl python libsnappy1v5 libudev-dev cmake libgflags-dev linux-headers-amd64 \
-            musl musl-dev musl-tools libusb-dev -y
-            rustup target add x86_64-unknown-linux-musl
-            sudo ln -s /usr/bin/musl-gcc /usr/bin/musl-g++
-            cargo build --release --target x86_64-unknown-linux-musl --verbose
-            strip target/x86_64-unknown-linux-musl/release/parity
-            docker build --rm=false -f scripts/docker/alpine/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" . --cache-from="${PREV_IMAGE}";
+            ssh-add -L
+            docker build --rm=false -f scripts/docker/alpine/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" . --cache-from="${PREV_IMAGE}" --ssh;
       - run:
           name: Deploy to dockerhub
           command: |
@@ -72,8 +64,6 @@ workflows:
     jobs:
       - test
       - deploy_docker_image:
-          requires:
-            - test
           filters:
             branches:
               only: ms/use-musl
