@@ -11,7 +11,7 @@ jobs:
     steps:
       - add_ssh_keys:
           fingerprints:
-          - "04:e7:5d:5c:10:ed:0f:71:23:1b:de:5e:b2:36:5e:f8"
+          - "26:cf:cd:da:23:08:97:7b:d4:6a:f4:da:cc:e6:69:21"
       - checkout
       - setup_remote_docker:
           docker_layer_caching: true
@@ -34,7 +34,7 @@ jobs:
     steps:
       - add_ssh_keys:
           fingerprints:
-          - "04:e7:5d:5c:10:ed:0f:71:23:1b:de:5e:b2:36:5e:f8"
+          - "26:cf:cd:da:23:08:97:7b:d4:6a:f4:da:cc:e6:69:21"
       - checkout
       - setup_remote_docker:
           docker_layer_caching: false
@@ -47,8 +47,6 @@ jobs:
           command: |
             export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             export PREV_IMAGE=`docker images "${FINAL_IMAGE}" --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
-            mkdir -p ~/.ssh/
-            /usr/bin/ssh-keyscan -H github.com >> ~/.ssh/known_hosts
             ssh-add -L
             docker build --rm=false -f scripts/docker/alpine/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" . --cache-from="${PREV_IMAGE}" --ssh default;
       - run:
