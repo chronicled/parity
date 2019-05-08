@@ -8,3 +8,4 @@
 [submodule "rabbitmq/rabbitmq_adaptor"]
 	path = rabbitmq/rabbitmq_adaptor
 	url = git@github.com:chronicled/rabbitmq-adaptor.git
+	branch = develop
