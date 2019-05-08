@@ -3,4 +3,4 @@
 rustflags = ["-Ctarget-feature=+crt-static"]
 
 [net]
-git-fetch-with-cli = true
+git-fetch-with-cli = false
