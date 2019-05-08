@@ -12,7 +12,8 @@ RUN apk add --no-cache \
   perl \
   rust \
   openssl \
-  git
+  git \
+  openssh-client
 
 WORKDIR /parity
 COPY . /parity
