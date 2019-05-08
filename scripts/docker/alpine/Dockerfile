@@ -13,12 +13,12 @@ RUN apk add --no-cache \
   rust \
   openssl \
   git \
-  openssh-client
+  openssh-client \
+  bash
 
 WORKDIR /parity
 COPY . /parity
-RUN eval "$(ssh-agent)"
-RUN ssh-add -L
+RUN eval $(ssh-agent -s)
 RUN cargo build --release --target x86_64-alpine-linux-musl --verbose
 RUN strip target/x86_64-alpine-linux-musl/release/parity
 
