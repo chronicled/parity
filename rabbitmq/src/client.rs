@@ -51,10 +51,11 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 							if let Err(e) = sender_handler.send_transaction(&payload) {
 								error!(target: LOG_TARGET, "failed to send transaction: {:?}", e);
 							}
-							true
+							Ok(())
 						}),
 					)
 					.map_err(|error| panic!("Error in consumer {:?}", error))
+					.map(|_| ())
 			);
 
 			// Send new block messages
@@ -62,9 +63,10 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 				tokio::spawn(
 				rabbit.clone()
 				.publish(
-					NEW_BLOCK_EXCHANGE_NAME,
-					NEW_BLOCK_ROUTING_KEY,
+					NEW_BLOCK_EXCHANGE_NAME.to_string(),
+					NEW_BLOCK_ROUTING_KEY.to_string(),
 					message,
+					vec![],
 				)
 				.map(|_| ())
 				.map_err(|_| ()));
