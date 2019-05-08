@@ -19,7 +19,6 @@ RUN apk add --no-cache \
 WORKDIR /parity
 COPY . /parity
 RUN eval $(ssh-agent -s)
-RUN ssh-add -L
 RUN cargo build --release --target x86_64-alpine-linux-musl --verbose
 RUN strip target/x86_64-alpine-linux-musl/release/parity
 
