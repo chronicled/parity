@@ -13,6 +13,11 @@ jobs:
           fingerprints:
           - "26:cf:cd:da:23:08:97:7b:d4:6a:f4:da:cc:e6:69:21"
       - checkout
+      - run:
+          name: "Pull Submodules"
+          command: |
+            git submodule init
+            git submodule update --remote
       - setup_remote_docker:
           docker_layer_caching: true
       - run:
@@ -36,6 +41,11 @@ jobs:
           fingerprints:
           - "26:cf:cd:da:23:08:97:7b:d4:6a:f4:da:cc:e6:69:21"
       - checkout
+      - run:
+          name: "Pull Submodules"
+          command: |
+            git submodule init
+            git submodule update --remote
       - setup_remote_docker:
           docker_layer_caching: false
           version: 18.09.3
