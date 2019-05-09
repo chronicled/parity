@@ -5,3 +5,7 @@
 [submodule "ethcore/res/wasm-tests"]
 	path = ethcore/res/wasm-tests
 	url = https://github.com/paritytech/wasm-tests
+[submodule "rabbitmq/rabbitmq_adaptor"]
+	path = rabbitmq/rabbitmq_adaptor
+	url = git@github.com:chronicled/rabbitmq-adaptor.git
+	branch = develop

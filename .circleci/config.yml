@@ -9,7 +9,15 @@ jobs:
   test:
     <<: *defaults
     steps:
+      - add_ssh_keys:
+          fingerprints:
+          - "26:cf:cd:da:23:08:97:7b:d4:6a:f4:da:cc:e6:69:21"
       - checkout
+      - run:
+          name: "Pull Submodules"
+          command: |
+            git submodule init
+            git submodule update --remote
       - setup_remote_docker:
           docker_layer_caching: true
       - run:
@@ -29,52 +37,34 @@ jobs:
     environment:
       FINAL_IMAGE: registry.dev.infra.chronicled.com/blockchain-interface
     steps:
+      - add_ssh_keys:
+          fingerprints:
+          - "26:cf:cd:da:23:08:97:7b:d4:6a:f4:da:cc:e6:69:21"
       - checkout
+      - run:
+          name: "Pull Submodules"
+          command: |
+            git submodule init
+            git submodule update --remote
       - setup_remote_docker:
-          docker_layer_caching: true
-      - restore_cache:
-          key: cargo-docker-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
-          paths:
-            - /caches/parity-image.tar
+          docker_layer_caching: false
+          version: 18.09.3
       - run:
           name: Setup Docker credentials
           command: mkdir -p ~/.docker; echo -n "${REGISTRY_AUTH}" > ~/.docker/config.json;
-      - run:
-          name: Load Docker image layer cache
-          command: |
-            if [ -f /caches/parity-image.tar ]; then docker load -i /caches/parity-image.tar; fi
       - run:
           name: Build docker image
           command: |
             export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             export PREV_IMAGE=`docker images "${FINAL_IMAGE}" --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
-            mkdir -p ~/.ssh/
-            /usr/bin/ssh-keyscan -H github.com >> ~/.ssh/known_hosts
-            sudo apt update
-            sudo apt upgrade -y
-            sudo apt install time build-essential libgflags-dev libsnappy-dev zlib1g-dev libbz2-dev \
-            liblz4-dev libzstd-dev perl python libsnappy1v5 libudev-dev cmake libgflags-dev linux-headers-amd64 \
-            libusb-dev -y
-            cargo build --release --target x86_64-unknown-linux-gnu --verbose
-            strip target/x86_64-unknown-linux-gnu/release/parity
-            docker build --rm=false -f scripts/docker/alpine/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" . --cache-from="${PREV_IMAGE}";
+            ssh-add -L
+            docker build -c 1024 --rm=false -f scripts/docker/debian/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" . --cache-from="${PREV_IMAGE}" --ssh default;
       - run:
           name: Deploy to dockerhub
           command: |
             SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             docker push "${FINAL_IMAGE}:${SHORT_COMMIT}";
             docker logout;
-      # - run:
-      #     name: Save docker image layers for next build
-      #     command: |
-      #       export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)" ;
-      #       mkdir -p /caches;
-      #       if [ ! -f /caches/parity-image.tar ]; then docker save -o /caches/parity-image.tar "${FINAL_IMAGE}:${SHORT_COMMIT}"; fi
-      # - save_cache:
-      #     key: cargo-docker-cache-{{ arch }}-{{ checksum "Cargo.lock" }}
-      #     paths:
-      #       - /caches/parity-image.tar
-
 workflows:
   version: 2
   blockchain-interface-workflow:
