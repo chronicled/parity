@@ -1,39 +1,23 @@
-FROM alpine:edge AS builder
-
+FROM rust AS builder
 # show backtraces
 ENV RUST_BACKTRACE 1
 
-RUN apk add --no-cache \
-  build-base \
-  cargo \
-  cmake \
-  eudev-dev \
-  linux-headers \
-  perl \
-  rust \
-  openssl \
-  git \
-  openssh-client \
-  bash
+RUN apt update -y && \
+	apt upgrade -y && \
+	apt install -y perl yasm libudev-dev linux-headers-amd64 gcc g++ pkg-config file make cmake
 
 WORKDIR /parity
 COPY . /parity
-RUN eval $(ssh-agent -s)
-RUN cargo build --release --target x86_64-alpine-linux-musl --verbose
-RUN strip target/x86_64-alpine-linux-musl/release/parity
+RUN cargo build --release --verbose
+RUN strip target/release/parity
 
-FROM alpine:edge
+FROM debian:stretch
 
 # show backtraces
 ENV RUST_BACKTRACE 1
 
-RUN apk add --no-cache \
-  libstdc++ \
-  eudev-libs \
-  libgcc
-
-RUN addgroup -g 1000 parity \
-  && adduser -u 1000 -G parity -s /bin/sh -D parity
+RUN addgroup --gid 1000 parity && \
+	adduser --uid 1000 --ingroup parity --shell /bin/sh parity
 
 USER parity
 
@@ -42,6 +26,6 @@ EXPOSE 8080 8545 8180
 WORKDIR /home/parity
 
 RUN mkdir -p /home/parity/.local/share/io.parity.ethereum/
-COPY --chown=parity:parity --from=builder /parity/target/x86_64-alpine-linux-musl/release/parity ./
+COPY --from=builder /parity/target/release/parity ./
 
 ENTRYPOINT ["./parity"]
