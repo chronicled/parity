@@ -58,7 +58,7 @@ jobs:
             export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             export PREV_IMAGE=`docker images "${FINAL_IMAGE}" --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
             ssh-add -L
-            docker build -c 1024 --rm=false -f scripts/docker/alpine/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" . --cache-from="${PREV_IMAGE}" --ssh default;
+            docker build -c 1024 --rm=false -f scripts/docker/debian/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" . --cache-from="${PREV_IMAGE}" --ssh default;
       - run:
           name: Deploy to dockerhub
           command: |
