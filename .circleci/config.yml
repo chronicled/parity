@@ -69,7 +69,10 @@ workflows:
   version: 2
   blockchain-interface-workflow:
     jobs:
+      - test
       - deploy_docker_image:
+          requires:
+            - test
           filters:
             branches:
-              only: ms/use-musl
+              only: blockchain-interface
