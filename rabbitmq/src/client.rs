@@ -8,11 +8,12 @@ use futures::future::{lazy};
 use handler::{Handler, Sender};
 use parity_runtime::Executor;
 use rabbitmq_adaptor::{RabbitConnection, RabbitExt};
+use serde::Deserialize;
 use serde_json;
 use std::sync::Arc;
 use tokio::prelude::*;
 use tokio::sync::mpsc::{channel, Sender as ChannelSender};
-use types::{Block, BlockTransactions, RichBlock, Transaction, Log};
+use types::{Block, BlockTransactions, Bytes, RichBlock, Transaction, Log};
 
 use DEFAULT_CHANNEL_SIZE;
 use DEFAULT_REPLY_QUEUE;
@@ -33,6 +34,11 @@ pub struct PubSubClient<C> {
 	pub sender: ChannelSender<Vec<u8>>,
 }
 
+#[derive(Deserialize)]
+struct TransactionMessage {
+	pub data: Bytes,
+}
+
 impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 	pub fn new(client: Arc<C>, miner: Arc<miner::Miner>, executor: Executor, config: RabbitMqConfig) -> Result<Self, Error> {
 		let (sender, receiver) = channel::<Vec<u8>>(DEFAULT_CHANNEL_SIZE);
@@ -46,9 +52,10 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 					.register_consumer(
 						PUBLIC_TRANSACTION_QUEUE.to_string(),
 						enclose!(() move |message| {
-							let payload = std::str::from_utf8(&message.data).unwrap();
+							let payload = std::str::from_utf8(&message.data)?;
 							debug!(target: LOG_TARGET, "got message: {:?}", payload);
-							if let Err(e) = sender_handler.send_transaction(&payload) {
+							let transaction_message: TransactionMessage = serde_json::from_str(payload)?;
+							if let Err(e) = sender_handler.send_transaction(transaction_message.data) {
 								error!(target: LOG_TARGET, "failed to send transaction: {:?}", e);
 							}
 							Ok(())
