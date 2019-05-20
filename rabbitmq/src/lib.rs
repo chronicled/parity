@@ -26,6 +26,7 @@ extern crate rlp;
 extern crate macros;
 
 pub mod client;
+mod common;
 pub mod handler;
 pub mod tests;
 mod types;

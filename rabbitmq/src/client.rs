@@ -1,18 +1,20 @@
 //! RabbitMQ ChainNotfiy implementation
 
+use common::try_spawn;
 use enclose::enclose;
 use ethcore::client::{BlockChainClient, BlockId, ChainNotify, ChainRouteType, NewBlocks};
 use ethcore::miner;
-use failure::Error;
-use futures::future::{lazy};
+use failure::{Error, ResultExt};
+use futures::future::lazy;
 use handler::{Handler, Sender};
 use parity_runtime::Executor;
 use rabbitmq_adaptor::{RabbitConnection, RabbitExt};
+use serde::Deserialize;
 use serde_json;
 use std::sync::Arc;
 use tokio::prelude::*;
 use tokio::sync::mpsc::{channel, Sender as ChannelSender};
-use types::{Block, BlockTransactions, RichBlock, Transaction, Log};
+use types::{Block, BlockTransactions, Bytes, Log, RichBlock, Transaction};
 
 use DEFAULT_CHANNEL_SIZE;
 use DEFAULT_REPLY_QUEUE;
@@ -33,52 +35,66 @@ pub struct PubSubClient<C> {
 	pub sender: ChannelSender<Vec<u8>>,
 }
 
+#[derive(Deserialize)]
+struct TransactionMessage {
+	pub data: Bytes,
+}
+
 impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
-	pub fn new(client: Arc<C>, miner: Arc<miner::Miner>, executor: Executor, config: RabbitMqConfig) -> Result<Self, Error> {
+	pub fn new(
+		client: Arc<C>,
+		miner: Arc<miner::Miner>,
+		executor: Executor,
+		config: RabbitMqConfig,
+	) -> Result<Self, Error> {
 		let (sender, receiver) = channel::<Vec<u8>>(DEFAULT_CHANNEL_SIZE);
 		let sender_handler = Box::new(Sender::new(client.clone(), miner.clone()));
 
 		executor.spawn(lazy(move || {
 			let rabbit = RabbitConnection::new(&config.hostname, config.port, DEFAULT_REPLY_QUEUE);
 			// Consume to public transaction messages
-			tokio::spawn(
-				rabbit.clone()
+			try_spawn(
+				rabbit
+					.clone()
 					.register_consumer(
 						PUBLIC_TRANSACTION_QUEUE.to_string(),
 						enclose!(() move |message| {
-							let payload = std::str::from_utf8(&message.data).unwrap();
+							let payload = std::str::from_utf8(&message.data)?;
 							debug!(target: LOG_TARGET, "got message: {:?}", payload);
-							if let Err(e) = sender_handler.send_transaction(&payload) {
-								error!(target: LOG_TARGET, "failed to send transaction: {:?}", e);
-							}
+							let transaction_message: TransactionMessage = serde_json::from_str(payload)
+								.context(format!("Couldn't parse public transaction: {}", payload.to_string()))?;
+							sender_handler.send_transaction(transaction_message.data)
+								.context(format!("Failed to send transaction"))?;
 							Ok(())
 						}),
 					)
-					.map_err(|error| panic!("Error in consumer {:?}", error))
-					.map(|_| ())
+					.map_err(Error::from)
+					.map(|_| ()),
 			);
 
 			// Send new block messages
-			receiver.for_each(enclose!((rabbit) move |message| {
-				tokio::spawn(
-				rabbit.clone()
-				.publish(
-					NEW_BLOCK_EXCHANGE_NAME.to_string(),
-					NEW_BLOCK_ROUTING_KEY.to_string(),
-					message,
-					vec![],
-				)
-				.map(|_| ())
-				.map_err(|_| ()));
-				Ok(())
-			}))
-			.map_err(|e| error!(target: LOG_TARGET, "failed to send message to channel: {:?}", e))
+			receiver
+				.for_each(enclose!((rabbit) move |message| {
+					try_spawn(
+					rabbit.clone()
+					.publish(
+						NEW_BLOCK_EXCHANGE_NAME.to_string(),
+						NEW_BLOCK_ROUTING_KEY.to_string(),
+						message,
+						vec![],
+					)
+					.map(|_| ()));
+					Ok(())
+				}))
+				.map_err(|e| {
+					error!(
+						target: LOG_TARGET,
+						"failed to send message to channel: {:?}", e
+					);
+				})
 		}));
 
-		Ok(Self {
-			client,
-			sender,
-		})
+		Ok(Self { client, sender })
 	}
 }
 
@@ -99,7 +115,9 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 			.map(|block| {
 				let hash = block.hash();
 				let header = block.decode_header();
-				let receipts =  self.client.localized_block_receipts(BlockId::Number(header.number()))
+				let receipts = self
+					.client
+					.localized_block_receipts(BlockId::Number(header.number()))
 					.expect("Receipts from the block");
 				let extra_info = self
 					.client
@@ -124,7 +142,11 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 						total_difficulty: None,
 						seal_fields: header.seal().into_iter().cloned().map(Into::into).collect(),
 						uncles: block.uncle_hashes().into_iter().map(Into::into).collect(),
-						logs: receipts.into_iter().flat_map(|receipt| receipt.logs).map(Log::from).collect(),
+						logs: receipts
+							.into_iter()
+							.flat_map(|receipt| receipt.logs)
+							.map(Log::from)
+							.collect(),
 						transactions: BlockTransactions::Full(
 							block
 								.view()
@@ -144,7 +166,11 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 		for ref rich_block in blocks {
 			let serialized_block = serde_json::to_string(&rich_block).unwrap();
 			info!(target: LOG_TARGET, "Serialized: {:?} ", serialized_block);
-			&self.sender.clone().try_send(serialized_block.into()).unwrap();
+			&self
+				.sender
+				.clone()
+				.try_send(serialized_block.into())
+				.unwrap();
 		}
 	}
 }

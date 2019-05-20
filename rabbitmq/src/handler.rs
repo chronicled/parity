@@ -7,6 +7,7 @@ use ethereum_types::H256;
 use hex;
 use rlp::Rlp;
 use common_types::transaction::{PendingTransaction, SignedTransaction};
+use types::Bytes;
 
 /// A Sender which uses references to a client and miner in order to send transactions
 #[derive(Debug)]
@@ -23,17 +24,15 @@ impl<C, M> Sender<C, M> {
 }
 
 pub trait Handler: Sync + Send {
-	fn send_transaction(&self, payload: &str) -> Result<H256, Error>;
+	fn send_transaction(&self, payload: Bytes) -> Result<H256, Error>;
 }
 
 impl<C: miner::BlockChainClient + BlockChainClient, M: MinerService> Handler for Sender<C, M> {
-	fn send_transaction(&self, payload: &str) -> Result<H256, Error> {
-		let decoded: &[u8] = &hex::decode(payload).context("Failed to decode transaction payload")?;
-		let signed_transaction = Rlp::new(decoded)
+	fn send_transaction(&self, raw: Bytes) -> Result<H256, Error> {
+		let signed_transaction = Rlp::new(&raw.into_vec())
 			.as_val()
 			.map_err(Error::from)
 			.and_then(|tx| SignedTransaction::new(tx).map_err(Error::from))?;
-
 		let pending_transaction: PendingTransaction = signed_transaction.into();
 		let hash = pending_transaction.transaction.hash();
 		self.miner
