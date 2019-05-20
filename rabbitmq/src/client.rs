@@ -1,5 +1,6 @@
 //! RabbitMQ ChainNotfiy implementation
 
+use common::try_spawn;
 use enclose::enclose;
 use ethcore::client::{BlockChainClient, BlockId, ChainNotify, ChainRouteType, NewBlocks};
 use ethcore::miner;
@@ -52,7 +53,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		executor.spawn(lazy(move || {
 			let rabbit = RabbitConnection::new(&config.hostname, config.port, DEFAULT_REPLY_QUEUE);
 			// Consume to public transaction messages
-			tokio::spawn(
+			try_spawn(
 				rabbit
 					.clone()
 					.register_consumer(
@@ -67,14 +68,14 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 							Ok(())
 						}),
 					)
-					.map_err(|error| panic!("Error in consumer {:?}", error))
+					.map_err(Error::from)
 					.map(|_| ()),
 			);
 
 			// Send new block messages
 			receiver
 				.for_each(enclose!((rabbit) move |message| {
-					tokio::spawn(
+					try_spawn(
 					rabbit.clone()
 					.publish(
 						NEW_BLOCK_EXCHANGE_NAME.to_string(),
@@ -82,15 +83,14 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 						message,
 						vec![],
 					)
-					.map(|_| ())
-					.map_err(|_| ()));
+					.map(|_| ()));
 					Ok(())
 				}))
 				.map_err(|e| {
 					error!(
 						target: LOG_TARGET,
 						"failed to send message to channel: {:?}", e
-					)
+					);
 				})
 		}));
 
