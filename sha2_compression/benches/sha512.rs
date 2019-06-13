@@ -2,6 +2,6 @@
 #![feature(test)]
 #[macro_use]
 extern crate crypto_tests;
-extern crate sha2;
+extern crate sha2_compression;
 
-bench_digest!(sha2::Sha512);
+bench_digest!(sha2_compression::Sha512);

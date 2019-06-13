@@ -76,10 +76,14 @@ serde = "1.0"
 serde_derive = "1.0"
 tempdir = {version="0.3", optional = true}
 regex = "1"
+sha2_compression = { path = "../sha2_compression" }
+ff = { path = "../../librustzcash/ff" }
+pairing = { path = "../../librustzcash/pairing" }
+bellman = { path = "../../librustzcash/bellman" }
+sapling-crypto = { path = "../../librustzcash/sapling-crypto" }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android"))'.dependencies]
 hardware-wallet = { path = "../hw" }
-sha2_compression = { path = "../sha2_compression" }
 chron_knapsack = { path = "../chron_knapsack" }
 
 [target.'cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android")))'.dependencies]

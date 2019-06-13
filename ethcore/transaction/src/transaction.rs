@@ -27,6 +27,22 @@ use heapsize::HeapSizeOf;
 use rlp::{self, RlpStream, Rlp, DecoderError, Encodable};
 use crypto::ed25519;
 
+use sapling_crypto::{
+    constants as sapling_constants,
+    jubjub,
+    pedersen_hash
+};
+use ff::{Field, PrimeField, PrimeFieldRepr, BitIterator};
+use self::jubjub::{
+    JubjubEngine,
+    JubjubParams,
+		FixedGenerators,
+		fs,
+		JubjubBls12,
+};
+use self::fs::{Fs, FsRepr};
+use pairing::bls12_381::Bls12;
+
 type Bytes = Vec<u8>;
 type BlockNumber = u64;
 
@@ -546,6 +562,8 @@ pub type ProofGroth16 = [u8; 134];
 
 const COINS_IN_CNT: usize = 2;
 const COINS_OUT_CNT: usize = 2;
+const PROOF_GROTH16BN128_LENGTH: usize = 134;
+const PROOF_GROTH16BLS381_LENGTH: usize = 192;
 
 /// Zero-knowledge origin transaction with the corresponding fields
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -590,7 +608,7 @@ impl ZkOriginTransaction {
 		}
 
 		let proof_index = 5 + COINS_IN_CNT + COINS_OUT_CNT - 1;
-		if rlp.at(proof_index)?.size() != 134 {
+		if rlp.at(proof_index)?.size() != PROOF_GROTH16BLS381_LENGTH {
 			return Err(DecoderError::Custom("Incorrect proof length"));
 		}
 		
@@ -686,6 +704,55 @@ impl ZkOriginTransaction {
 	pub fn verify_signature(&self, chain_id: Option<u64>) -> bool {
 		ed25519::verify(&self.get_unsigned_msg(chain_id), &self.eph_pk as &[u8], &self.sig as &[u8])
 	}
+
+	pub fn get_change_cm (&self, params: &JubjubBls12, value: &U256) -> [u8; 32] {
+		// Change value cannot exceed 64bits, since zko tx's total cost is 64bit 
+		let mut res = [0u8; 32];
+
+		println!("Value in: {:?}", value);
+		let mut value_bytes = [0u8; 32];
+		value.to_little_endian(&mut value_bytes);
+		println!("Value LE: {:?}", value_bytes);
+
+		let k_bytes: [u8; 32] = self.k.into();
+
+		let mut trapdoor_repr = FsRepr::default();
+		trapdoor_repr.read_be(&k_bytes[..]).expect("length is 32 bytes");
+		// TODO: pre-validation of k as Fs
+		let trapdoor = Fs::from_repr(trapdoor_repr).expect("Incorrect tranpdoor Fs representation");
+		
+		// Compute the Pedersen hash of the coin contents
+		let cm = pedersen_cm::<Bls12>(params, value_bytes[0..8].to_vec(), trapdoor);
+		cm.into_repr().write_be(&mut res[..]).expect("Should write Fr repr into bytes vector");
+		
+		res
+	}
+
+	// pub fn get_change_cm (&self, value: &U256) -> [u8; 32] {
+	// 	// Change value cannot exceed 64bits, since zko tx's total cost is 64bit 
+	// 	let mut change_bytes: [u8; 32] = [0; 32];
+	// 	value.to_big_endian(&mut change_bytes);
+
+	// 	return sha256_compress(&self.k, &change_bytes);
+	// }
+}
+
+pub fn pedersen_cm<'a, E: JubjubEngine> (params: &'a E::Params, contents: Vec<u8>, r: E::Fs) -> E::Fr {
+    // Compute the Pedersen hash of the coin contents
+    let hash = pedersen_hash::pedersen_hash::<E, _>(
+        pedersen_hash::Personalization::NoteCommitment,
+        contents.into_iter()
+                .flat_map(|byte| {
+                    (0..8).map(move |i| ((byte >> i) & 1) == 1)
+                }),
+        params
+    );
+
+    // Compute final commitment
+    params.generator(FixedGenerators::NoteCommitmentRandomness)
+        .mul(r, params)
+        .add(&hash, params)
+        .into_xy().0
 }
 
 impl HeapSizeOf for ZkOriginTransaction {

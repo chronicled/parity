@@ -18,7 +18,7 @@
 use std::cmp;
 use std::sync::Arc;
 use hash::keccak;
-use ethereum_types::*;//{H160, H256, U256, U512, Address};
+use ethereum_types::{H160, H256, U256, U512, Address};
 use bytes::{Bytes, BytesRef};
 use state::{Backend as StateBackend, State, Substate, CleanupMode};
 use error::ExecutionError;
@@ -35,7 +35,9 @@ use transaction::{Action, SignedTransaction, TypedTransaction, ZkOriginTransacti
 use crossbeam;
 pub use executed::{Executed, ExecutionResult};
 use ethabi::FunctionOutputDecoder;
-use sha2_compression::{sha256_compress};
+use ::sapling_crypto::jubjub::{
+		JubjubBls12,
+};
 
 use_contract!(zkotx_precompiled, "res/contracts/confidential_payments_native.json");
 
@@ -912,11 +914,7 @@ impl<'a, B: 'a + StateBackend> ExecutableTx<'a, B> for ZkOriginTransaction {
 		executive.state.add_balance(&ZKO_PRECOMPILED_ADDR, &refund_value, CleanupMode::NoEmpty)?;
 
 		if change != U256::zero() {
-			// Change value cannot exceed 64bits, since zko tx's total cost is 64bit 
-			let mut change_bytes: [u8; 32] = [0; 32];
-			change.to_big_endian(&mut change_bytes);
-
-			let cm = sha256_compress(&self.k, &change_bytes);
+			let cm = self.get_change_cm(&executive.ec_params, &change);
 			let (mint_data, decoder) = zkotx_precompiled::functions::mint::call(cm, self.k);
 			// Mint call should always succeed, otherwise it's a system's error
 			// TODO: verify edge-cases (e.g. accumulator is full)
@@ -1022,6 +1020,7 @@ pub struct Executive<'a, B: 'a> {
 	schedule: &'a Schedule,
 	depth: usize,
 	static_flag: bool,
+	ec_params: JubjubBls12,
 }
 
 impl<'a, B: 'a + StateBackend> Executive<'a, B> {
@@ -1034,6 +1033,7 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 			schedule: schedule,
 			depth: 0,
 			static_flag: false,
+			ec_params: JubjubBls12::new(),
 		}
 	}
 
@@ -1046,6 +1046,7 @@ impl<'a, B: 'a + StateBackend> Executive<'a, B> {
 			schedule: schedule,
 			depth: parent_depth + 1,
 			static_flag: static_flag,
+			ec_params: JubjubBls12::new(),
 		}
 	}
 
