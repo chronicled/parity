@@ -14,10 +14,10 @@ rlp = { version = "0.3.0", features = ["ethereum"] }
 unexpected = { path = "../../util/unexpected" }
 ethereum-types = "0.4"
 rust-crypto = "^0.2"
-ff = { path = "../../../librustzcash/ff" }
-bellman = { path = "../../../librustzcash/bellman" }
-pairing = { path = "../../../librustzcash/pairing" }
-sapling-crypto = { path = "../../../librustzcash/sapling-crypto" }
+ff = { git = "https://github.com/zcash/librustzcash/", rev = "d7ba3102948b1b144e24462dc36c37091dda6355" }
+pairing = { git = "https://github.com/zcash/librustzcash/", rev = "d7ba3102948b1b144e24462dc36c37091dda6355" }
+sapling-crypto = { git = "https://github.com/zcash/librustzcash/", rev = "d7ba3102948b1b144e24462dc36c37091dda6355" }
+bellman = { git = "https://github.com/zcash/librustzcash/", rev = "d7ba3102948b1b144e24462dc36c37091dda6355" }
 
 [dev-dependencies]
 rustc-hex= "1.0"

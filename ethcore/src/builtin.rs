@@ -41,7 +41,6 @@ use ::ff::{PrimeField, PrimeFieldRepr, BitIterator};
 use ::pairing::bls12_381::{Fr, FrRepr, Bls12};
 use ::sapling_crypto::{jubjub, pedersen_hash};
 use ::sapling_crypto::jubjub::JubjubParams;
-// use self::sapling_crypto::jubjub::fs::{FsRepr, Fs};
 use ::sapling_crypto::circuit::multipack;
 use self::jubjub::{JubjubEngine, JubjubBls12};
 use ::bellman::groth16::{

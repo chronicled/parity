@@ -26,13 +26,11 @@ use hash::keccak;
 use heapsize::HeapSizeOf;
 use rlp::{self, RlpStream, Rlp, DecoderError, Encodable};
 use crypto::ed25519;
-
 use sapling_crypto::{
-    constants as sapling_constants,
     jubjub,
     pedersen_hash
 };
-use ff::{Field, PrimeField, PrimeFieldRepr, BitIterator};
+use ff::{PrimeField, PrimeFieldRepr};
 use self::jubjub::{
     JubjubEngine,
     JubjubParams,

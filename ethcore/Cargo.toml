@@ -77,10 +77,10 @@ serde_derive = "1.0"
 tempdir = {version="0.3", optional = true}
 regex = "1"
 sha2_compression = { path = "../sha2_compression" }
-ff = { path = "../../librustzcash/ff" }
-pairing = { path = "../../librustzcash/pairing" }
-bellman = { path = "../../librustzcash/bellman" }
-sapling-crypto = { path = "../../librustzcash/sapling-crypto" }
+ff = { git = "https://github.com/zcash/librustzcash/", rev = "d7ba3102948b1b144e24462dc36c37091dda6355" }
+pairing = { git = "https://github.com/zcash/librustzcash/", rev = "d7ba3102948b1b144e24462dc36c37091dda6355" }
+sapling-crypto = { git = "https://github.com/zcash/librustzcash/", rev = "d7ba3102948b1b144e24462dc36c37091dda6355" }
+bellman = { git = "https://github.com/zcash/librustzcash/", rev = "d7ba3102948b1b144e24462dc36c37091dda6355" }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", target_os = "android"))'.dependencies]
 hardware-wallet = { path = "../hw" }
