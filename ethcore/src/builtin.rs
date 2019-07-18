@@ -44,9 +44,9 @@ use ::sapling_crypto::jubjub::JubjubParams;
 use ::sapling_crypto::circuit::multipack;
 use self::jubjub::{JubjubEngine, JubjubBls12};
 use ::bellman::groth16::{
-    Proof,
-    prepare_verifying_key,
-    verify_proof,
+		Proof,
+		prepare_verifying_key,
+		verify_proof,
 		VerifyingKey,
 };
 
@@ -424,7 +424,7 @@ impl Impl for ZkSnarkGroth16Bls12_381 {
 				// 	}).collect::<Result<Vec<_>, _>>()?.into_iter().flatten().collect();
 				
 				let bits_le = multipack::bytes_to_bits_le(&primary_bits[..]);
-    		let packed = multipack::compute_multipacking::<Bls12>(&bits_le[..]);
+				let packed = multipack::compute_multipacking::<Bls12>(&bits_le[..]);
 
 				let pvk = prepare_verifying_key(&vk);
 				let result = verify_proof(
@@ -540,22 +540,22 @@ impl<E: JubjubEngine> Impl for PedersenComm<E> where E::Params: Send + Sync {
 				let mut trapdoor_repr = <E::Fs as PrimeField>::Repr::default();
 				trapdoor_repr.read_be(trapdoor_raw.as_slice()).expect("length is 32 bytes");
 				let trapdoor = E::Fs::from_repr(trapdoor_repr).map_err(|_| "Incorrect tranpdoor Fs representation")?;
-        
-        // Compute the Pedersen hash of the coin contents
-        let hash = pedersen_hash::pedersen_hash::<E, _>(
-            personalization,
-            value_le.into_iter()
-                    .flat_map(|byte| {
-                    	(0..8).map(move |i| ((byte >> i) & 1u8) == 1u8)
-                    }),
-            &self.params
-        );
+				
+				// Compute the Pedersen hash of the coin contents
+				let hash = pedersen_hash::pedersen_hash::<E, _>(
+						personalization,
+						value_le.into_iter()
+										.flat_map(|byte| {
+											(0..8).map(move |i| ((byte >> i) & 1u8) == 1u8)
+										}),
+						&self.params
+				);
 
-        // Compute final commitment
-        let cm = &self.params.generator(jubjub::FixedGenerators::NoteCommitmentRandomness)
-              .mul(trapdoor, &self.params)
-              .add(&hash, &self.params)
-              .into_xy().0;
+				// Compute final commitment
+				let cm = &self.params.generator(jubjub::FixedGenerators::NoteCommitmentRandomness)
+							.mul(trapdoor, &self.params)
+							.add(&hash, &self.params)
+							.into_xy().0;
 
 				let mut result: Vec<u8> = vec![];
 				cm.into_repr().write_be(&mut result).expect("Should write hash into bytes");
@@ -901,7 +901,7 @@ mod tests {
 	use bytes::BytesRef;
 	use rustc_hex::FromHex;
 	use num::{BigUint, Zero, One};
-  use ethabi::Token;
+	use ethabi::Token;
 
 	#[test]
 	fn modexp_func() {

@@ -573,6 +573,10 @@ pub struct ZkOriginTransaction {
 	pub cm: [H256; COINS_OUT_CNT],
 	pub eph_pk: H256,
 	pub glue: H256,
+	// Todo: since k and ct (in addition to tx data) are the only things that are independent from proof
+	// they should not be counted for transaction uniqueness in a queue, since
+	// that would allow a cheap attack. Moreover proof itself can be cheaply 
+	// rerandomized.
 	pub k: H256,
 	pub proof: Bytes,
 	// Ciphertext
