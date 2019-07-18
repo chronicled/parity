@@ -398,8 +398,6 @@ impl Impl for ZkSnarkGroth16Bls12_381 {
 				Token::Bytes(ref primary_bits),
 				Token::Bytes(ref proof),
 			] => {
-
-				println!("VK {:?}", &vk);
 				let vk = VerifyingKey::<Bls12>::read(vk.as_slice())
 					.map_err(|_| Error::from("Cannot read VK"))?;
 					
@@ -415,13 +413,7 @@ impl Impl for ZkSnarkGroth16Bls12_381 {
 						},
 						_ => Err(Error::from("Not a bytes32")),
 					}
-				}).collect::<Result<_, _>>()?; // .map_err(|_| Error::from("Cannot read field element"))
-
-				// let primary_bits: Vec<_> = primary_bits.into_iter().cloned()
-				// 	.map(|token| match token {
-				// 		Token::FixedBytes(bytes32) => Ok(bytes32),
-				// 		_ => Err("Not a bytes32")
-				// 	}).collect::<Result<Vec<_>, _>>()?.into_iter().flatten().collect();
+				}).collect::<Result<_, _>>()?;
 				
 				let bits_le = multipack::bytes_to_bits_le(&primary_bits[..]);
 				let packed = multipack::compute_multipacking::<Bls12>(&bits_le[..]);
@@ -432,10 +424,6 @@ impl Impl for ZkSnarkGroth16Bls12_381 {
 					&proof,
 					&[&primary_field[..], &packed[..]].concat()[..]
 				).map_err(|_| Error::from("Cannot read field element"))?;
-				println!("Primary All {:?}", [&primary_field[..], &packed[..]].concat());
-				println!("Primary field {:?}", &primary_field);
-				println!("Primary bits {:?}", &primary_bits);
-				println!("VERIFYING PROOF {}", result);
 
 				if result {
 					output.write(31, &[1]);
@@ -563,13 +551,13 @@ impl<E: JubjubEngine> Impl for PedersenComm<E> where E::Params: Send + Sync {
 
 				Ok(())
 			},
-			_ => Err(Error("Incorrect input types, expected uint8, bytes32, bytes32")),
+			_ => Err(Error("Incorrect input types, expected uint8, bytes, bytes32")),
 		}
 	}
 }
 
 impl Impl for Knapsack {
-	/* knapsack(bytes param1, bytes param2)
+	/** knapsack(bytes param1, bytes param2)
 	 *	 Calculates the knapsack CRH of param1 and param2.
 	 *	 param1 is a 254-bit input, bit 0 is at the most significant position
 	 *	 param2 is concatenated to the 254 bits of param1 and contains bits 254 to 510
@@ -1467,13 +1455,13 @@ mod tests {
 
 		let left = [20, 57, 102, 236, 193, 168, 69, 108, 127, 122, 153, 30, 53, 133, 37, 122, 66, 233, 174, 232, 118, 58, 9, 121, 54, 59, 76, 193, 163, 33, 27, 239];
 		let right = [65, 16, 64, 54, 40, 169, 42, 229, 49, 113, 92, 112, 114, 121, 65, 246, 95, 143, 111, 215, 37, 17, 108, 60, 254, 76, 38, 220, 236, 125, 100, 253];
-		let result: [u8; 32] = [100, 98, 77, 206, 219, 123, 20, 61, 51, 246, 201, 32, 0, 66, 252, 151, 241, 133, 64, 30, 72, 207, 195, 141, 77, 71, 38, 13, 167, 160, 105, 194];
+		let expected: [u8; 32] = [100, 98, 77, 206, 219, 123, 20, 61, 51, 246, 201, 32, 0, 66, 252, 151, 241, 133, 64, 30, 72, 207, 195, 141, 77, 71, 38, 13, 167, 160, 105, 194];
 
 		let input = [&[0u8, 0, 0, 0], &personalization[..], &left, &right].concat();
 
 		let mut output = [0; 32];
 		hasher.execute(&input, &mut BytesRef::Fixed(&mut output[..])).expect("pedersen_hash should not fail");
-		assert_eq!(output, result);
+		assert_eq!(output, expected);
 	}
 
 	#[test]

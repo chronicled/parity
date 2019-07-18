@@ -560,6 +560,7 @@ pub type ProofGroth16 = [u8; 134];
 
 const COINS_IN_CNT: usize = 2;
 const COINS_OUT_CNT: usize = 2;
+#[allow(dead_code)]
 const PROOF_GROTH16BN128_LENGTH: usize = 134;
 const PROOF_GROTH16BLS381_LENGTH: usize = 192;
 
@@ -711,10 +712,8 @@ impl ZkOriginTransaction {
 		// Change value cannot exceed 64bits, since zko tx's total cost is 64bit 
 		let mut res = [0u8; 32];
 
-		println!("Value in: {:?}", value);
 		let mut value_bytes = [0u8; 32];
 		value.to_little_endian(&mut value_bytes);
-		println!("Value LE: {:?}", value_bytes);
 
 		let k_bytes: [u8; 32] = self.k.into();
 
