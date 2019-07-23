@@ -25,6 +25,9 @@ extern crate keccak_hash as hash;
 extern crate rlp;
 extern crate unexpected;
 extern crate crypto;
+extern crate pairing;
+extern crate ff;
+extern crate sapling_crypto;
 
 #[cfg(test)]
 extern crate rustc_hex;
