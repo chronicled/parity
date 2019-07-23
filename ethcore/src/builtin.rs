@@ -464,12 +464,12 @@ impl<E: JubjubEngine> Impl for PedersenHash<E> where E::Params: Send + Sync {
 			return Err(Error::from("Wrong number of inputs, expected 3"));
 		}
 
-		match (&tokens[0], &tokens[1], &tokens[2])	{
-			(
+		match tokens.as_slice()	{
+			&[
 				Token::Uint(ref personalization_uint256), 
 				Token::FixedBytes(ref left), 
 				Token::FixedBytes(ref right)
-			)	=> {
+			]	=> {
 				let personalization = get_personalization(personalization_uint256)?;
 
 				let mut left_fr = FrRepr::default();
