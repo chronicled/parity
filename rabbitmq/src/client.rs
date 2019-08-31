@@ -8,7 +8,7 @@ use failure::{Error, ResultExt};
 use futures::future::lazy;
 use handler::{Handler, Sender};
 use parity_runtime::Executor;
-use rabbitmq_adaptor::{RabbitConnection, RabbitExt};
+use rabbitmq_adaptor::{ConsumerResult, RabbitConnection, RabbitExt};
 use serde::Deserialize;
 use serde_json;
 use std::sync::Arc;
@@ -59,13 +59,20 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 					.register_consumer(
 						PUBLIC_TRANSACTION_QUEUE.to_string(),
 						enclose!(() move |message| {
-							let payload = std::str::from_utf8(&message.data)?;
-							debug!(target: LOG_TARGET, "got message: {:?}", payload);
-							let transaction_message: TransactionMessage = serde_json::from_str(payload)
-								.context(format!("Couldn't parse public transaction: {}", payload.to_string()))?;
-							sender_handler.send_transaction(transaction_message.data)
-								.context(format!("Failed to send transaction"))?;
-							Ok(())
+							Box::new(std::str::from_utf8(&message.data)
+								.map_err(Error::from)
+								.and_then(|payload| {
+									serde_json::from_str(payload)
+										.context("Could not deserialize AMQP message payload")
+										.map_err(Error::from)
+								})
+								.and_then(|transaction_message: TransactionMessage| {
+									sender_handler.send_transaction(transaction_message.data)
+										.context(format!("Failed to send transaction"))
+										.map_err(Error::from)
+								})
+								.into_future()
+								.map(|_| ConsumerResult::ACK))
 						}),
 					)
 					.map_err(Error::from)
