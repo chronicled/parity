@@ -4,11 +4,12 @@ use common::try_spawn;
 use enclose::enclose;
 use ethcore::client::{BlockChainClient, BlockId, ChainNotify, ChainRouteType, NewBlocks};
 use ethcore::miner;
-use failure::{Error, ResultExt};
-use futures::future::lazy;
+use ethereum_types::H256;
+use failure::{format_err, Error};
+use futures::future::{err, lazy};
 use handler::{Handler, Sender};
 use parity_runtime::Executor;
-use rabbitmq_adaptor::{ConsumerResult, RabbitConnection, RabbitExt};
+use rabbitmq_adaptor::{ConsumerResult, DeliveryExt, RabbitConnection, RabbitExt};
 use serde::Deserialize;
 use serde_json;
 use std::sync::Arc;
@@ -21,7 +22,10 @@ use DEFAULT_REPLY_QUEUE;
 use LOG_TARGET;
 use NEW_BLOCK_EXCHANGE_NAME;
 use NEW_BLOCK_ROUTING_KEY;
+use PROTOCOL_ID;
 use PUBLIC_TRANSACTION_QUEUE;
+use TX_ERROR_EXCHANGE_NAME;
+use TX_ERROR_ROUTING_KEY;
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct RabbitMqConfig {
@@ -38,6 +42,13 @@ pub struct PubSubClient<C> {
 #[derive(Deserialize)]
 struct TransactionMessage {
 	pub data: Bytes,
+	pub transaction_hash: H256,
+}
+
+#[derive(Serialize)]
+struct TransactionErrorMessage {
+	pub transaction_hash: H256,
+	pub error_message: String,
 }
 
 impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
@@ -58,21 +69,41 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 					.clone()
 					.register_consumer(
 						PUBLIC_TRANSACTION_QUEUE.to_string(),
-						enclose!(() move |message| {
-							Box::new(std::str::from_utf8(&message.data)
-								.map_err(Error::from)
-								.and_then(|payload| {
-									serde_json::from_str(payload)
-										.context("Could not deserialize AMQP message payload")
-										.map_err(Error::from)
-								})
-								.and_then(|transaction_message: TransactionMessage| {
-									sender_handler.send_transaction(transaction_message.data)
-										.context(format!("Failed to send transaction"))
-										.map_err(Error::from)
-								})
+						enclose!((rabbit) move |message| {
+							let protocol_id = message.get_header(PROTOCOL_ID);
+							if protocol_id.is_none() {
+								return Box::new(err(format_err!("Missing protocol-id header")));
+							}
+							let protocol_id = protocol_id.unwrap();
+							let payload = std::str::from_utf8(&message.data);
+							if payload.is_err() {
+								return Box::new(err(format_err!("Could not parse AMQP message")));
+							}
+							let payload = payload.unwrap();
+							let transaction_message = serde_json::from_str(payload);
+							if transaction_message.is_err() {
+								return Box::new(err(format_err!("Could not deserialize AMQP message payload")));
+							}
+							let transaction_message: TransactionMessage = transaction_message.unwrap();
+							let transaction_hash = transaction_message.transaction_hash;
+							Box::new(sender_handler.send_transaction(transaction_message.data)
+								.map(|_| ())
 								.into_future()
-								.map(|_| ConsumerResult::ACK))
+								.or_else(enclose!((rabbit) move |error| {
+									let tx_error = TransactionErrorMessage {
+										error_message: format!("{}", error),
+										transaction_hash,
+									};
+									let serialized_message = serde_json::to_string(&tx_error).unwrap();
+									rabbit.clone().publish(
+										TX_ERROR_EXCHANGE_NAME.to_string(),
+										TX_ERROR_ROUTING_KEY.to_string(),
+										serialized_message.into(),
+										vec![(PROTOCOL_ID.to_string(), protocol_id)],
+									).map(|_| ())
+								}))
+								.map(|_| ConsumerResult::ACK)
+							)
 						}),
 					)
 					.map_err(Error::from)
