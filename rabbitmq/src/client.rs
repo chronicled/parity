@@ -49,6 +49,13 @@ struct TransactionMessage {
 struct TransactionErrorMessage {
 	pub transaction_hash: H256,
 	pub error_message: String,
+	pub error_type: ErrorType,
+}
+
+#[derive(Serialize)]
+pub enum ErrorType {
+	LocalTransactionError,
+	TransactionRejected,
 }
 
 impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
@@ -91,8 +98,9 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 								.into_future()
 								.or_else(enclose!((rabbit) move |error| {
 									let tx_error = TransactionErrorMessage {
-										error_message: format!("{}", error),
 										transaction_hash,
+										error_message: format!("{}", error),
+										error_type: ErrorType::LocalTransactionError,
 									};
 									let serialized_message = serde_json::to_string(&tx_error).unwrap();
 									rabbit.clone().publish(
