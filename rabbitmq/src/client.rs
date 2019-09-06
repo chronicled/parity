@@ -22,7 +22,7 @@ use DEFAULT_REPLY_QUEUE;
 use LOG_TARGET;
 use NEW_BLOCK_EXCHANGE_NAME;
 use NEW_BLOCK_ROUTING_KEY;
-use PROTOCOL_ID;
+use OPERATION_ID;
 use PUBLIC_TRANSACTION_QUEUE;
 use TX_ERROR_EXCHANGE_NAME;
 use TX_ERROR_ROUTING_KEY;
@@ -77,11 +77,11 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 					.register_consumer(
 						PUBLIC_TRANSACTION_QUEUE.to_string(),
 						enclose!((rabbit) move |message| {
-							let protocol_id = message.get_header(PROTOCOL_ID);
-							if protocol_id.is_none() {
+							let operation_id = message.get_header(OPERATION_ID);
+							if operation_id.is_none() {
 								return Box::new(err(format_err!("Missing protocol-id header")));
 							}
-							let protocol_id = protocol_id.unwrap();
+							let operation_id = operation_id.unwrap();
 							let payload = std::str::from_utf8(&message.data);
 							if payload.is_err() {
 								return Box::new(err(format_err!("Could not parse AMQP message")));
@@ -107,7 +107,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 										TX_ERROR_EXCHANGE_NAME.to_string(),
 										TX_ERROR_ROUTING_KEY.to_string(),
 										serialized_message.into(),
-										vec![(PROTOCOL_ID.to_string(), protocol_id)],
+										vec![(OPERATION_ID.to_string(), operation_id)],
 									).map(|_| ())
 								}))
 								.map(|_| ConsumerResult::ACK)
