@@ -20,6 +20,7 @@ use types::{Block, BlockTransactions, Bytes, Log, RichBlock, Transaction};
 use DEFAULT_CHANNEL_SIZE;
 use DEFAULT_REPLY_QUEUE;
 use LOG_TARGET;
+use MESSAGE_ID;
 use NEW_BLOCK_EXCHANGE_NAME;
 use NEW_BLOCK_ROUTING_KEY;
 use OPERATION_ID;
@@ -77,7 +78,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 					.register_consumer(
 						PUBLIC_TRANSACTION_QUEUE.to_string(),
 						enclose!((rabbit) move |message| {
-							let operation_id = message.get_header(OPERATION_ID);
+							let operation_id = message.get_header(MESSAGE_ID);
 							if operation_id.is_none() {
 								return Box::new(err(format_err!("Missing protocol-id header")));
 							}

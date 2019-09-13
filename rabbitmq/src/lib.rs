@@ -34,6 +34,7 @@ mod types;
 const DEFAULT_CHANNEL_SIZE: usize = 100;
 const DEFAULT_REPLY_QUEUE: &'static str = "BlockchainInterface.default";
 const LOG_TARGET: &'static str = "rabbitmq";
+const MESSAGE_ID: &'static str = "message-id";
 const NEW_BLOCK_EXCHANGE_NAME: &'static str = "BlockchainInterface.Output";
 const NEW_BLOCK_ROUTING_KEY: &'static str = "interface.in.new-block";
 const OPERATION_ID: &'static str = "operation-id";
