@@ -1,4 +1,4 @@
-FROM rust AS builder
+FROM rust:1.36 AS builder
 # show backtraces
 ENV RUST_BACKTRACE 1
 
@@ -25,7 +25,11 @@ EXPOSE 8080 8545 8180
 
 WORKDIR /home/parity
 
+RUN mkdir -p /home/parity/keys/prv/
+RUN mkdir -p /home/parity/node0/network/
+RUN mkdir -p /home/parity/node0/keys/prv
 RUN mkdir -p /home/parity/.local/share/io.parity.ethereum/
+RUN chown -R parity:parity /home/parity
 COPY --from=builder /parity/target/release/parity ./
 
 ENTRYPOINT ["./parity"]
