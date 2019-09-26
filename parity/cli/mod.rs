@@ -557,13 +557,9 @@ usage! {
 			"Specify custom API set available via JSON-RPC over IPC using a comma-delimited list of API names. Possible names are: all, safe, web3, net, eth, pubsub, personal, signer, parity, parity_pubsub, parity_accounts, parity_set, traces, rpc, secretstore, shh, shh_pubsub. You can also disable a specific API by putting '-' in the front, example: all,-personal. 'safe' enables the following APIs: web3, net, eth, pubsub, parity, parity_pubsub, traces, rpc, shh, shh_pubsub",
 
 		["API and Console Options – RabbitMQ"]
-			ARG arg_rabbitmq_hostname: (String) = "localhost", or |c: &Config| c.rabbitmq.as_ref()?.hostname.clone(),
-			"--rabbitmq-hostname=[IP]",
-			"Specify the RabbitMQ server hostname",
-
-			ARG arg_rabbitmq_port: (u16) = 5672u16, or |c: &Config| c.rabbitmq.as_ref()?.port.clone(),
-			"--rabbitmq-port=[PORT]",
-			"Specify the RabbitMQ server port",
+			ARG arg_rabbitmq_uri: (String) = "amqp://localhost:5672", or |c: &Config| c.rabbitmq.as_ref()?.uri.clone(),
+			"--rabbitmq-uri=[URI]",
+			"Specify the RabbitMQ server uri",
 
 		["API and Console Options – IPFS"]
 			FLAG flag_ipfs_api: (bool) = false, or |c: &Config| c.ipfs.as_ref()?.enable.clone(),
@@ -1281,8 +1277,7 @@ struct Ipc {
 #[derive(Default, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RabbitMQ {
-	hostname: Option<String>,
-	port: Option<u16>,
+	uri: Option<String>,
 }
 
 #[derive(Default, Debug, PartialEq, Deserialize)]
@@ -1750,8 +1745,7 @@ mod tests {
 			arg_ipc_apis: "web3,eth,net,parity,parity_accounts,personal,traces,rpc,secretstore".into(),
 
 			// RabbitMQ
-			arg_rabbitmq_hostname: "localhost".into(),
-			arg_rabbitmq_port: 5672u16,
+			arg_rabbitmq_uri: "amqp://localhost:5672".into(),
 
 			// DAPPS
 			arg_dapps_path: Some("$HOME/.parity/dapps".into()),
@@ -2025,8 +2019,7 @@ mod tests {
 				apis: Some(vec!["rpc".into(), "eth".into()]),
 			}),
 			rabbitmq: Some(RabbitMQ {
-				hostname: Some("localhost".into()),
-				port: Some(5672),
+				uri: Some("amqp://localhost:5672".into()),
 			}),
 			dapps: Some(Dapps {
 				_legacy_disable: None,

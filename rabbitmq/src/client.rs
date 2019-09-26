@@ -9,7 +9,7 @@ use failure::{format_err, Error};
 use futures::future::{err, lazy};
 use handler::{Handler, Sender};
 use parity_runtime::Executor;
-use rabbitmq_adaptor::{ConsumerResult, DeliveryExt, RabbitConnection, RabbitExt};
+use rabbitmq_adaptor::{ConfigUri, ConsumerResult, DeliveryExt, RabbitConnection, RabbitExt};
 use serde::Deserialize;
 use serde_json;
 use std::sync::Arc;
@@ -29,8 +29,7 @@ use TX_ERROR_ROUTING_KEY;
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct RabbitMqConfig {
-	pub hostname: String,
-	pub port: u16,
+	pub uri: String,
 }
 
 /// Eth PubSub implementation.
@@ -67,9 +66,10 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 	) -> Result<Self, Error> {
 		let (sender, receiver) = channel::<Vec<u8>>(DEFAULT_CHANNEL_SIZE);
 		let sender_handler = Box::new(Sender::new(client.clone(), miner.clone()));
+		let config_uri: ConfigUri = serde_json::from_str(&config.uri)?;
 
 		executor.spawn(lazy(move || {
-			let rabbit = RabbitConnection::new(&config.hostname, config.port, DEFAULT_REPLY_QUEUE);
+			let rabbit = RabbitConnection::new(config_uri, None, DEFAULT_REPLY_QUEUE);
 			// Consume to public transaction messages
 			try_spawn(
 				rabbit
