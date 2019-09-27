@@ -756,8 +756,7 @@ impl Configuration {
 
 	fn rabbitmq_config(&self) -> RabbitMqConfig {
 		RabbitMqConfig {
-			hostname: self.args.arg_rabbitmq_hostname.clone(),
-			port: self.args.arg_rabbitmq_port
+			uri: self.args.arg_rabbitmq_uri.clone()
 		}
 	}
 
@@ -1423,8 +1422,7 @@ mod tests {
 			ipc_conf: Default::default(),
 			net_conf: default_network_config(),
 			rabbitmq_conf: RabbitMqConfig {
-				hostname: "localhost".into(),
-				port: 5672,
+				uri: "amqp://localhost:5672".into(),
 			},
 			network_id: None,
 			warp_sync: true,

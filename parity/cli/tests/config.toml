@@ -36,8 +36,7 @@ port = 8180
 apis = ["rpc", "eth"]
 
 [rabbitmq]
-hostname = "localhost"
-port = 5672
+uri = "amqp://localhost:5672"
 
 [dapps]
 port = 8080

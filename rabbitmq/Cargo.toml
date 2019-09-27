@@ -22,7 +22,7 @@ common-types = { path = "../ethcore/types" }
 ethereum-types = "0.4"
 futures-executor = "0.2.1"
 parity-runtime = { path = "../util/runtime" }
-rabbitmq_adaptor = {version = "0.3.1", registry = "chronicled-platform-v2"}
+rabbitmq_adaptor = {version = "0.3.3", registry = "chronicled-platform-v2"}
 rlp = { version = "0.3.0", features = ["ethereum"] }
 
 [dev-dependencies]
