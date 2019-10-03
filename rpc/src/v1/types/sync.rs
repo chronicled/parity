@@ -14,10 +14,12 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
+use network::client_version::ClientVersion;
 use std::collections::BTreeMap;
+
+use ethereum_types::{U256, H512};
 use sync::{self, PeerInfo as SyncPeerInfo, TransactionStats as SyncTransactionStats};
 use serde::{Serialize, Serializer};
-use v1::types::{U256, H512};
 
 /// Sync info
 #[derive(Default, Debug, Serialize, PartialEq)]
@@ -54,7 +56,7 @@ pub struct PeerInfo {
 	/// Public node id
 	pub id: Option<String>,
 	/// Node client ID
-	pub name: String,
+	pub name: ClientVersion,
 	/// Capabilities
 	pub caps: Vec<String>,
 	/// Network information
@@ -118,7 +120,7 @@ impl From<sync::PipProtocolInfo> for PipProtocolInfo {
 	fn from(info: sync::PipProtocolInfo) -> Self {
 		PipProtocolInfo {
 			version: info.version,
-			difficulty: info.difficulty.into(),
+			difficulty: info.difficulty,
 			head: format!("{:x}", info.head),
 		}
 	}
@@ -177,7 +179,7 @@ impl From<SyncTransactionStats> for TransactionStats {
 			first_seen: s.first_seen,
 			propagated_to: s.propagated_to
 				.into_iter()
-				.map(|(id, count)| (id.into(), count))
+				.map(|(id, count)| (id, count))
 				.collect(),
 		}
 	}

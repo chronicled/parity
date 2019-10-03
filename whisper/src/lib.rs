@@ -17,6 +17,8 @@
 //! Whisper P2P messaging system as a DevP2P subprotocol, with RPC and Rust
 //! interface.
 
+#![cfg_attr(feature = "time_checked_add", feature(time_checked_add))]
+
 extern crate byteorder;
 extern crate parity_crypto as crypto;
 extern crate ethcore_network as network;
@@ -34,6 +36,7 @@ extern crate smallvec;
 extern crate tiny_keccak;
 
 extern crate jsonrpc_core;
+extern crate jsonrpc_derive;
 extern crate jsonrpc_pubsub;
 
 #[macro_use]
@@ -43,10 +46,10 @@ extern crate bitflags;
 extern crate log;
 
 #[macro_use]
-extern crate jsonrpc_macros;
-
-#[macro_use]
 extern crate serde_derive;
+
+#[cfg(not(time_checked_add))]
+extern crate time_utils;
 
 #[cfg(test)]
 extern crate serde_json;

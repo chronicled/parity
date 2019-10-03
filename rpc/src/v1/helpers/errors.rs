@@ -18,7 +18,6 @@
 
 use std::fmt;
 
-use ethcore::account_provider::SignError as AccountError;
 use ethcore::error::{Error as EthcoreError, ErrorKind, CallError};
 use ethcore::client::BlockId;
 use jsonrpc_core::{futures, Result as RpcResult, Error, ErrorCode, Value};
@@ -30,6 +29,7 @@ use light::on_demand::error::{Error as OnDemandError, ErrorKind as OnDemandError
 use ethcore::client::BlockChainClient;
 use types::blockchain_info::BlockChainInfo;
 use v1::types::BlockNumber;
+use v1::impls::EthClientOptions;
 
 mod codes {
 	// NOTE [ToDr] Codes from [-32099, -32000]
@@ -44,7 +44,9 @@ mod codes {
 	pub const EXECUTION_ERROR: i64 = -32015;
 	pub const EXCEPTION_ERROR: i64 = -32016;
 	pub const DATABASE_ERROR: i64 = -32017;
+	#[cfg(any(test, feature = "accounts"))]
 	pub const ACCOUNT_LOCKED: i64 = -32020;
+	#[cfg(any(test, feature = "accounts"))]
 	pub const PASSWORD_INVALID: i64 = -32021;
 	pub const ACCOUNT_ERROR: i64 = -32023;
 	pub const PRIVATE_ERROR: i64 = -32024;
@@ -58,6 +60,7 @@ mod codes {
 	pub const NO_PEERS: i64 = -32066;
 	pub const DEPRECATED: i64 = -32070;
 	pub const EXPERIMENTAL_RPC: i64 = -32071;
+	pub const CANNOT_RESTART: i64 = -32080;
 }
 
 pub fn unimplemented(details: Option<String>) -> Error {
@@ -124,6 +127,14 @@ pub fn account<T: fmt::Debug>(error: &str, details: T) -> Error {
 	}
 }
 
+pub fn cannot_restart() -> Error {
+	Error {
+		code: ErrorCode::ServerError(codes::CANNOT_RESTART),
+		message: "Parity could not be restarted. This feature is disabled in development mode and if the binary name isn't parity.".into(),
+		data: None,
+	}
+}
+
 /// Internal error signifying a logic error in code.
 /// Should not be used when function can just fail
 /// because of invalid parameters or incomplete node state.
@@ -163,11 +174,11 @@ pub fn state_corrupt() -> Error {
 	internal("State corrupt", "")
 }
 
-pub fn exceptional() -> Error {
+pub fn exceptional<T: fmt::Display>(data: T) -> Error {
 	Error {
 		code: ErrorCode::ServerError(codes::EXCEPTION_ERROR),
 		message: "The execution failed due to an exception.".into(),
-		data: None,
+		data: Some(Value::String(data.to_string())),
 	}
 }
 
@@ -211,18 +222,34 @@ pub fn cannot_submit_work(err: EthcoreError) -> Error {
 	}
 }
 
-pub fn unavailable_block() -> Error {
-	Error {
-		code: ErrorCode::ServerError(codes::UNSUPPORTED_REQUEST),
-		message: "Ancient block sync is still in progress".into(),
-		data: None,
+pub fn unavailable_block(no_ancient_block: bool, by_hash: bool) -> Error {
+	if no_ancient_block {
+		Error {
+			code: ErrorCode::ServerError(codes::UNSUPPORTED_REQUEST),
+			message: "Looks like you disabled ancient block download, unfortunately the information you're \
+			trying to fetch doesn't exist in the db and is probably in the ancient blocks.".into(),
+			data: None,
+		}
+	} else if by_hash {
+		Error {
+			code: ErrorCode::ServerError(codes::UNSUPPORTED_REQUEST),
+			message: "Block information is incomplete while ancient block sync is still in progress, before \
+					it's finished we can't determine the existence of requested item.".into(),
+			data: None,
+		}
+	} else {
+		Error {
+			code: ErrorCode::ServerError(codes::UNSUPPORTED_REQUEST),
+			message: "Requested block number is in a range that is not available yet, because the ancient block sync is still in progress.".into(),
+			data: None,
+		}
 	}
 }
 
 pub fn check_block_number_existence<'a, T, C>(
 	client: &'a C,
 	num: BlockNumber,
-	allow_missing_blocks: bool,
+	options: EthClientOptions,
 ) ->
 	impl Fn(Option<T>) -> RpcResult<Option<T>> + 'a
 	where C: BlockChainClient,
@@ -232,8 +259,8 @@ pub fn check_block_number_existence<'a, T, C>(
 			if let BlockNumber::Num(block_number) = num {
 				// tried to fetch block number and got nothing even though the block number is
 				// less than the latest block number
-				if block_number < client.chain_info().best_block_number && !allow_missing_blocks {
-					return Err(unavailable_block());
+				if block_number < client.chain_info().best_block_number && !options.allow_missing_blocks {
+					return Err(unavailable_block(options.no_ancient_blocks, false));
 				}
 			}
 		}
@@ -243,22 +270,17 @@ pub fn check_block_number_existence<'a, T, C>(
 
 pub fn check_block_gap<'a, T, C>(
 	client: &'a C,
-	allow_missing_blocks: bool,
+	options: EthClientOptions,
 ) -> impl Fn(Option<T>) -> RpcResult<Option<T>> + 'a
 	where C: BlockChainClient,
 {
 	move |response| {
-		if response.is_none() && !allow_missing_blocks {
+		if response.is_none() && !options.allow_missing_blocks {
 			let BlockChainInfo { ancient_block_hash, .. } = client.chain_info();
 			// block information was requested, but unfortunately we couldn't find it and there
 			// are gaps in the database ethcore/src/blockchain/blockchain.rs
 			if ancient_block_hash.is_some() {
-				return Err(Error {
-					code: ErrorCode::ServerError(codes::UNSUPPORTED_REQUEST),
-					message: "Block information is incomplete while ancient block sync is still in progress, before \
-					it's finished we can't determine the existence of requested item.".into(),
-					data: None,
-				})
+				return Err(unavailable_block(options.no_ancient_blocks, true))
 			}
 		}
 		Ok(response)
@@ -337,14 +359,7 @@ pub fn fetch<T: fmt::Debug>(error: T) -> Error {
 	}
 }
 
-pub fn signing(error: AccountError) -> Error {
-	Error {
-		code: ErrorCode::ServerError(codes::ACCOUNT_LOCKED),
-		message: "Your account is locked. Unlock the account via CLI, personal_unlockAccount or use Trusted Signer.".into(),
-		data: Some(Value::String(format!("{:?}", error))),
-	}
-}
-
+#[cfg(any(test, feature = "accounts"))]
 pub fn invalid_call_data<T: fmt::Display>(error: T) -> Error {
 	Error {
 		code: ErrorCode::ServerError(codes::ENCODING_ERROR),
@@ -353,7 +368,17 @@ pub fn invalid_call_data<T: fmt::Display>(error: T) -> Error {
 	}
 }
 
-pub fn password(error: AccountError) -> Error {
+#[cfg(any(test, feature = "accounts"))]
+pub fn signing(error: ::accounts::SignError) -> Error {
+	Error {
+		code: ErrorCode::ServerError(codes::ACCOUNT_LOCKED),
+		message: "Your account is locked. Unlock the account via CLI, personal_unlockAccount or use Trusted Signer.".into(),
+		data: Some(Value::String(format!("{:?}", error))),
+	}
+}
+
+#[cfg(any(test, feature = "accounts"))]
+pub fn password(error: ::accounts::SignError) -> Error {
 	Error {
 		code: ErrorCode::ServerError(codes::PASSWORD_INVALID),
 		message: "Account password is invalid or account does not exist.".into(),
@@ -383,8 +408,11 @@ pub fn transaction_message(error: &TransactionError) -> String {
 	match *error {
 		AlreadyImported => "Transaction with the same hash was already imported.".into(),
 		Old => "Transaction nonce is too low. Try incrementing the nonce.".into(),
-		TooCheapToReplace => {
-			"Transaction gas price is too low. There is another transaction with same nonce in the queue. Try increasing the gas price or incrementing the nonce.".into()
+		TooCheapToReplace { prev, new } => {
+			format!("Transaction gas price {} is too low. There is another transaction with same nonce in the queue{}. Try increasing the gas price or incrementing the nonce.",
+					new.map(|gas| format!("{}wei", gas)).unwrap_or("supplied".into()),
+					prev.map(|gas| format!(" with gas price: {}wei", gas)).unwrap_or("".into())
+			)
 		}
 		LimitReached => {
 			"There are too many transactions in the queue. Your transaction was dropped due to limit. Try increasing the fee.".into()
@@ -454,7 +482,7 @@ pub fn call(error: CallError) -> Error {
 	match error {
 		CallError::StatePruned => state_pruned(),
 		CallError::StateCorrupt => state_corrupt(),
-		CallError::Exceptional => exceptional(),
+		CallError::Exceptional(e) => exceptional(e),
 		CallError::Execution(e) => execution(e),
 		CallError::TransactionNotFound => internal("{}, this should not be the case with eth_call, most likely a bug.", CallError::TransactionNotFound),
 	}

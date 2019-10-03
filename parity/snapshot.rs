@@ -21,7 +21,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hash::keccak;
-use ethcore::account_provider::AccountProvider;
 use ethcore::snapshot::{Progress, RestorationStatus, SnapshotConfiguration, SnapshotService as SS};
 use ethcore::snapshot::io::{SnapshotReader, PackedReader, PackedWriter};
 use ethcore::snapshot::service::Service as SnapshotService;
@@ -199,8 +198,9 @@ impl SnapshotCommand {
 			// TODO [ToDr] don't use test miner here
 			// (actually don't require miner at all)
 			Arc::new(Miner::new_for_tests(&spec, None)),
-			Arc::new(AccountProvider::transient_provider()),
+			Arc::new(ethcore_private_tx::DummySigner),
 			Box::new(ethcore_private_tx::NoopEncryptor),
+			Default::default(),
 			Default::default(),
 		).map_err(|e| format!("Client service error: {:?}", e))?;
 
@@ -261,7 +261,7 @@ impl SnapshotCommand {
 				let cur_size = p.size();
 				if cur_size != last_size {
 					last_size = cur_size;
-					let bytes = ::informant::format_bytes(p.size());
+					let bytes = ::informant::format_bytes(cur_size as usize);
 					info!("Snapshot: {} accounts {} blocks {}", p.accounts(), p.blocks(), bytes);
 				}
 

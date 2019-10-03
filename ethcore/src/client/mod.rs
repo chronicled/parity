@@ -30,7 +30,7 @@ mod trace;
 pub use self::client::*;
 pub use self::config::{Mode, ClientConfig, DatabaseCompactionProfile, BlockChainConfig, VMType};
 #[cfg(any(test, feature = "test-helpers"))]
-pub use self::evm_test_client::{EvmTestClient, EvmTestError, TransactResult};
+pub use self::evm_test_client::{EvmTestClient, EvmTestError, TransactErr, TransactSuccess};
 pub use self::io_message::ClientIoMessage;
 #[cfg(any(test, feature = "test-helpers"))]
 pub use self::test_client::{TestBlockChainClient, EachBlockWith};
@@ -38,6 +38,7 @@ pub use self::chain_notify::{ChainNotify, NewBlocks, ChainRoute, ChainRouteType,
 pub use self::traits::{
     Nonce, Balance, ChainInfo, BlockInfo, ReopenBlock, PrepareOpenBlock, TransactionInfo, ScheduleInfo, ImportSealedBlock, BroadcastProposalBlock, ImportBlock,
     StateOrBlock, StateClient, Call, EngineInfo, AccountData, BlockChain, BlockProducer, SealedBlockImporter, BadBlocks,
+	BlockChainReset
 };
 pub use state::StateInfo;
 pub use self::traits::{BlockChainClient, EngineClient, ProvingBlockChainClient, IoClient};
@@ -53,7 +54,7 @@ pub use vm::{LastHashes, EnvInfo};
 pub use error::TransactionImportError;
 pub use verification::VerifierType;
 
-mod traits;
+pub mod traits;
 
 mod chain_notify;
 mod private_notify;

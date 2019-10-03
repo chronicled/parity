@@ -25,7 +25,7 @@ use byteorder::{LittleEndian, ByteOrder};
 use db::COL_ACCOUNT_BLOOM;
 use ethereum_types::{H256, Address};
 use hash::keccak;
-use hashdb::HashDB;
+use hash_db::HashDB;
 use journaldb::JournalDB;
 use keccak_hasher::KeccakHasher;
 use kvdb::{KeyValueDB, DBTransaction, DBValue};
@@ -313,13 +313,13 @@ impl StateDB {
 	}
 
 	/// Conversion method to interpret self as `HashDB` reference
-	pub fn as_hashdb(&self) -> &HashDB<KeccakHasher, DBValue> {
-		self.db.as_hashdb()
+	pub fn as_hash_db(&self) -> &HashDB<KeccakHasher, DBValue> {
+		self.db.as_hash_db()
 	}
 
 	/// Conversion method to interpret self as mutable `HashDB` reference
-	pub fn as_hashdb_mut(&mut self) -> &mut HashDB<KeccakHasher, DBValue> {
-		self.db.as_hashdb_mut()
+	pub fn as_hash_db_mut(&mut self) -> &mut HashDB<KeccakHasher, DBValue> {
+		self.db.as_hash_db_mut()
 	}
 
 	/// Clone the database.
@@ -379,14 +379,7 @@ impl StateDB {
 
 	/// Check if the account can be returned from cache by matching current block parent hash against canonical
 	/// state and filtering out account modified in later blocks.
-	fn is_allowed(addr: &Address, parent_hash: &Option<H256>, modifications: &VecDeque<BlockChanges>) -> bool {
-		let mut parent = match *parent_hash {
-			None => {
-				trace!("Cache lookup skipped for {:?}: no parent hash", addr);
-				return false;
-			}
-			Some(ref parent) => parent,
-		};
+	fn is_allowed(addr: &Address, parent_hash: &H256, modifications: &VecDeque<BlockChanges>) -> bool {
 		if modifications.is_empty() {
 			return true;
 		}
@@ -395,6 +388,7 @@ impl StateDB {
 		// We search for our parent in that list first and then for
 		// all its parent until we hit the canonical block,
 		// checking against all the intermediate modifications.
+		let mut parent = parent_hash;
 		for m in modifications {
 			if &m.hash == parent {
 				if m.is_canon {
@@ -413,10 +407,10 @@ impl StateDB {
 }
 
 impl state::Backend for StateDB {
-	fn as_hashdb(&self) -> &HashDB<KeccakHasher, DBValue> { self.db.as_hashdb() }
+	fn as_hash_db(&self) -> &HashDB<KeccakHasher, DBValue> { self.db.as_hash_db() }
 
-	fn as_hashdb_mut(&mut self) -> &mut HashDB<KeccakHasher, DBValue> {
-		self.db.as_hashdb_mut()
+	fn as_hash_db_mut(&mut self) -> &mut HashDB<KeccakHasher, DBValue> {
+		self.db.as_hash_db_mut()
 	}
 
 	fn add_to_account_cache(&mut self, addr: Address, data: Option<Account>, modified: bool) {
@@ -434,20 +428,25 @@ impl state::Backend for StateDB {
 	}
 
 	fn get_cached_account(&self, addr: &Address) -> Option<Option<Account>> {
-		let mut cache = self.account_cache.lock();
-		if !Self::is_allowed(addr, &self.parent_hash, &cache.modifications) {
-			return None;
-		}
-		cache.accounts.get_mut(addr).map(|a| a.as_ref().map(|a| a.clone_basic()))
+		self.parent_hash.as_ref().and_then(|parent_hash| {
+			let mut cache = self.account_cache.lock();
+			if !Self::is_allowed(addr, parent_hash, &cache.modifications) {
+				return None;
+			}
+			cache.accounts.get_mut(addr).map(|a| a.as_ref().map(|a| a.clone_basic()))
+		})
 	}
 
 	fn get_cached<F, U>(&self, a: &Address, f: F) -> Option<U>
-		where F: FnOnce(Option<&mut Account>) -> U {
-		let mut cache = self.account_cache.lock();
-		if !Self::is_allowed(a, &self.parent_hash, &cache.modifications) {
-			return None;
-		}
-		cache.accounts.get_mut(a).map(|c| f(c.as_mut()))
+		where F: FnOnce(Option<&mut Account>) -> U
+	{
+		self.parent_hash.as_ref().and_then(|parent_hash| {
+			let mut cache = self.account_cache.lock();
+			if !Self::is_allowed(a, parent_hash, &cache.modifications) {
+				return None;
+			}
+			cache.accounts.get_mut(a).map(|c| f(c.as_mut()))
+		})
 	}
 
 	fn get_cached_code(&self, hash: &H256) -> Option<Arc<Vec<u8>>> {

@@ -360,7 +360,7 @@ pub trait BlockChainClient : Sync + Send + AccountData + BlockChain + CallContra
 	fn spec_name(&self) -> String;
 
 	/// Set the chain via a spec name.
-	fn set_spec_name(&self, spec_name: String);
+	fn set_spec_name(&self, spec_name: String) -> Result<(), ()>;
 
 	/// Disable the client from importing blocks. This cannot be undone in this session and indicates
 	/// that a subsystem has reason to believe this executable incapable of syncing the chain.
@@ -470,4 +470,10 @@ pub trait ProvingBlockChainClient: BlockChainClient {
 
 	/// Get an epoch change signal by block hash.
 	fn epoch_signal(&self, hash: H256) -> Option<Vec<u8>>;
+}
+
+/// resets the blockchain
+pub trait BlockChainReset {
+	/// reset to best_block - n
+	fn reset(&self, num: u32) -> Result<(), String>;
 }

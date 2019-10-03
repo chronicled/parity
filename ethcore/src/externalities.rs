@@ -117,7 +117,7 @@ impl<'a, T: 'a, V: 'a, B: 'a> Ext for Externalities<'a, T, V, B>
 {
 	fn initial_storage_at(&self, key: &H256) -> vm::Result<H256> {
 		if self.state.is_base_storage_root_unchanged(&self.origin_info.address)? {
-			self.state.checkpoint_storage_at(0, &self.origin_info.address, key).map(|v| v.unwrap_or(H256::zero())).map_err(Into::into)
+			self.state.checkpoint_storage_at(0, &self.origin_info.address, key).map(|v| v.unwrap_or_default()).map_err(Into::into)
 		} else {
 			warn!(target: "externalities", "Detected existing account {:#x} where a forced contract creation happened.", self.origin_info.address);
 			Ok(H256::zero())
@@ -314,7 +314,11 @@ impl<'a, T: 'a, V: 'a, B: 'a> Ext for Externalities<'a, T, V, B>
 	}
 
 	fn extcodehash(&self, address: &Address) -> vm::Result<Option<H256>> {
-		Ok(self.state.code_hash(address)?)
+		if self.state.exists_and_not_null(address)? {
+			Ok(self.state.code_hash(address)?)
+		} else {
+			Ok(None)
+		}
 	}
 
 	fn extcodesize(&self, address: &Address) -> vm::Result<Option<usize>> {
@@ -395,6 +399,10 @@ impl<'a, T: 'a, V: 'a, B: 'a> Ext for Externalities<'a, T, V, B>
 		self.env_info
 	}
 
+	fn chain_id(&self) -> u64 {
+		self.machine.params().chain_id
+	}
+
 	fn depth(&self) -> usize {
 		self.depth
 	}
@@ -413,6 +421,10 @@ impl<'a, T: 'a, V: 'a, B: 'a> Ext for Externalities<'a, T, V, B>
 
 	fn trace_prepare_execute(&mut self, pc: usize, instruction: u8, gas_cost: U256, mem_written: Option<(usize, usize)>, store_written: Option<(U256, U256)>) {
 		self.vm_tracer.trace_prepare_execute(pc, instruction, gas_cost, mem_written, store_written)
+	}
+
+	fn trace_failed(&mut self) {
+		self.vm_tracer.trace_failed();
 	}
 
 	fn trace_executed(&mut self, gas_used: U256, stack_push: &[U256], mem: &[u8]) {

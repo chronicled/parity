@@ -24,7 +24,7 @@ use types::basic_account::BasicAccount;
 use snapshot::account;
 use snapshot::{chunk_state, Error as SnapshotError, Progress, StateRebuilder, SNAPSHOT_SUBPARTS};
 use snapshot::io::{PackedReader, PackedWriter, SnapshotReader, SnapshotWriter};
-use super::helpers::{compare_dbs, StateProducer};
+use super::helpers::StateProducer;
 
 use error::{Error, ErrorKind};
 
@@ -32,15 +32,15 @@ use rand::{XorShiftRng, SeedableRng};
 use ethereum_types::H256;
 use journaldb::{self, Algorithm};
 use kvdb_rocksdb::{Database, DatabaseConfig};
-use memorydb::MemoryDB;
 use parking_lot::Mutex;
 use tempdir::TempDir;
 
 #[test]
 fn snap_and_restore() {
+	use hash_db::HashDB;
 	let mut producer = StateProducer::new();
 	let mut rng = XorShiftRng::from_seed([1, 2, 3, 4]);
-	let mut old_db = MemoryDB::new();
+	let mut old_db = journaldb::new_memory_db();
 	let db_cfg = DatabaseConfig::with_columns(::db::NUM_COLUMNS);
 
 	for _ in 0..150 {
@@ -55,7 +55,7 @@ fn snap_and_restore() {
 
 	let mut state_hashes = Vec::new();
 	for part in 0..SNAPSHOT_SUBPARTS {
-		let mut hashes = chunk_state(&old_db, &state_root, &writer, &Progress::default(), Some(part)).unwrap();
+		let mut hashes = chunk_state(&old_db, &state_root, &writer, &Progress::default(), Some(part), 0).unwrap();
 		state_hashes.append(&mut hashes);
 	}
 
@@ -91,8 +91,11 @@ fn snap_and_restore() {
 
 	let new_db = journaldb::new(db, Algorithm::OverlayRecent, ::db::COL_STATE);
 	assert_eq!(new_db.earliest_era(), Some(1000));
+	let keys = old_db.keys();
 
-	compare_dbs(&old_db, new_db.as_hashdb());
+	for key in keys.keys() {
+		assert_eq!(old_db.get(&key).unwrap(), new_db.as_hash_db().get(&key).unwrap());
+	}
 }
 
 #[test]
@@ -100,7 +103,7 @@ fn get_code_from_prev_chunk() {
 	use std::collections::HashSet;
 	use rlp::RlpStream;
 	use ethereum_types::{H256, U256};
-	use hashdb::HashDB;
+	use hash_db::HashDB;
 
 	use account_db::{AccountDBMut, AccountDB};
 
@@ -121,10 +124,10 @@ fn get_code_from_prev_chunk() {
 	let acc: BasicAccount = ::rlp::decode(&thin_rlp).expect("error decoding basic account");
 
 	let mut make_chunk = |acc, hash| {
-		let mut db = MemoryDB::new();
+		let mut db = journaldb::new_memory_db();
 		AccountDBMut::from_hash(&mut db, hash).insert(&code[..]);
-
-		let fat_rlp = account::to_fat_rlps(&hash, &acc, &AccountDB::from_hash(&db, hash), &mut used_code, usize::max_value(), usize::max_value()).unwrap();
+		let p = Progress::default();
+		let fat_rlp = account::to_fat_rlps(&hash, &acc, &AccountDB::from_hash(&db, hash), &mut used_code, usize::max_value(), usize::max_value(), &p).unwrap();
 		let mut stream = RlpStream::new_list(1);
 		stream.append_raw(&fat_rlp[0], 1);
 		stream.out()
@@ -155,7 +158,7 @@ fn get_code_from_prev_chunk() {
 fn checks_flag() {
 	let mut producer = StateProducer::new();
 	let mut rng = XorShiftRng::from_seed([5, 6, 7, 8]);
-	let mut old_db = MemoryDB::new();
+	let mut old_db = journaldb::new_memory_db();
 	let db_cfg = DatabaseConfig::with_columns(::db::NUM_COLUMNS);
 
 	for _ in 0..10 {
@@ -168,13 +171,13 @@ fn checks_flag() {
 	let state_root = producer.state_root();
 	let writer = Mutex::new(PackedWriter::new(&snap_file).unwrap());
 
-	let state_hashes = chunk_state(&old_db, &state_root, &writer, &Progress::default(), None).unwrap();
+	let state_hashes = chunk_state(&old_db, &state_root, &writer, &Progress::default(), None, 0).unwrap();
 
 	writer.into_inner().finish(::snapshot::ManifestData {
 		version: 2,
-		state_hashes: state_hashes,
+		state_hashes,
 		block_hashes: Vec::new(),
-		state_root: state_root,
+		state_root,
 		block_number: 0,
 		block_hash: H256::default(),
 	}).unwrap();
