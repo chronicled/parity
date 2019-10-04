@@ -25,6 +25,7 @@ use vm::{self, ActionParams, ActionValue, Ext};
 use vm::tests::{FakeExt, FakeCall, FakeCallType, test_finalize};
 use factory::Factory;
 use vmtype::VMType;
+use hex_literal::hex;
 
 evm_test!{test_add: test_add_int}
 fn test_add(factory: super::Factory) {
@@ -108,6 +109,32 @@ fn test_origin(factory: super::Factory) {
 	assert_store(&ext, 0, "000000000000000000000000cd1722f2947def4cf144679da39c4c32bdc35681");
 }
 
+evm_test!{test_selfbalance: test_selfbalance_int}
+fn test_selfbalance(factory: super::Factory) {
+	let own_addr = Address::from_str("1337000000000000000000000000000000000000").unwrap();
+	// 47       SELFBALANCE
+	// 60 ff    PUSH ff
+	// 55       SSTORE
+	let code = hex!("47 60 ff 55").to_vec();
+
+	let mut params = ActionParams::default();
+	params.address = own_addr.clone();
+	params.gas = U256::from(100_000);
+	params.code = Some(Arc::new(code));
+	let mut ext = FakeExt::new_istanbul();
+	ext.balances = {
+		let mut x = HashMap::new();
+		x.insert(own_addr, U256::from(1_025)); // 0x401
+		x
+	};
+	let gas_left = {
+		let vm = factory.create(params, ext.schedule(), ext.depth());
+		test_finalize(vm.exec(&mut ext).ok().unwrap()).unwrap()
+	};
+	assert_eq!(gas_left, U256::from(79_992)); // TODO[dvdplm]: do the sums here, SELFBALANCE-5 + PUSH1-3 + ONEBYTE-4 + SSTORE-?? = 100_000 - 79_992
+	assert_store(&ext, 0xff, "0000000000000000000000000000000000000000000000000000000000000401");
+}
+
 evm_test!{test_sender: test_sender_int}
 fn test_sender(factory: super::Factory) {
 	let address = Address::from_str("0f572e5295c57f15886f9b263e2f6d2d6c7b5ec6").unwrap();
@@ -128,6 +155,27 @@ fn test_sender(factory: super::Factory) {
 
 	assert_eq!(gas_left, U256::from(79_995));
 	assert_store(&ext, 0, "000000000000000000000000cd1722f2947def4cf144679da39c4c32bdc35681");
+}
+
+evm_test!{test_chain_id: test_chain_id_int}
+fn test_chain_id(factory: super::Factory) {
+	// 46       CHAINID
+	// 60 00    PUSH 0
+	// 55       SSTORE
+	let code = hex!("46 60 00 55").to_vec();
+
+	let mut params = ActionParams::default();
+	params.gas = U256::from(100_000);
+	params.code = Some(Arc::new(code));
+	let mut ext = FakeExt::new_istanbul().with_chain_id(9);
+
+	let gas_left = {
+		let vm = factory.create(params, ext.schedule(), ext.depth());
+		test_finalize(vm.exec(&mut ext).ok().unwrap()).unwrap()
+	};
+
+	assert_eq!(gas_left, U256::from(79_995));
+	assert_store(&ext, 0, "0000000000000000000000000000000000000000000000000000000000000009");
 }
 
 evm_test!{test_extcodecopy: test_extcodecopy_int}
@@ -262,7 +310,6 @@ fn test_calldataload(factory: super::Factory) {
 
 	assert_eq!(gas_left, U256::from(79_991));
 	assert_store(&ext, 0, "23ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff23");
-
 }
 
 evm_test!{test_author: test_author_int}

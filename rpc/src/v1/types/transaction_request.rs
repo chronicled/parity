@@ -16,7 +16,8 @@
 
 //! `TransactionRequest` type
 
-use v1::types::{Bytes, H160, U256, TransactionCondition};
+use ethereum_types::{H160, U256};
+use v1::types::{Bytes, TransactionCondition};
 use v1::helpers;
 use ansi_term::Colour;
 
@@ -57,13 +58,12 @@ pub fn format_ether(i: U256) -> String {
 	} else {
 		string.insert(idx as usize, '.');
 	}
-	String::from(string.trim_right_matches('0')
-		.trim_right_matches('.'))
+	String::from(string.trim_end_matches('0').trim_end_matches('.'))
 }
 
 impl fmt::Display for TransactionRequest {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		let eth = self.value.unwrap_or(U256::from(0));
+		let eth = self.value.unwrap_or_default();
 		match self.to {
 			Some(ref to) => write!(
 				f,
@@ -106,14 +106,14 @@ impl From<helpers::TransactionRequest> for TransactionRequest {
 impl From<helpers::FilledTransactionRequest> for TransactionRequest {
 	fn from(r: helpers::FilledTransactionRequest) -> Self {
 		TransactionRequest {
-			from: Some(r.from.into()),
-			to: r.to.map(Into::into),
-			gas_price: Some(r.gas_price.into()),
-			gas: Some(r.gas.into()),
-			value: Some(r.value.into()),
+			from: Some(r.from),
+			to: r.to,
+			gas_price: Some(r.gas_price),
+			gas: Some(r.gas),
+			value: Some(r.value),
 			data: Some(r.data.into()),
-			nonce: r.nonce.map(Into::into),
-			condition: r.condition.map(Into::into),
+			nonce: r.nonce,
+			condition: r.condition,
 		}
 	}
 }
@@ -138,7 +138,8 @@ mod tests {
 	use std::str::FromStr;
 	use rustc_hex::FromHex;
 	use serde_json;
-	use v1::types::{U256, H160, TransactionCondition};
+	use v1::types::TransactionCondition;
+	use ethereum_types::{H160, U256};
 	use super::*;
 
 	#[test]

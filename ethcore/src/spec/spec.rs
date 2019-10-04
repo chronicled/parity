@@ -25,7 +25,6 @@ use bytes::Bytes;
 use ethereum_types::{H256, Bloom, U256, Address};
 use ethjson;
 use hash::{KECCAK_NULL_RLP, keccak};
-use memorydb::MemoryDB;
 use parking_lot::RwLock;
 use rlp::{Rlp, RlpStream};
 use rustc_hex::{FromHex, ToHex};
@@ -36,7 +35,7 @@ use vm::{EnvInfo, CallType, ActionValue, ActionParams, ParamsType};
 
 use builtin::Builtin;
 use engines::{
-	EthEngine, NullEngine, InstantSeal, InstantSealParams, BasicAuthority,
+	EthEngine, NullEngine, InstantSeal, InstantSealParams, BasicAuthority, Clique,
 	AuthorityRound, DEFAULT_BLOCKHASH_CONTRACT
 };
 use error::Error;
@@ -66,7 +65,7 @@ fn fmt_err<F: ::std::fmt::Display>(f: F) -> String {
 /// we define a "bugfix" hard fork as any hard fork which
 /// you would put on-by-default in a new chain.
 #[derive(Debug, PartialEq, Default)]
-#[cfg_attr(test, derive(Clone))]
+#[cfg_attr(any(test, feature = "test-helpers"), derive(Clone))]
 pub struct CommonParams {
 	/// Account start nonce.
 	pub account_start_nonce: U256,
@@ -100,9 +99,9 @@ pub struct CommonParams {
 	pub validate_receipts_transition: BlockNumber,
 	/// Validate transaction chain id.
 	pub validate_chain_id_transition: BlockNumber,
-	/// Number of first block where EIP-140 (Metropolis: REVERT opcode) rules begin.
+	/// Number of first block where EIP-140 rules begin.
 	pub eip140_transition: BlockNumber,
-	/// Number of first block where EIP-210 (Metropolis: BLOCKHASH changes) rules begin.
+	/// Number of first block where EIP-210 rules begin.
 	pub eip210_transition: BlockNumber,
 	/// EIP-210 Blockhash contract address.
 	pub eip210_contract_address: Address,
@@ -110,8 +109,7 @@ pub struct CommonParams {
 	pub eip210_contract_code: Bytes,
 	/// Gas allocated for EIP-210 blockhash update.
 	pub eip210_contract_gas: U256,
-	/// Number of first block where EIP-211 (Metropolis: RETURNDATASIZE/RETURNDATACOPY) rules
-	/// begin.
+	/// Number of first block where EIP-211 rules begin.
 	pub eip211_transition: BlockNumber,
 	/// Number of first block where EIP-214 rules begin.
 	pub eip214_transition: BlockNumber,
@@ -123,8 +121,18 @@ pub struct CommonParams {
 	pub eip1283_transition: BlockNumber,
 	/// Number of first block where EIP-1283 rules end.
 	pub eip1283_disable_transition: BlockNumber,
+	/// Number of first block where EIP-1283 rules re-enabled.
+	pub eip1283_reenable_transition: BlockNumber,
 	/// Number of first block where EIP-1014 rules begin.
 	pub eip1014_transition: BlockNumber,
+	/// Number of first block where EIP-1706 rules begin.
+	pub eip1706_transition: BlockNumber,
+	/// Number of first block where EIP-1344 rules begin: https://github.com/ethereum/EIPs/blob/master/EIPS/eip-1344.md
+	pub eip1344_transition: BlockNumber,
+	/// Number of first block where EIP-1884 rules begin:https://github.com/ethereum/EIPs/blob/master/EIPS/eip-1884.md
+	pub eip1884_transition: BlockNumber,
+	/// Number of first block where EIP-2028 rules begin.
+	pub eip2028_transition: BlockNumber,
 	/// Number of first block where dust cleanup rules (EIP-168 and EIP169) begin.
 	pub dust_protection_transition: BlockNumber,
 	/// Nonce cap increase per block. Nonce cap is only checked if dust protection is enabled.
@@ -191,7 +199,22 @@ impl CommonParams {
 		schedule.have_return_data = block_number >= self.eip211_transition;
 		schedule.have_bitwise_shifting = block_number >= self.eip145_transition;
 		schedule.have_extcodehash = block_number >= self.eip1052_transition;
-		schedule.eip1283 = block_number >= self.eip1283_transition && !(block_number >= self.eip1283_disable_transition);
+		schedule.have_chain_id = block_number >= self.eip1344_transition;
+		schedule.eip1283 =
+			(block_number >= self.eip1283_transition &&
+			!(block_number >= self.eip1283_disable_transition)) ||
+			block_number >= self.eip1283_reenable_transition;
+		schedule.eip1706 = block_number >= self.eip1706_transition;
+
+		if block_number >= self.eip1884_transition {
+			schedule.have_selfbalance = true;
+			schedule.sload_gas = 800;
+			schedule.balance_gas = 700;
+			schedule.extcodehash_gas = 700;
+		}
+		if block_number >= self.eip2028_transition {
+			schedule.tx_data_non_zero_gas = 16;
+		}
 		if block_number >= self.eip210_transition {
 			schedule.blockhash_gas = 800;
 		}
@@ -306,7 +329,27 @@ impl From<ethjson::spec::Params> for CommonParams {
 				BlockNumber::max_value,
 				Into::into,
 			),
+			eip1283_reenable_transition: p.eip1283_reenable_transition.map_or_else(
+				BlockNumber::max_value,
+				Into::into,
+			),
+			eip1706_transition: p.eip1706_transition.map_or_else(
+				BlockNumber::max_value,
+				Into::into,
+			),
 			eip1014_transition: p.eip1014_transition.map_or_else(
+				BlockNumber::max_value,
+				Into::into,
+			),
+			eip1344_transition: p.eip1344_transition.map_or_else(
+				BlockNumber::max_value,
+				Into::into,
+			),
+			eip1884_transition: p.eip1884_transition.map_or_else(
+				BlockNumber::max_value,
+				Into::into,
+			),
+			eip2028_transition: p.eip2028_transition.map_or_else(
 				BlockNumber::max_value,
 				Into::into,
 			),
@@ -516,7 +559,7 @@ fn load_from(spec_params: SpecParams, s: ethjson::spec::Spec) -> Result<Spec, Er
 				chts: s.hardcoded_sync
 					.as_ref()
 					.map(|s| s.chts.iter().map(|c| c.clone().into()).collect())
-					.unwrap_or(Vec::new()),
+					.unwrap_or_default()
 			})
 		} else {
 			None
@@ -556,7 +599,7 @@ fn load_from(spec_params: SpecParams, s: ethjson::spec::Spec) -> Result<Spec, Er
 		None => {
 			let _ = s.run_constructors(
 				&Default::default(),
-				BasicBackend(MemoryDB::new()),
+				BasicBackend(journaldb::new_memory_db()),
 			)?;
 		}
 	}
@@ -612,6 +655,8 @@ impl Spec {
 			ethjson::spec::Engine::InstantSeal(Some(instant_seal)) => Arc::new(InstantSeal::new(instant_seal.params.into(), machine)),
 			ethjson::spec::Engine::InstantSeal(None) => Arc::new(InstantSeal::new(InstantSealParams::default(), machine)),
 			ethjson::spec::Engine::BasicAuthority(basic_authority) => Arc::new(BasicAuthority::new(basic_authority.params.into(), machine)),
+			ethjson::spec::Engine::Clique(clique) => Clique::new(clique.params.into(), machine)
+								.expect("Failed to start Clique consensus engine."),
 			ethjson::spec::Engine::AuthorityRound(authority_round) => AuthorityRound::new(authority_round.params.into(), machine)
 				.expect("Failed to start AuthorityRound consensus engine."),
 		}
@@ -624,7 +669,7 @@ impl Spec {
 
 		// basic accounts in spec.
 		{
-			let mut t = factories.trie.create(db.as_hashdb_mut(), &mut root);
+			let mut t = factories.trie.create(db.as_hash_db_mut(), &mut root);
 
 			for (address, account) in self.genesis_state.get().iter() {
 				t.insert(&**address, &account.rlp())?;
@@ -635,7 +680,7 @@ impl Spec {
 			db.note_non_null_account(address);
 			account.insert_additional(
 				&mut *factories.accountdb.create(
-					db.as_hashdb_mut(),
+					db.as_hash_db_mut(),
 					keccak(address),
 				),
 				&factories.trie,
@@ -792,7 +837,7 @@ impl Spec {
 		self.genesis_state = s;
 		let _ = self.run_constructors(
 			&Default::default(),
-			BasicBackend(MemoryDB::new()),
+			BasicBackend(journaldb::new_memory_db()),
 		)?;
 
 		Ok(())
@@ -813,7 +858,7 @@ impl Spec {
 
 	/// Ensure that the given state DB has the trie nodes in for the genesis state.
 	pub fn ensure_db_good<T: Backend>(&self, db: T, factories: &Factories) -> Result<T, Error> {
-		if db.as_hashdb().contains(&self.state_root()) {
+		if db.as_hash_db().contains(&self.state_root()) {
 			return Ok(db);
 		}
 
@@ -828,7 +873,6 @@ impl Spec {
 		ethjson::spec::Spec::load(reader)
 			.map_err(fmt_err)
 			.map(load_machine_from)
-
 	}
 
 	/// Loads spec from json file. Provide factories for executing contracts and ensuring
@@ -860,7 +904,7 @@ impl Spec {
 			None,
 		);
 
-		self.ensure_db_good(BasicBackend(db.as_hashdb_mut()), &factories)
+		self.ensure_db_good(BasicBackend(db.as_hash_db_mut()), &factories)
 			.map_err(|e| format!("Unable to initialize genesis state: {}", e))?;
 
 		let call = |a, d| {
@@ -886,7 +930,7 @@ impl Spec {
 			}.fake_sign(from);
 
 			let res = ::state::prove_transaction_virtual(
-				db.as_hashdb_mut(),
+				db.as_hash_db_mut(),
 				*genesis.state_root(),
 				&tx,
 				self.engine.machine(),
@@ -1000,7 +1044,6 @@ mod tests {
 	use types::view;
 	use types::views::BlockView;
 
-	// https://github.com/paritytech/parity-ethereum/issues/1840
 	#[test]
 	fn test_load_empty() {
 		let tempdir = TempDir::new("").unwrap();

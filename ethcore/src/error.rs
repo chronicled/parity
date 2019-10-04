@@ -16,6 +16,10 @@
 
 //! General error types for use in ethcore.
 
+// Silence: `use of deprecated item 'std::error::Error::cause': replaced by Error::source, which can support downcasting`
+// https://github.com/paritytech/parity-ethereum/issues/10302
+#![allow(deprecated)]
+
 use std::{fmt, error};
 use std::time::SystemTime;
 
@@ -25,16 +29,15 @@ use ethtrie::TrieError;
 use rlp;
 use snappy::InvalidInput;
 use snapshot::Error as SnapshotError;
-use types::transaction::Error as TransactionError;
 use types::BlockNumber;
+use types::transaction::Error as TransactionError;
 use unexpected::{Mismatch, OutOfBounds};
 
-use account_provider::SignError as AccountsError;
 use engines::EngineError;
 
 pub use executed::{ExecutionError, CallError};
 
-#[derive(Debug, PartialEq, Clone, Copy, Eq)]
+#[derive(Debug, PartialEq, Clone, Eq)]
 /// Errors concerning block processing.
 pub enum BlockError {
 	/// Block has too many uncles.
@@ -85,7 +88,7 @@ pub enum BlockError {
 	/// Timestamp header field is too far in future.
 	TemporarilyInvalid(OutOfBounds<SystemTime>),
 	/// Log bloom header field is invalid.
-	InvalidLogBloom(Mismatch<Bloom>),
+	InvalidLogBloom(Box<Mismatch<Bloom>>),
 	/// Number field of header is invalid.
 	InvalidNumber(Mismatch<BlockNumber>),
 	/// Block number isn't sensible.
@@ -247,12 +250,6 @@ error_chain! {
 			display("Snapshot error {}", err)
 		}
 
-		#[doc = "Account Provider error"]
-		AccountProvider(err: AccountsError) {
-			description("Accounts Provider error")
-			display("Accounts Provider error {}", err)
-		}
-
 		#[doc = "PoW hash is invalid or out of date."]
 		PowHashInvalid {
 			description("PoW hash is invalid or out of date.")
@@ -270,12 +267,6 @@ error_chain! {
 			description("Unknown engine name")
 			display("Unknown engine name ({})", name)
 		}
-	}
-}
-
-impl From<AccountsError> for Error {
-	fn from(err: AccountsError) -> Error {
-		ErrorKind::AccountProvider(err).into()
 	}
 }
 

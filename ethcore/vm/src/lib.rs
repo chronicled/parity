@@ -22,7 +22,6 @@ extern crate ethjson;
 extern crate rlp;
 extern crate keccak_hash as hash;
 extern crate patricia_trie_ethereum as ethtrie;
-extern crate patricia_trie as trie;
 
 mod action_params;
 mod call_type;

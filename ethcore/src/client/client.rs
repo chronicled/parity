@@ -21,11 +21,11 @@ use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering as AtomicOrdering};
 use std::sync::{Arc, Weak};
 use std::time::{Instant, Duration};
 
-use blockchain::{BlockReceipts, BlockChain, BlockChainDB, BlockProvider, TreeRoute, ImportRoute, TransactionAddress, ExtrasInsert};
+use blockchain::{BlockReceipts, BlockChain, BlockChainDB, BlockProvider, TreeRoute, ImportRoute, TransactionAddress, ExtrasInsert, BlockNumberKey};
 use bytes::Bytes;
 use call_contract::{CallContract, RegistryInfo};
 use ethcore_miner::pool::VerifiedTransaction;
-use ethereum_types::{H256, Address, U256};
+use ethereum_types::{H256, H264, Address, U256};
 use evm::Schedule;
 use hash::keccak;
 use io::IoChannel;
@@ -44,14 +44,14 @@ use types::receipt::{Receipt, LocalizedReceipt};
 use types::{BlockNumber, header::{Header, ExtendedHeader}};
 use vm::{EnvInfo, LastHashes};
 
-use block::{IsBlock, LockedBlock, Drain, ClosedBlock, OpenBlock, enact_verified, SealedBlock};
+use block::{LockedBlock, Drain, ClosedBlock, OpenBlock, enact_verified, SealedBlock};
 use client::ancient_import::AncientVerifier;
 use client::{
 	Nonce, Balance, ChainInfo, BlockInfo, TransactionInfo,
 	ReopenBlock, PrepareOpenBlock, ScheduleInfo, ImportSealedBlock,
 	BroadcastProposalBlock, ImportBlock, StateOrBlock, StateInfo, StateClient, Call,
 	AccountData, BlockChain as BlockChainTrait, BlockProducer, SealedBlockImporter,
-	ClientIoMessage,
+	ClientIoMessage, BlockChainReset
 };
 use client::{
 	BlockId, TransactionId, UncleId, TraceId, ClientConfig, BlockChainClient,
@@ -60,7 +60,7 @@ use client::{
 	IoClient, BadBlocks,
 };
 use client::bad_blocks;
-use engines::{EthEngine, EpochTransition, ForkChoice, EngineError};
+use engines::{MAX_UNCLE_AGE, EthEngine, EpochTransition, ForkChoice, EngineError};
 use engines::epoch::PendingTransition;
 use error::{
 	ImportErrorKind, ExecutionError, CallError, BlockError,
@@ -79,12 +79,14 @@ use verification::queue::kind::BlockLike;
 use verification::queue::kind::blocks::Unverified;
 use verification::{PreverifiedBlock, Verifier, BlockQueue};
 use verification;
+use ansi_term::Colour;
 
 // re-export
 pub use types::blockchain_info::BlockChainInfo;
 pub use types::block_status::BlockStatus;
 pub use blockchain::CacheSize as BlockChainCacheSize;
 pub use verification::QueueInfo as BlockQueueInfo;
+use db::{Writable, Readable, keys::BlockDetails};
 
 use_contract!(registry, "res/contracts/registrar.json");
 
@@ -295,19 +297,11 @@ impl Importer {
 
 				match self.check_and_lock_block(&bytes, block, client) {
 					Ok((closed_block, pending)) => {
-						if self.engine.is_proposal(&header) {
-							self.block_queue.mark_as_good(&[hash]);
-							proposed_blocks.push(bytes);
-						} else {
-							imported_blocks.push(hash);
-
-							let transactions_len = closed_block.transactions().len();
-
-							let route = self.commit_block(closed_block, &header, encoded::Block::new(bytes), pending, client);
-							import_results.push(route);
-
-							client.report.write().accrue_block(&header, transactions_len);
-						}
+						imported_blocks.push(hash);
+						let transactions_len = closed_block.transactions.len();
+						let route = self.commit_block(closed_block, &header, encoded::Block::new(bytes), pending, client);
+						import_results.push(route);
+						client.report.write().accrue_block(&header, transactions_len);
 					},
 					Err(err) => {
 						self.bad_blocks.report(bytes, format!("{:?}", err));
@@ -404,6 +398,7 @@ impl Importer {
 		let db = client.state_db.read().boxed_clone_canon(header.parent_hash());
 
 		let is_epoch_begin = chain.epoch_transition(parent.number(), *header.parent_hash()).is_some();
+
 		let enact_result = enact_verified(
 			block,
 			engine,
@@ -428,13 +423,13 @@ impl Importer {
 		// if the expected receipts root header does not match.
 		// (i.e. allow inconsistency in receipts outcome before the transition block)
 		if header.number() < engine.params().validate_receipts_transition
-			&& header.receipts_root() != locked_block.block().header().receipts_root()
+			&& header.receipts_root() != locked_block.header.receipts_root()
 		{
 			locked_block.strip_receipts_outcomes();
 		}
 
 		// Final Verification
-		if let Err(e) = self.verifier.verify_block_final(&header, locked_block.block().header()) {
+		if let Err(e) = self.verifier.verify_block_final(&header, &locked_block.header) {
 			warn!(target: "client", "Stage 5 block verification failed for #{} ({})\nError: {:?}", header.number(), header.hash(), e);
 			bail!(e);
 		}
@@ -442,8 +437,8 @@ impl Importer {
 		let pending = self.check_epoch_end_signal(
 			&header,
 			bytes,
-			locked_block.receipts(),
-			locked_block.state().db(),
+			&locked_block.receipts,
+			locked_block.state.db(),
 			client
 		)?;
 
@@ -621,7 +616,7 @@ impl Importer {
 
 						let call = move |addr, data| {
 							let mut state_db = state_db.boxed_clone();
-							let backend = ::state::backend::Proving::new(state_db.as_hashdb_mut());
+							let backend = ::state::backend::Proving::new(state_db.as_hash_db_mut());
 
 							let transaction =
 								client.contract_call_tx(BlockId::Hash(*header.parent_hash()), addr, data);
@@ -769,8 +764,8 @@ impl Client {
 			liveness: AtomicBool::new(awake),
 			mode: Mutex::new(config.mode.clone()),
 			chain: RwLock::new(chain),
-			tracedb: tracedb,
-			engine: engine,
+			tracedb,
+			engine,
 			pruning: config.pruning.clone(),
 			db: RwLock::new(db.clone()),
 			state_db: RwLock::new(state_db),
@@ -783,8 +778,8 @@ impl Client {
 			ancient_blocks_import_lock: Default::default(),
 			queue_consensus_message: IoChannelQueue::new(usize::max_value()),
 			last_hashes: RwLock::new(VecDeque::new()),
-			factories: factories,
-			history: history,
+			factories,
+			history,
 			on_user_defaults_change: Mutex::new(None),
 			registrar_address,
 			exit_handler: Mutex::new(None),
@@ -1114,7 +1109,7 @@ impl Client {
 				let mut ss = self.sleep_state.lock();
 				if let Some(t) = ss.last_activity {
 					if Instant::now() > t + timeout {
-						self.sleep();
+						self.sleep(false);
 						ss.last_activity = None;
 					}
 				}
@@ -1124,7 +1119,7 @@ impl Client {
 				let now = Instant::now();
 				if let Some(t) = ss.last_activity {
 					if now > t + timeout {
-						self.sleep();
+						self.sleep(false);
 						ss.last_activity = None;
 						ss.last_autosleep = Some(now);
 					}
@@ -1143,10 +1138,15 @@ impl Client {
 
 	/// Take a snapshot at the given block.
 	/// If the ID given is "latest", this will default to 1000 blocks behind.
-	pub fn take_snapshot<W: snapshot_io::SnapshotWriter + Send>(&self, writer: W, at: BlockId, p: &snapshot::Progress) -> Result<(), EthcoreError> {
+	pub fn take_snapshot<W: snapshot_io::SnapshotWriter + Send>(
+		&self,
+		writer: W,
+		at: BlockId,
+		p: &snapshot::Progress,
+	) -> Result<(), EthcoreError> {
 		let db = self.state_db.read().journal_db().boxed_clone();
 		let best_block_number = self.chain_info().best_block_number;
-		let block_number = self.block_number(at).ok_or(snapshot::Error::InvalidStartingBlock(at))?;
+		let block_number = self.block_number(at).ok_or_else(|| snapshot::Error::InvalidStartingBlock(at))?;
 
 		if db.is_pruned() && self.pruning_info().earliest_state > block_number {
 			return Err(snapshot::Error::OldBlockPrunedDB.into());
@@ -1173,8 +1173,16 @@ impl Client {
 		};
 
 		let processing_threads = self.config.snapshot.processing_threads;
-		snapshot::take_snapshot(&*self.engine, &self.chain.read(), start_hash, db.as_hashdb(), writer, p, processing_threads)?;
-
+		let chunker = self.engine.snapshot_components().ok_or(snapshot::Error::SnapshotsUnsupported)?;
+		snapshot::take_snapshot(
+			chunker,
+			&self.chain.read(),
+			start_hash,
+			db.as_hash_db(),
+			writer,
+			p,
+			processing_threads,
+		)?;
 		Ok(())
 	}
 
@@ -1210,10 +1218,10 @@ impl Client {
 		}
 	}
 
-	fn sleep(&self) {
+	fn sleep(&self, force: bool) {
 		if self.liveness.load(AtomicOrdering::Relaxed) {
 			// only sleep if the import queue is mostly empty.
-			if self.queue_info().total_queue_size() <= MAX_QUEUE_SIZE_TO_SLEEP_ON {
+			if force || (self.queue_info().total_queue_size() <= MAX_QUEUE_SIZE_TO_SLEEP_ON) {
 				self.liveness.store(false, AtomicOrdering::Relaxed);
 				self.notify(|n| n.stop());
 				info!(target: "mode", "sleep: Sleeping.");
@@ -1324,6 +1332,71 @@ impl snapshot::DatabaseRestore for Client {
 		*state_db = StateDB::new(journaldb::new(db.key_value().clone(), self.pruning, ::db::COL_STATE), cache_size);
 		*chain = Arc::new(BlockChain::new(self.config.blockchain.clone(), &[], db.clone()));
 		*tracedb = TraceDB::new(self.config.tracing.clone(), db.clone(), chain.clone());
+		Ok(())
+	}
+}
+
+impl BlockChainReset for Client {
+	fn reset(&self, num: u32) -> Result<(), String> {
+		if num as u64 > self.pruning_history() {
+			return Err("Attempting to reset to block with pruned state".into())
+		} else if num == 0 {
+			return Err("invalid number of blocks to reset".into())
+		}
+
+		let mut blocks_to_delete = Vec::with_capacity(num as usize);
+		let mut best_block_hash = self.chain.read().best_block_hash();
+		let mut batch = DBTransaction::with_capacity(blocks_to_delete.len());
+
+		for _ in 0..num {
+			let current_header = self.chain.read().block_header_data(&best_block_hash)
+				.expect("best_block_hash was fetched from db; block_header_data should exist in db; qed");
+			best_block_hash = current_header.parent_hash();
+
+			let (number, hash) = (current_header.number(), current_header.hash());
+			batch.delete(::db::COL_HEADERS, &hash);
+			batch.delete(::db::COL_BODIES, &hash);
+			Writable::delete::<BlockDetails, H264>
+				(&mut batch, ::db::COL_EXTRA, &hash);
+			Writable::delete::<H256, BlockNumberKey>
+				(&mut batch, ::db::COL_EXTRA, &number);
+
+			blocks_to_delete.push((number, hash));
+		}
+
+		let hashes = blocks_to_delete.iter().map(|(_, hash)| hash).collect::<Vec<_>>();
+		info!("Deleting block hashes {}",
+			  Colour::Red
+				  .bold()
+				  .paint(format!("{:#?}", hashes))
+		);
+
+		let mut best_block_details = Readable::read::<BlockDetails, H264>(
+			&**self.db.read().key_value(),
+			::db::COL_EXTRA,
+			&best_block_hash
+		).expect("block was previously imported; best_block_details should exist; qed");
+
+		let (_, last_hash) = blocks_to_delete.last()
+			.expect("num is > 0; blocks_to_delete can't be empty; qed");
+		// remove the last block as a child so that it can be re-imported
+		// ethcore/blockchain/src/blockchain.rs/Blockchain::is_known_child()
+		best_block_details.children.retain(|h| *h != *last_hash);
+		batch.write(
+			::db::COL_EXTRA,
+			&best_block_hash,
+			&best_block_details
+		);
+		// update the new best block hash
+		batch.put(::db::COL_EXTRA, b"best", &best_block_hash);
+
+		self.db.read()
+			.key_value()
+			.write(batch)
+			.map_err(|err| format!("could not delete blocks; io error occurred: {}", err))?;
+
+		info!("New best block hash {}", Colour::Green.bold().paint(format!("{:?}", best_block_hash)));
+
 		Ok(())
 	}
 }
@@ -1533,22 +1606,27 @@ impl Call for Client {
 			let schedule = machine.schedule(env_info.number);
 			Executive::new(&mut clone, &env_info, &machine, &schedule)
 				.transact_virtual(&tx, options())
-				.ok()
-				.map(|r| r.exception.is_none())
 		};
 
-		let cond = |gas| exec(gas).unwrap_or(false);
+		let cond = |gas| {
+			exec(gas)
+				.ok()
+				.map_or(false, |r| r.exception.is_none())
+		};
 
 		if !cond(upper) {
 			upper = max_upper;
 			match exec(upper) {
-				Some(false) => return Err(CallError::Exceptional),
-				None => {
+				Ok(v) => {
+					if let Some(exception) = v.exception {
+						return Err(CallError::Exceptional(exception))
+					}
+				},
+				Err(_e) => {
 					trace!(target: "estimate_gas", "estimate_gas failed with {}", upper);
 					let err = ExecutionError::Internal(format!("Requires higher than upper limit of {}", upper));
 					return Err(err.into())
-				},
-				_ => {},
+				}
 			}
 		}
 		let lower = t.gas_required(&self.engine.schedule(env_info.number)).into();
@@ -1652,7 +1730,7 @@ impl BlockChainClient for Client {
 		}
 		match new_mode {
 			Mode::Active => self.wake_up(),
-			Mode::Off => self.sleep(),
+			Mode::Off => self.sleep(true),
 			_ => {(*self.sleep_state.lock()).last_activity = Some(Instant::now()); }
 		}
 	}
@@ -1661,15 +1739,17 @@ impl BlockChainClient for Client {
 		self.config.spec_name.clone()
 	}
 
-	fn set_spec_name(&self, new_spec_name: String) {
+	fn set_spec_name(&self, new_spec_name: String) -> Result<(), ()> {
 		trace!(target: "mode", "Client::set_spec_name({:?})", new_spec_name);
 		if !self.enabled.load(AtomicOrdering::Relaxed) {
-			return;
+			return Err(());
 		}
 		if let Some(ref h) = *self.exit_handler.lock() {
 			(*h)(new_spec_name);
+			Ok(())
 		} else {
 			warn!("Not hypervised; cannot change chain.");
+			Err(())
 		}
 	}
 
@@ -1736,7 +1816,8 @@ impl BlockChainClient for Client {
 		};
 
 		let (root, db) = state.drop();
-		let trie = match self.factories.trie.readonly(db.as_hashdb(), &root) {
+		let db = &db.as_hash_db();
+		let trie = match self.factories.trie.readonly(db, &root) {
 			Ok(trie) => trie,
 			_ => {
 				trace!(target: "fatdb", "list_accounts: Couldn't open the DB");
@@ -1782,8 +1863,9 @@ impl BlockChainClient for Client {
 		};
 
 		let (_, db) = state.drop();
-		let account_db = self.factories.accountdb.readonly(db.as_hashdb(), keccak(account));
-		let trie = match self.factories.trie.readonly(account_db.as_hashdb(), &root) {
+		let account_db = &self.factories.accountdb.readonly(db.as_hash_db(), keccak(account));
+		let account_db = &account_db.as_hash_db();
+		let trie = match self.factories.trie.readonly(account_db, &root) {
 			Ok(trie) => trie,
 			_ => {
 				trace!(target: "fatdb", "list_storage: Couldn't open the DB");
@@ -1877,7 +1959,7 @@ impl BlockChainClient for Client {
 	}
 
 	fn find_uncles(&self, hash: &H256) -> Option<Vec<H256>> {
-		self.chain.read().find_uncle_hashes(hash, self.engine.maximum_uncle_age())
+		self.chain.read().find_uncle_hashes(hash, MAX_UNCLE_AGE)
 	}
 
 	fn state_data(&self, hash: &H256) -> Option<Bytes> {
@@ -2110,11 +2192,20 @@ impl BlockChainClient for Client {
 
 	fn transact_contract(&self, address: Address, data: Bytes) -> Result<(), transaction::Error> {
 		let authoring_params = self.importer.miner.authoring_params();
+		let service_transaction_checker = self.importer.miner.service_transaction_checker();
+		let gas_price = if let Some(checker) = service_transaction_checker {
+			match checker.check_address(self, authoring_params.author) {
+				Ok(true) => U256::zero(),
+				_ => self.importer.miner.sensible_gas_price(),
+			}
+		} else {
+			self.importer.miner.sensible_gas_price()
+		};
 		let transaction = transaction::Transaction {
 			nonce: self.latest_nonce(&authoring_params.author),
 			action: Action::Call(address),
 			gas: self.importer.miner.sensible_gas_limit(),
-			gas_price: self.importer.miner.sensible_gas_price(),
+			gas_price,
 			value: U256::zero(),
 			data: data,
 		};
@@ -2230,24 +2321,24 @@ impl ReopenBlock for Client {
 	fn reopen_block(&self, block: ClosedBlock) -> OpenBlock {
 		let engine = &*self.engine;
 		let mut block = block.reopen(engine);
-		let max_uncles = engine.maximum_uncle_count(block.header().number());
-		if block.uncles().len() < max_uncles {
+		let max_uncles = engine.maximum_uncle_count(block.header.number());
+		if block.uncles.len() < max_uncles {
 			let chain = self.chain.read();
 			let h = chain.best_block_hash();
 			// Add new uncles
 			let uncles = chain
-				.find_uncle_hashes(&h, engine.maximum_uncle_age())
+				.find_uncle_hashes(&h, MAX_UNCLE_AGE)
 				.unwrap_or_else(Vec::new);
 
 			for h in uncles {
-				if !block.uncles().iter().any(|header| header.hash() == h) {
+				if !block.uncles.iter().any(|header| header.hash() == h) {
 					let uncle = chain.block_header_data(&h).expect("find_uncle_hashes only returns hashes for existing headers; qed");
 					let uncle = uncle.decode().expect("decoding failure");
 					block.push_uncle(uncle).expect("pushing up to maximum_uncle_count;
 												push_uncle is not ok only if more than maximum_uncle_count is pushed;
 												so all push_uncle are Ok;
 												qed");
-					if block.uncles().len() >= max_uncles { break }
+					if block.uncles.len() >= max_uncles { break }
 				}
 			}
 
@@ -2275,15 +2366,15 @@ impl PrepareOpenBlock for Client {
 			gas_range_target,
 			extra_data,
 			is_epoch_begin,
-			&mut chain.ancestry_with_metadata_iter(best_header.hash()),
+			chain.ancestry_with_metadata_iter(best_header.hash()),
 		)?;
 
 		// Add uncles
 		chain
-			.find_uncle_headers(&h, engine.maximum_uncle_age())
+			.find_uncle_headers(&h, MAX_UNCLE_AGE)
 			.unwrap_or_else(Vec::new)
 			.into_iter()
-			.take(engine.maximum_uncle_count(open_block.header().number()))
+			.take(engine.maximum_uncle_count(open_block.header.number()))
 			.foreach(|h| {
 				open_block.push_uncle(h.decode().expect("decoding failure")).expect("pushing maximum_uncle_count;
 												open_block was just created;
@@ -2308,7 +2399,7 @@ impl ImportSealedBlock for Client {
 	fn import_sealed_block(&self, block: SealedBlock) -> EthcoreResult<H256> {
 		let start = Instant::now();
 		let raw = block.rlp_bytes();
-		let header = block.header().clone();
+		let header = block.header.clone();
 		let hash = header.hash();
 		self.notify(|n| n.block_pre_import(&raw, &hash, header.difficulty()));
 
@@ -2331,8 +2422,8 @@ impl ImportSealedBlock for Client {
 			let pending = self.importer.check_epoch_end_signal(
 				&header,
 				&block_data,
-				block.receipts(),
-				block.state().db(),
+				&block.receipts,
+				block.state.db(),
 				self
 			)?;
 			let route = self.importer.commit_block(
@@ -2449,7 +2540,7 @@ impl ProvingBlockChainClient for Client {
 		let mut jdb = self.state_db.read().journal_db().boxed_clone();
 
 		state::prove_transaction_virtual(
-			jdb.as_hashdb_mut(),
+			jdb.as_hash_db_mut(),
 			header.state_root().clone(),
 			&transaction,
 			self.engine.machine(),
@@ -2469,7 +2560,11 @@ impl SnapshotClient for Client {}
 
 impl Drop for Client {
 	fn drop(&mut self) {
-		self.engine.stop();
+		if let Some(c) = Arc::get_mut(&mut self.engine) {
+			c.stop()
+		} else {
+			warn!(target: "shutdown", "unable to get mut ref for engine for shutdown.");
+		}
 	}
 }
 

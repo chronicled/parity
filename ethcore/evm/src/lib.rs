@@ -24,6 +24,7 @@ extern crate vm;
 extern crate keccak_hash as hash;
 extern crate memory_cache;
 extern crate parity_bytes as bytes;
+extern crate num_bigint;
 
 #[macro_use]
 extern crate lazy_static;
@@ -33,6 +34,8 @@ extern crate log;
 
 #[cfg(test)]
 extern crate rustc_hex;
+#[cfg(test)]
+extern crate hex_literal;
 
 pub mod evm;
 pub mod interpreter;

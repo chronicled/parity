@@ -23,6 +23,7 @@ use std::{
 };
 
 use ethereum_types::{H256, U256, Address};
+use ethcore_miner::local_accounts::LocalAccounts;
 use ethcore_miner::pool;
 use ethcore_miner::pool::client::NonceClient;
 use ethcore_miner::service_transaction_checker::ServiceTransactionChecker;
@@ -34,7 +35,6 @@ use types::transaction::{
 use types::header::Header;
 use parking_lot::RwLock;
 
-use account_provider::AccountProvider;
 use call_contract::CallContract;
 use client::{TransactionId, BlockInfo, Nonce};
 use engines::EthEngine;
@@ -73,9 +73,9 @@ pub struct PoolClient<'a, C: 'a> {
 	chain: &'a C,
 	cached_nonces: CachedNonceClient<'a, C>,
 	engine: &'a EthEngine,
-	accounts: Option<&'a AccountProvider>,
+	accounts: &'a LocalAccounts,
 	best_block_header: Header,
-	service_transaction_checker: Option<ServiceTransactionChecker>,
+	service_transaction_checker: Option<&'a ServiceTransactionChecker>,
 }
 
 impl<'a, C: 'a> Clone for PoolClient<'a, C> {
@@ -92,15 +92,15 @@ impl<'a, C: 'a> Clone for PoolClient<'a, C> {
 }
 
 impl<'a, C: 'a> PoolClient<'a, C> where
-C: BlockInfo + CallContract,
+	C: BlockInfo + CallContract,
 {
 	/// Creates new client given chain, nonce cache, accounts and service transaction verifier.
 	pub fn new(
 		chain: &'a C,
 		cache: &'a NonceCache,
 		engine: &'a EthEngine,
-		accounts: Option<&'a AccountProvider>,
-		refuse_service_transactions: bool,
+		accounts: &'a LocalAccounts,
+		service_transaction_checker: Option<&'a ServiceTransactionChecker>,
 	) -> Self {
 		let best_block_header = chain.best_block_header();
 		PoolClient {
@@ -109,19 +109,17 @@ C: BlockInfo + CallContract,
 			engine,
 			accounts,
 			best_block_header,
-			service_transaction_checker: if refuse_service_transactions {
-				None
-			} else {
-				Some(Default::default())
-			},
+			service_transaction_checker,
 		}
 	}
 
-	/// Verifies if signed transaction is executable.
+	/// Verifies transaction against its block (before its import into this block)
+	/// Also Verifies if signed transaction is executable.
 	///
 	/// This should perform any verifications that rely on chain status.
-	pub fn verify_signed(&self, tx: &SignedTransaction) -> Result<(), transaction::Error> {
-		self.engine.machine().verify_transaction(&tx, &self.best_block_header, self.chain)
+	pub fn verify_for_pending_block(&self, tx: &SignedTransaction, header: &Header) -> Result<(), transaction::Error> {
+		self.engine.machine().verify_transaction_basic(tx, header)?;
+		self.engine.machine().verify_transaction(tx, &self.best_block_header, self.chain)
 	}
 }
 
@@ -142,8 +140,7 @@ impl<'a, C: 'a> pool::client::Client for PoolClient<'a, C> where
 		self.engine.verify_transaction_basic(&tx, &self.best_block_header)?;
 		let tx = self.engine.verify_transaction_unordered(tx, &self.best_block_header)?;
 
-		self.verify_signed(&tx)?;
-
+		self.engine.machine().verify_transaction(&tx, &self.best_block_header, self.chain)?;
 		Ok(tx)
 	}
 
@@ -151,7 +148,7 @@ impl<'a, C: 'a> pool::client::Client for PoolClient<'a, C> where
 		pool::client::AccountDetails {
 			nonce: self.cached_nonces.account_nonce(address),
 			balance: self.chain.latest_balance(address),
-			is_local: self.accounts.map_or(false, |accounts| accounts.has_account(*address)),
+			is_local: self.accounts.is_local(address),
 		}
 	}
 

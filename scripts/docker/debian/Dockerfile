@@ -8,7 +8,7 @@ RUN apt update -y && \
 
 WORKDIR /parity
 COPY . /parity
-RUN cargo build --release --verbose
+RUN cargo build --release
 RUN strip target/release/parity
 
 FROM debian:stretch

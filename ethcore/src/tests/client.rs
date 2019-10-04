@@ -27,8 +27,7 @@ use types::filter::Filter;
 use types::view;
 use types::views::BlockView;
 
-use block::IsBlock;
-use client::{BlockChainClient, Client, ClientConfig, BlockId, ChainInfo, BlockInfo, PrepareOpenBlock, ImportSealedBlock, ImportBlock};
+use client::{BlockChainClient, BlockChainReset, Client, ClientConfig, BlockId, ChainInfo, BlockInfo, PrepareOpenBlock, ImportSealedBlock, ImportBlock};
 use ethereum;
 use executive::{Executive, TransactOptions};
 use miner::{Miner, PendingOrdering, MinerService};
@@ -254,7 +253,7 @@ fn can_mine() {
 
 	let b = client.prepare_open_block(Address::default(), (3141562.into(), 31415620.into()), vec![]).unwrap().close().unwrap();
 
-	assert_eq!(*b.block().header().parent_hash(), view!(BlockView, &dummy_blocks[0]).header_view().hash());
+	assert_eq!(*b.header.parent_hash(), view!(BlockView, &dummy_blocks[0]).header_view().hash());
 }
 
 #[test]
@@ -366,4 +365,24 @@ fn transaction_proof() {
 
 	assert_eq!(state.balance(&Address::default()).unwrap(), 5.into());
 	assert_eq!(state.balance(&address).unwrap(), 95.into());
+}
+
+#[test]
+fn reset_blockchain() {
+	let client = get_test_client_with_blocks(get_good_dummy_block_seq(19));
+	// 19 + genesis block
+	assert!(client.block_header(BlockId::Number(20)).is_some());
+	assert_eq!(client.block_header(BlockId::Number(20)).unwrap().hash(), client.best_block_header().hash());
+
+	assert!(client.reset(5).is_ok());
+
+	client.chain().clear_cache();
+
+	assert!(client.block_header(BlockId::Number(20)).is_none());
+	assert!(client.block_header(BlockId::Number(19)).is_none());
+	assert!(client.block_header(BlockId::Number(18)).is_none());
+	assert!(client.block_header(BlockId::Number(17)).is_none());
+	assert!(client.block_header(BlockId::Number(16)).is_none());
+
+	assert!(client.block_header(BlockId::Number(15)).is_some());
 }
