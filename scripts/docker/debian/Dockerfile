@@ -29,7 +29,9 @@ RUN mkdir -p /home/parity/keys/prv/
 RUN mkdir -p /home/parity/node0/network/
 RUN mkdir -p /home/parity/node0/keys/prv
 RUN mkdir -p /home/parity/.local/share/io.parity.ethereum/
+RUN mkdir -p /home/parity/src
 RUN chown -R parity:parity /home/parity
+COPY . /home/parity/src
 COPY --from=builder /parity/target/release/parity ./
 
 ENTRYPOINT ["./parity"]
