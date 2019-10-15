@@ -785,7 +785,11 @@ impl Configuration {
 
 	fn rabbitmq_config(&self) -> RabbitMqConfig {
 		RabbitMqConfig {
-			uri: self.args.arg_rabbitmq_uri.clone()
+			uri: self.args.arg_rabbitmq_uri.clone(),
+			prometheus_reporting_enabled: self.args.arg_prometheus_reporting.clone(),
+			prometheus_address: self.args.arg_prometheus_address.clone(),
+			prometheus_user: self.args.arg_prometheus_user.clone(),
+			prometheus_password: self.args.arg_prometheus_password.clone(),
 		}
 	}
 

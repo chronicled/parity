@@ -573,6 +573,23 @@ usage! {
 			"--rabbitmq-uri=[URI]",
 			"Specify the RabbitMQ server uri",
 
+		["API and Console Options – Prometheus"]
+			ARG arg_prometheus_reporting: (bool) = false, or |c: &Config| c.rabbitmq.as_ref()?.prometheus_reporting_enabled.clone(),
+			"--prometheus-reporting=[BOOL]",
+			"Enable reporting prometheus metrics to the prometheus pushgateway",
+
+			ARG arg_prometheus_address: (String) = "amqp://localhost:5672", or |c: &Config| c.rabbitmq.as_ref()?.prometheus_address.clone(),
+			"--prometheus-address=[URI]",
+			"Specify the prometheus pushgateway URI",
+
+			ARG arg_prometheus_user: (String) = "", or |c: &Config| c.rabbitmq.as_ref()?.prometheus_user.clone(),
+			"--prometheus-user=[USERNAME]",
+			"Specify the prometheus pushgateway username",
+
+			ARG arg_prometheus_password: (String) = "", or |c: &Config| c.rabbitmq.as_ref()?.prometheus_password.clone(),
+			"--prometheus-password=[PASSWORD]",
+			"Specify the prometheus pushgateway password",
+
 		["API and Console Options – IPFS"]
 			FLAG flag_ipfs_api: (bool) = false, or |c: &Config| c.ipfs.as_ref()?.enable.clone(),
 			"--ipfs-api",
@@ -1294,6 +1311,10 @@ struct Ipc {
 #[serde(deny_unknown_fields)]
 struct RabbitMQ {
 	uri: Option<String>,
+	prometheus_reporting_enabled: Option<bool>,
+	prometheus_address: Option<String>,
+	prometheus_user: Option<String>,
+	prometheus_password: Option<String>,
 }
 
 #[derive(Default, Debug, PartialEq, Deserialize)]
