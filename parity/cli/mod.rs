@@ -578,7 +578,7 @@ usage! {
 			"--prometheus-reporting=[BOOL]",
 			"Enable reporting prometheus metrics to the prometheus pushgateway",
 
-			ARG arg_prometheus_address: (String) = "amqp://localhost:5672", or |c: &Config| c.rabbitmq.as_ref()?.prometheus_address.clone(),
+			ARG arg_prometheus_address: (String) = "localhost:9091", or |c: &Config| c.rabbitmq.as_ref()?.prometheus_address.clone(),
 			"--prometheus-address=[URI]",
 			"Specify the prometheus pushgateway URI",
 

@@ -10,12 +10,11 @@ use futures::future::{err, lazy};
 use handler::{Handler, Sender};
 
 use parity_runtime::Executor;
-use prometheus::{labels, Counter, Encoder, Opts, Registry, TextEncoder};
+use prometheus::{labels, Counter, Opts};
 use rabbitmq_adaptor::{ConfigUri, ConsumerResult, DeliveryExt, RabbitConnection, RabbitExt};
 use serde::Deserialize;
 use serde_json;
 use std::sync::Arc;
-use std::thread;
 use std::time;
 use tokio::prelude::*;
 use tokio::sync::mpsc::{channel, Sender as ChannelSender};
