@@ -1,6 +1,7 @@
 extern crate futures;
 extern crate hex;
 extern crate lapin_futures as lapin;
+extern crate prometheus;
 extern crate rustc_hex;
 extern crate serde;
 extern crate serde_json;

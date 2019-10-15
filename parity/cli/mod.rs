@@ -18,8 +18,8 @@
 mod usage;
 mod presets;
 
-use std::collections::HashSet;
 use super::helpers;
+use std::collections::HashSet;
 
 usage! {
 	{
@@ -572,6 +572,18 @@ usage! {
 			ARG arg_rabbitmq_uri: (String) = "amqp://localhost:5672", or |c: &Config| c.rabbitmq.as_ref()?.uri.clone(),
 			"--rabbitmq-uri=[URI]",
 			"Specify the RabbitMQ server uri",
+
+			ARG arg_prometheus_address: (String) = "localhost:9091", or |c: &Config| c.rabbitmq.as_ref()?.prometheus_address.clone(),
+			"--prometheus_address=[URI]",
+			"Specify the Prometheus server address",
+
+			ARG arg_prometheus_user: (String) = "amqp://localhost:5672", or |c: &Config| c.rabbitmq.as_ref()?.prometheus_user.clone(),
+			"--prometheus_user=[USERNAME]",
+			"Specify the Prometheus user",
+
+			ARG arg_prometheus_password: (String) = "amqp://localhost:5672", or |c: &Config| c.rabbitmq.as_ref()?.prometheus_password.clone(),
+			"--prometheus_password=[PASSWORD]",
+			"Specify the Prometheus password",
 
 		["API and Console Options – IPFS"]
 			FLAG flag_ipfs_api: (bool) = false, or |c: &Config| c.ipfs.as_ref()?.enable.clone(),
@@ -1294,6 +1306,9 @@ struct Ipc {
 #[serde(deny_unknown_fields)]
 struct RabbitMQ {
 	uri: Option<String>,
+	prometheus_address: Option<String>,
+	prometheus_user: Option<String>,
+	prometheus_password: Option<String>,
 }
 
 #[derive(Default, Debug, PartialEq, Deserialize)]
@@ -1452,12 +1467,11 @@ struct Light {
 #[cfg(test)]
 mod tests {
 	use super::{
-		Args, ArgsError,
-		Config, Operating, Account, Ui, Network, Ws, Rpc, Ipc, RabbitMQ, Dapps, Ipfs, Mining, Footprint,
-		Snapshots, Misc, Whisper, SecretStore, Light,
+		Account, Args, ArgsError, Config, Dapps, Footprint, Ipc, Ipfs, Light, Mining, Misc,
+		Network, Operating, RabbitMQ, Rpc, SecretStore, Snapshots, Ui, Whisper, Ws,
 	};
+	use clap::ErrorKind as ClapErrorKind;
 	use toml;
-	use clap::{ErrorKind as ClapErrorKind};
 
 	#[test]
 	fn should_accept_any_argument_order() {
@@ -1503,19 +1517,21 @@ mod tests {
 		let args = Args::parse(&["parity", "export", "state", "--no-storage"]).unwrap();
 		assert_eq!(args.flag_export_state_no_storage, true);
 
-		let args = Args::parse(&["parity", "export", "state", "--min-balance","123"]).unwrap();
+		let args = Args::parse(&["parity", "export", "state", "--min-balance", "123"]).unwrap();
 		assert_eq!(args.arg_export_state_min_balance, Some("123".to_string()));
 	}
 
 	#[test]
 	fn should_exit_gracefully_on_unknown_argument() {
 		let result = Args::parse(&["parity", "--please-exit-gracefully"]);
-		assert!(
-			match result {
-				Err(ArgsError::Clap(ref clap_error)) if clap_error.kind == ClapErrorKind::UnknownArgument => true,
-				_ => false
+		assert!(match result {
+			Err(ArgsError::Clap(ref clap_error))
+				if clap_error.kind == ClapErrorKind::UnknownArgument =>
+			{
+				true
 			}
-		);
+			_ => false,
+		});
 	}
 
 	#[test]
@@ -1540,20 +1556,56 @@ mod tests {
 	#[test]
 	fn should_parse_multiple_values() {
 		let args = Args::parse(&["parity", "account", "import", "~/1", "~/2"]).unwrap();
-		assert_eq!(args.arg_account_import_path, Some(vec!["~/1".to_owned(), "~/2".to_owned()]));
+		assert_eq!(
+			args.arg_account_import_path,
+			Some(vec!["~/1".to_owned(), "~/2".to_owned()])
+		);
 
 		let args = Args::parse(&["parity", "account", "import", "~/1,ext"]).unwrap();
-		assert_eq!(args.arg_account_import_path, Some(vec!["~/1,ext".to_owned()]));
+		assert_eq!(
+			args.arg_account_import_path,
+			Some(vec!["~/1,ext".to_owned()])
+		);
 
-		let args = Args::parse(&["parity", "--secretstore-nodes", "abc@127.0.0.1:3333,cde@10.10.10.10:4444"]).unwrap();
-		assert_eq!(args.arg_secretstore_nodes, "abc@127.0.0.1:3333,cde@10.10.10.10:4444");
+		let args = Args::parse(&[
+			"parity",
+			"--secretstore-nodes",
+			"abc@127.0.0.1:3333,cde@10.10.10.10:4444",
+		])
+		.unwrap();
+		assert_eq!(
+			args.arg_secretstore_nodes,
+			"abc@127.0.0.1:3333,cde@10.10.10.10:4444"
+		);
 
-		let args = Args::parse(&["parity", "--password", "~/.safe/1", "--password", "~/.safe/2", "--ui-port", "8123"]).unwrap();
-		assert_eq!(args.arg_password, vec!["~/.safe/1".to_owned(), "~/.safe/2".to_owned()]);
+		let args = Args::parse(&[
+			"parity",
+			"--password",
+			"~/.safe/1",
+			"--password",
+			"~/.safe/2",
+			"--ui-port",
+			"8123",
+		])
+		.unwrap();
+		assert_eq!(
+			args.arg_password,
+			vec!["~/.safe/1".to_owned(), "~/.safe/2".to_owned()]
+		);
 		assert_eq!(args.arg_ui_port, Some(8123));
 
-		let args = Args::parse(&["parity", "--password", "~/.safe/1,~/.safe/2", "--ui-port", "8123"]).unwrap();
-		assert_eq!(args.arg_password, vec!["~/.safe/1".to_owned(), "~/.safe/2".to_owned()]);
+		let args = Args::parse(&[
+			"parity",
+			"--password",
+			"~/.safe/1,~/.safe/2",
+			"--ui-port",
+			"8123",
+		])
+		.unwrap();
+		assert_eq!(
+			args.arg_password,
+			vec!["~/.safe/1".to_owned(), "~/.safe/2".to_owned()]
+		);
 		assert_eq!(args.arg_ui_port, Some(8123));
 	}
 
@@ -1616,317 +1668,321 @@ mod tests {
 		let args = Args::parse_with_config(&["parity", "--chain", "xyz"], config).unwrap();
 
 		// then
-		assert_eq!(args, Args {
-			// Commands
-			cmd_dapp: false,
-			cmd_daemon: false,
-			cmd_account: false,
-			cmd_account_new: false,
-			cmd_account_list: false,
-			cmd_account_import: false,
-			cmd_wallet: false,
-			cmd_wallet_import: false,
-			cmd_import: false,
-			cmd_export: false,
-			cmd_export_blocks: false,
-			cmd_export_state: false,
-			cmd_signer: false,
-			cmd_signer_list: false,
-			cmd_signer_sign: false,
-			cmd_signer_reject: false,
-			cmd_signer_new_token: false,
-			cmd_snapshot: false,
-			cmd_restore: false,
-			cmd_tools: false,
-			cmd_tools_hash: false,
-			cmd_db: false,
-			cmd_db_kill: false,
-			cmd_db_reset: false,
-			cmd_export_hardcoded_sync: false,
+		assert_eq!(
+			args,
+			Args {
+				// Commands
+				cmd_dapp: false,
+				cmd_daemon: false,
+				cmd_account: false,
+				cmd_account_new: false,
+				cmd_account_list: false,
+				cmd_account_import: false,
+				cmd_wallet: false,
+				cmd_wallet_import: false,
+				cmd_import: false,
+				cmd_export: false,
+				cmd_export_blocks: false,
+				cmd_export_state: false,
+				cmd_signer: false,
+				cmd_signer_list: false,
+				cmd_signer_sign: false,
+				cmd_signer_reject: false,
+				cmd_signer_new_token: false,
+				cmd_snapshot: false,
+				cmd_restore: false,
+				cmd_tools: false,
+				cmd_tools_hash: false,
+				cmd_db: false,
+				cmd_db_kill: false,
+				cmd_db_reset: false,
+				cmd_export_hardcoded_sync: false,
 
-			// Arguments
-			arg_daemon_pid_file: None,
-			arg_import_file: None,
-			arg_import_format: None,
-			arg_export_blocks_file: None,
-			arg_export_blocks_format: None,
-			arg_export_state_file: None,
-			arg_export_state_format: None,
-			arg_snapshot_file: None,
-			arg_restore_file: None,
-			arg_tools_hash_file: None,
+				// Arguments
+				arg_daemon_pid_file: None,
+				arg_import_file: None,
+				arg_import_format: None,
+				arg_export_blocks_file: None,
+				arg_export_blocks_format: None,
+				arg_export_state_file: None,
+				arg_export_state_format: None,
+				arg_snapshot_file: None,
+				arg_restore_file: None,
+				arg_tools_hash_file: None,
 
-			arg_signer_sign_id: None,
-			arg_signer_reject_id: None,
-			arg_dapp_path: None,
-			arg_account_import_path: None,
-			arg_wallet_import_path: None,
-			arg_db_reset_num: 10,
+				arg_signer_sign_id: None,
+				arg_signer_reject_id: None,
+				arg_dapp_path: None,
+				arg_account_import_path: None,
+				arg_wallet_import_path: None,
+				arg_db_reset_num: 10,
 
-			// -- Operating Options
-			arg_mode: "last".into(),
-			arg_mode_timeout: 300u64,
-			arg_mode_alarm: 3600u64,
-			arg_auto_update: "none".into(),
-			arg_auto_update_delay: 200u16,
-			arg_auto_update_check_frequency: 50u16,
-			arg_release_track: "current".into(),
-			flag_public_node: false,
-			flag_no_download: false,
-			flag_no_consensus: false,
-			arg_chain: "xyz".into(),
-			arg_base_path: Some("$HOME/.parity".into()),
-			arg_db_path: Some("$HOME/.parity/chains".into()),
-			arg_keys_path: "$HOME/.parity/keys".into(),
-			arg_identity: "".into(),
-			flag_light: false,
-			flag_no_hardcoded_sync: false,
-			flag_no_persistent_txqueue: false,
-			flag_force_direct: false,
+				// -- Operating Options
+				arg_mode: "last".into(),
+				arg_mode_timeout: 300u64,
+				arg_mode_alarm: 3600u64,
+				arg_auto_update: "none".into(),
+				arg_auto_update_delay: 200u16,
+				arg_auto_update_check_frequency: 50u16,
+				arg_release_track: "current".into(),
+				flag_public_node: false,
+				flag_no_download: false,
+				flag_no_consensus: false,
+				arg_chain: "xyz".into(),
+				arg_base_path: Some("$HOME/.parity".into()),
+				arg_db_path: Some("$HOME/.parity/chains".into()),
+				arg_keys_path: "$HOME/.parity/keys".into(),
+				arg_identity: "".into(),
+				flag_light: false,
+				flag_no_hardcoded_sync: false,
+				flag_no_persistent_txqueue: false,
+				flag_force_direct: false,
 
-			// -- Convenience Options
-			arg_config: "$BASE/config.toml".into(),
-			arg_ports_shift: 0,
-			flag_unsafe_expose: false,
+				// -- Convenience Options
+				arg_config: "$BASE/config.toml".into(),
+				arg_ports_shift: 0,
+				flag_unsafe_expose: false,
 
-			// -- Account Options
-			arg_unlock: Some("0xdeadbeefcafe0000000000000000000000000000".into()),
-			arg_password: vec!["~/.safe/password.file".into()],
-			arg_keys_iterations: 10240u32,
-			arg_accounts_refresh: 5u64,
-			flag_no_hardware_wallets: false,
-			flag_fast_unlock: false,
+				// -- Account Options
+				arg_unlock: Some("0xdeadbeefcafe0000000000000000000000000000".into()),
+				arg_password: vec!["~/.safe/password.file".into()],
+				arg_keys_iterations: 10240u32,
+				arg_accounts_refresh: 5u64,
+				flag_no_hardware_wallets: false,
+				flag_fast_unlock: false,
 
-			// -- Private Transactions Options
-			flag_private_enabled: true,
-			arg_private_signer: Some("0xdeadbeefcafe0000000000000000000000000000".into()),
-			arg_private_validators: Some("0xdeadbeefcafe0000000000000000000000000000".into()),
-			arg_private_passwords: Some("~/.safe/password.file".into()),
-			arg_private_account: Some("0xdeadbeefcafe0000000000000000000000000000".into()),
-			arg_private_sstore_url: Some("http://localhost:8082".into()),
-			arg_private_sstore_threshold: Some(0),
+				// -- Private Transactions Options
+				flag_private_enabled: true,
+				arg_private_signer: Some("0xdeadbeefcafe0000000000000000000000000000".into()),
+				arg_private_validators: Some("0xdeadbeefcafe0000000000000000000000000000".into()),
+				arg_private_passwords: Some("~/.safe/password.file".into()),
+				arg_private_account: Some("0xdeadbeefcafe0000000000000000000000000000".into()),
+				arg_private_sstore_url: Some("http://localhost:8082".into()),
+				arg_private_sstore_threshold: Some(0),
 
-			flag_force_ui: false,
-			flag_no_ui: false,
-			arg_ui_port: None,
-			arg_ui_interface: None,
-			arg_ui_hosts: None,
-			arg_ui_path: "$HOME/.parity/signer".into(),
-			flag_ui_no_validation: false,
+				flag_force_ui: false,
+				flag_no_ui: false,
+				arg_ui_port: None,
+				arg_ui_interface: None,
+				arg_ui_hosts: None,
+				arg_ui_path: "$HOME/.parity/signer".into(),
+				flag_ui_no_validation: false,
 
-			// -- Networking Options
-			flag_no_warp: false,
-			arg_port: 30303u16,
-			arg_interface: "all".into(),
-			arg_min_peers: Some(25u16),
-			arg_max_peers: Some(50u16),
-			arg_max_pending_peers: 64u16,
-			arg_snapshot_peers: 0u16,
-			arg_allow_ips: "all".into(),
-			arg_nat: "any".into(),
-			arg_network_id: Some(1),
-			arg_bootnodes: Some("".into()),
-			flag_no_discovery: false,
-			arg_node_key: None,
-			arg_reserved_peers: Some("./path_to_file".into()),
-			flag_reserved_only: false,
-			flag_no_ancient_blocks: false,
-			flag_no_serve_light: false,
+				// -- Networking Options
+				flag_no_warp: false,
+				arg_port: 30303u16,
+				arg_interface: "all".into(),
+				arg_min_peers: Some(25u16),
+				arg_max_peers: Some(50u16),
+				arg_max_pending_peers: 64u16,
+				arg_snapshot_peers: 0u16,
+				arg_allow_ips: "all".into(),
+				arg_nat: "any".into(),
+				arg_network_id: Some(1),
+				arg_bootnodes: Some("".into()),
+				flag_no_discovery: false,
+				arg_node_key: None,
+				arg_reserved_peers: Some("./path_to_file".into()),
+				flag_reserved_only: false,
+				flag_no_ancient_blocks: false,
+				flag_no_serve_light: false,
 
-			// -- API and Console Options
-			// RPC
-			flag_no_jsonrpc: false,
-			flag_jsonrpc_no_keep_alive: false,
-			flag_jsonrpc_experimental: false,
-			arg_jsonrpc_port: 8545u16,
-			arg_jsonrpc_interface: "local".into(),
-			arg_jsonrpc_cors: "null".into(),
-			arg_jsonrpc_apis: "web3,eth,net,parity,traces,rpc,secretstore".into(),
-			arg_jsonrpc_hosts: "none".into(),
-			arg_jsonrpc_server_threads: None,
-			arg_jsonrpc_threads: 4,
-			arg_jsonrpc_max_payload: None,
-			arg_poll_lifetime: 60u32,
-			flag_jsonrpc_allow_missing_blocks: false,
+				// -- API and Console Options
+				// RPC
+				flag_no_jsonrpc: false,
+				flag_jsonrpc_no_keep_alive: false,
+				flag_jsonrpc_experimental: false,
+				arg_jsonrpc_port: 8545u16,
+				arg_jsonrpc_interface: "local".into(),
+				arg_jsonrpc_cors: "null".into(),
+				arg_jsonrpc_apis: "web3,eth,net,parity,traces,rpc,secretstore".into(),
+				arg_jsonrpc_hosts: "none".into(),
+				arg_jsonrpc_server_threads: None,
+				arg_jsonrpc_threads: 4,
+				arg_jsonrpc_max_payload: None,
+				arg_poll_lifetime: 60u32,
+				flag_jsonrpc_allow_missing_blocks: false,
 
-			// WS
-			flag_no_ws: false,
-			arg_ws_port: 8546u16,
-			arg_ws_interface: "local".into(),
-			arg_ws_apis: "web3,eth,net,parity,traces,rpc,secretstore".into(),
-			arg_ws_origins: "none".into(),
-			arg_ws_hosts: "none".into(),
-			arg_ws_max_connections: 100,
+				// WS
+				flag_no_ws: false,
+				arg_ws_port: 8546u16,
+				arg_ws_interface: "local".into(),
+				arg_ws_apis: "web3,eth,net,parity,traces,rpc,secretstore".into(),
+				arg_ws_origins: "none".into(),
+				arg_ws_hosts: "none".into(),
+				arg_ws_max_connections: 100,
 
-			// IPC
-			flag_no_ipc: false,
-			arg_ipc_path: "$HOME/.parity/jsonrpc.ipc".into(),
-			arg_ipc_apis: "web3,eth,net,parity,parity_accounts,personal,traces,rpc,secretstore".into(),
+				// IPC
+				flag_no_ipc: false,
+				arg_ipc_path: "$HOME/.parity/jsonrpc.ipc".into(),
+				arg_ipc_apis: "web3,eth,net,parity,parity_accounts,personal,traces,rpc,secretstore"
+					.into(),
 
-			// RabbitMQ
-			arg_rabbitmq_uri: "amqp://localhost:5672".into(),
+				// RabbitMQ
+				arg_rabbitmq_uri: "amqp://localhost:5672".into(),
 
-			// DAPPS
-			arg_dapps_path: Some("$HOME/.parity/dapps".into()),
-			flag_no_dapps: false,
+				// DAPPS
+				arg_dapps_path: Some("$HOME/.parity/dapps".into()),
+				flag_no_dapps: false,
 
-			// SECRETSTORE
-			flag_no_secretstore: false,
-			flag_no_secretstore_http: false,
-			flag_no_secretstore_auto_migrate: false,
-			arg_secretstore_acl_contract: Some("registry".into()),
-			arg_secretstore_contract: Some("none".into()),
-			arg_secretstore_srv_gen_contract: Some("none".into()),
-			arg_secretstore_srv_retr_contract: Some("none".into()),
-			arg_secretstore_doc_store_contract: Some("none".into()),
-			arg_secretstore_doc_sretr_contract: Some("none".into()),
-			arg_secretstore_secret: None,
-			arg_secretstore_admin_public: None,
-			arg_secretstore_nodes: "".into(),
-			arg_secretstore_server_set_contract: Some("registry".into()),
-			arg_secretstore_interface: "local".into(),
-			arg_secretstore_port: 8083u16,
-			arg_secretstore_http_interface: "local".into(),
-			arg_secretstore_http_port: 8082u16,
-			arg_secretstore_path: "$HOME/.parity/secretstore".into(),
+				// SECRETSTORE
+				flag_no_secretstore: false,
+				flag_no_secretstore_http: false,
+				flag_no_secretstore_auto_migrate: false,
+				arg_secretstore_acl_contract: Some("registry".into()),
+				arg_secretstore_contract: Some("none".into()),
+				arg_secretstore_srv_gen_contract: Some("none".into()),
+				arg_secretstore_srv_retr_contract: Some("none".into()),
+				arg_secretstore_doc_store_contract: Some("none".into()),
+				arg_secretstore_doc_sretr_contract: Some("none".into()),
+				arg_secretstore_secret: None,
+				arg_secretstore_admin_public: None,
+				arg_secretstore_nodes: "".into(),
+				arg_secretstore_server_set_contract: Some("registry".into()),
+				arg_secretstore_interface: "local".into(),
+				arg_secretstore_port: 8083u16,
+				arg_secretstore_http_interface: "local".into(),
+				arg_secretstore_http_port: 8082u16,
+				arg_secretstore_path: "$HOME/.parity/secretstore".into(),
 
-			// IPFS
-			flag_ipfs_api: false,
-			arg_ipfs_api_port: 5001u16,
-			arg_ipfs_api_interface: "local".into(),
-			arg_ipfs_api_cors: "null".into(),
-			arg_ipfs_api_hosts: "none".into(),
+				// IPFS
+				flag_ipfs_api: false,
+				arg_ipfs_api_port: 5001u16,
+				arg_ipfs_api_interface: "local".into(),
+				arg_ipfs_api_cors: "null".into(),
+				arg_ipfs_api_hosts: "none".into(),
 
-			// -- Sealing/Mining Options
-			arg_author: Some("0xdeadbeefcafe0000000000000000000000000001".into()),
-			arg_engine_signer: Some("0xdeadbeefcafe0000000000000000000000000001".into()),
-			flag_force_sealing: true,
-			arg_reseal_on_txs: "all".into(),
-			arg_reseal_min_period: 4000u64,
-			arg_reseal_max_period: 60000u64,
-			flag_reseal_on_uncle: false,
-			arg_work_queue_size: 20usize,
-			arg_tx_gas_limit: Some("10000000".into()),
-			arg_tx_time_limit: Some(100u64),
-			arg_relay_set: "cheap".into(),
-			arg_min_gas_price: Some(0u64),
-			arg_usd_per_tx: "0.0001".into(),
-			arg_gas_price_percentile: 50usize,
-			arg_usd_per_eth: "auto".into(),
-			arg_price_update_period: "hourly".into(),
-			arg_gas_floor_target: "8000000".into(),
-			arg_gas_cap: "10000000".into(),
-			arg_extra_data: Some("Parity".into()),
-			flag_tx_queue_no_unfamiliar_locals: false,
-			flag_tx_queue_no_early_reject: false,
-			arg_tx_queue_size: 8192usize,
-			arg_tx_queue_per_sender: None,
-			arg_tx_queue_mem_limit: 4u32,
-			arg_tx_queue_locals: Some("0xdeadbeefcafe0000000000000000000000000000".into()),
-			arg_tx_queue_strategy: "gas_factor".into(),
-			arg_tx_queue_ban_count: Some(1u16),
-			arg_tx_queue_ban_time: Some(180u16),
-			flag_remove_solved: false,
-			arg_notify_work: Some("http://localhost:3001".into()),
-			flag_refuse_service_transactions: false,
-			flag_infinite_pending_block: false,
-			arg_max_round_blocks_to_import: 12usize,
+				// -- Sealing/Mining Options
+				arg_author: Some("0xdeadbeefcafe0000000000000000000000000001".into()),
+				arg_engine_signer: Some("0xdeadbeefcafe0000000000000000000000000001".into()),
+				flag_force_sealing: true,
+				arg_reseal_on_txs: "all".into(),
+				arg_reseal_min_period: 4000u64,
+				arg_reseal_max_period: 60000u64,
+				flag_reseal_on_uncle: false,
+				arg_work_queue_size: 20usize,
+				arg_tx_gas_limit: Some("10000000".into()),
+				arg_tx_time_limit: Some(100u64),
+				arg_relay_set: "cheap".into(),
+				arg_min_gas_price: Some(0u64),
+				arg_usd_per_tx: "0.0001".into(),
+				arg_gas_price_percentile: 50usize,
+				arg_usd_per_eth: "auto".into(),
+				arg_price_update_period: "hourly".into(),
+				arg_gas_floor_target: "8000000".into(),
+				arg_gas_cap: "10000000".into(),
+				arg_extra_data: Some("Parity".into()),
+				flag_tx_queue_no_unfamiliar_locals: false,
+				flag_tx_queue_no_early_reject: false,
+				arg_tx_queue_size: 8192usize,
+				arg_tx_queue_per_sender: None,
+				arg_tx_queue_mem_limit: 4u32,
+				arg_tx_queue_locals: Some("0xdeadbeefcafe0000000000000000000000000000".into()),
+				arg_tx_queue_strategy: "gas_factor".into(),
+				arg_tx_queue_ban_count: Some(1u16),
+				arg_tx_queue_ban_time: Some(180u16),
+				flag_remove_solved: false,
+				arg_notify_work: Some("http://localhost:3001".into()),
+				flag_refuse_service_transactions: false,
+				flag_infinite_pending_block: false,
+				arg_max_round_blocks_to_import: 12usize,
 
-			flag_stratum: false,
-			arg_stratum_interface: "local".to_owned(),
-			arg_stratum_port: 8008u16,
-			arg_stratum_secret: None,
+				flag_stratum: false,
+				arg_stratum_interface: "local".to_owned(),
+				arg_stratum_port: 8008u16,
+				arg_stratum_secret: None,
 
-			// -- Footprint Options
-			arg_tracing: "auto".into(),
-			arg_pruning: "auto".into(),
-			arg_pruning_history: 64u64,
-			arg_pruning_memory: 500usize,
-			arg_cache_size_db: 64u32,
-			arg_cache_size_blocks: 8u32,
-			arg_cache_size_queue: 50u32,
-			arg_cache_size_state: 25u32,
-			arg_cache_size: Some(128),
-			flag_fast_and_loose: false,
-			arg_db_compaction: "ssd".into(),
-			arg_fat_db: "auto".into(),
-			flag_scale_verifiers: true,
-			arg_num_verifiers: Some(6),
+				// -- Footprint Options
+				arg_tracing: "auto".into(),
+				arg_pruning: "auto".into(),
+				arg_pruning_history: 64u64,
+				arg_pruning_memory: 500usize,
+				arg_cache_size_db: 64u32,
+				arg_cache_size_blocks: 8u32,
+				arg_cache_size_queue: 50u32,
+				arg_cache_size_state: 25u32,
+				arg_cache_size: Some(128),
+				flag_fast_and_loose: false,
+				arg_db_compaction: "ssd".into(),
+				arg_fat_db: "auto".into(),
+				flag_scale_verifiers: true,
+				arg_num_verifiers: Some(6),
 
-			// -- Import/Export Options
-			arg_export_blocks_from: "1".into(),
-			arg_export_blocks_to: "latest".into(),
-			flag_no_seal_check: false,
-			flag_export_state_no_code: false,
-			flag_export_state_no_storage: false,
-			arg_export_state_min_balance: None,
-			arg_export_state_max_balance: None,
+				// -- Import/Export Options
+				arg_export_blocks_from: "1".into(),
+				arg_export_blocks_to: "latest".into(),
+				flag_no_seal_check: false,
+				flag_export_state_no_code: false,
+				flag_export_state_no_storage: false,
+				arg_export_state_min_balance: None,
+				arg_export_state_max_balance: None,
 
-			// -- Snapshot Optons
-			arg_export_state_at: "latest".into(),
-			arg_snapshot_at: "latest".into(),
-			flag_no_periodic_snapshot: false,
-			arg_snapshot_threads: None,
+				// -- Snapshot Optons
+				arg_export_state_at: "latest".into(),
+				arg_snapshot_at: "latest".into(),
+				flag_no_periodic_snapshot: false,
+				arg_snapshot_threads: None,
 
-			// -- Light options.
-			arg_on_demand_response_time_window: Some(2),
-			arg_on_demand_request_backoff_start: Some(9),
-			arg_on_demand_request_backoff_max: Some(15),
-			arg_on_demand_request_backoff_rounds_max: Some(100),
-			arg_on_demand_request_consecutive_failures: Some(1),
+				// -- Light options.
+				arg_on_demand_response_time_window: Some(2),
+				arg_on_demand_request_backoff_start: Some(9),
+				arg_on_demand_request_backoff_max: Some(15),
+				arg_on_demand_request_backoff_rounds_max: Some(100),
+				arg_on_demand_request_consecutive_failures: Some(1),
 
-			// -- Whisper options.
-			flag_whisper: false,
-			arg_whisper_pool_size: 20,
+				// -- Whisper options.
+				flag_whisper: false,
+				arg_whisper_pool_size: 20,
 
-			// -- Legacy Options
-			flag_warp: false,
-			flag_geth: false,
-			flag_testnet: false,
-			flag_import_geth_keys: false,
-			arg_warp_barrier: None,
-			arg_datadir: None,
-			arg_networkid: None,
-			arg_peers: None,
-			arg_nodekey: None,
-			flag_nodiscover: false,
-			flag_jsonrpc: false,
-			flag_jsonrpc_off: false,
-			flag_webapp: false,
-			flag_dapps_off: false,
-			flag_rpc: false,
-			arg_rpcaddr: None,
-			arg_rpcport: None,
-			arg_rpcapi: None,
-			arg_rpccorsdomain: None,
-			flag_ipcdisable: false,
-			flag_ipc_off: false,
-			arg_ipcapi: None,
-			arg_ipcpath: None,
-			arg_gasprice: None,
-			arg_etherbase: None,
-			arg_extradata: None,
-			arg_cache: None,
-			// Legacy-Dapps
-			arg_dapps_port: Some(8080),
-			arg_dapps_interface: Some("local".into()),
-			arg_dapps_hosts: Some("none".into()),
-			arg_dapps_cors: None,
-			arg_dapps_user: Some("test_user".into()),
-			arg_dapps_pass: Some("test_pass".into()),
-			flag_dapps_apis_all: false,
+				// -- Legacy Options
+				flag_warp: false,
+				flag_geth: false,
+				flag_testnet: false,
+				flag_import_geth_keys: false,
+				arg_warp_barrier: None,
+				arg_datadir: None,
+				arg_networkid: None,
+				arg_peers: None,
+				arg_nodekey: None,
+				flag_nodiscover: false,
+				flag_jsonrpc: false,
+				flag_jsonrpc_off: false,
+				flag_webapp: false,
+				flag_dapps_off: false,
+				flag_rpc: false,
+				arg_rpcaddr: None,
+				arg_rpcport: None,
+				arg_rpcapi: None,
+				arg_rpccorsdomain: None,
+				flag_ipcdisable: false,
+				flag_ipc_off: false,
+				arg_ipcapi: None,
+				arg_ipcpath: None,
+				arg_gasprice: None,
+				arg_etherbase: None,
+				arg_extradata: None,
+				arg_cache: None,
+				// Legacy-Dapps
+				arg_dapps_port: Some(8080),
+				arg_dapps_interface: Some("local".into()),
+				arg_dapps_hosts: Some("none".into()),
+				arg_dapps_cors: None,
+				arg_dapps_user: Some("test_user".into()),
+				arg_dapps_pass: Some("test_pass".into()),
+				flag_dapps_apis_all: false,
 
-			// -- Internal Options
-			flag_can_restart: false,
+				// -- Internal Options
+				flag_can_restart: false,
 
-			// -- Miscellaneous Options
-			arg_ntp_servers: None,
-			flag_version: false,
-			arg_logging: Some("own_tx=trace".into()),
-			arg_log_file: Some("/var/log/parity.log".into()),
-			flag_no_color: false,
-			flag_no_config: false,
-		});
+				// -- Miscellaneous Options
+				arg_ntp_servers: None,
+				flag_version: false,
+				arg_logging: Some("own_tx=trace".into()),
+				arg_log_file: Some("/var/log/parity.log".into()),
+				flag_no_color: false,
+				flag_no_config: false,
+			}
+		);
 	}
 
 	#[test]
@@ -1942,9 +1998,13 @@ mod tests {
 				Err(ArgsError::Decode(_)),
 				Err(ArgsError::Decode(_)),
 				Err(ArgsError::Decode(_)),
-			) => {},
+			) => {}
 			(a, b, c, d) => {
-				assert!(false, "Got invalid error types: {:?}, {:?}, {:?}, {:?}", a, b, c, d);
+				assert!(
+					false,
+					"Got invalid error types: {:?}, {:?}, {:?}, {:?}",
+					a, b, c, d
+				);
 			}
 		}
 	}
@@ -1953,207 +2013,213 @@ mod tests {
 	fn should_deserialize_toml_file() {
 		let config: Config = toml::from_str(include_str!("./tests/config.toml")).unwrap();
 
-		assert_eq!(config, Config {
-			parity: Some(Operating {
-				mode: Some("dark".into()),
-				mode_timeout: Some(15u64),
-				mode_alarm: Some(10u64),
-				auto_update: None,
-				auto_update_delay: None,
-				auto_update_check_frequency: None,
-				release_track: None,
-				no_download: None,
-				no_consensus: None,
-				chain: Some("./chain.json".into()),
-				base_path: None,
-				db_path: None,
-				keys_path: None,
-				identity: None,
-				light: None,
-				no_hardcoded_sync: None,
-				no_persistent_txqueue: None,
-				_legacy_public_node: None,
-			}),
-			account: Some(Account {
-				unlock: Some(vec!["0x1".into(), "0x2".into(), "0x3".into()]),
-				password: Some(vec!["passwdfile path".into()]),
-				keys_iterations: None,
-				refresh_time: None,
-				disable_hardware: None,
-				fast_unlock: None,
-			}),
-			ui: Some(Ui {
-				path: None,
-				_legacy_force: None,
-				_legacy_disable: Some(true),
-				_legacy_port: None,
-				_legacy_interface: None,
-				_legacy_hosts: None,
-			}),
-			network: Some(Network {
-				warp: Some(false),
-				warp_barrier: None,
-				port: None,
-				interface: None,
-				min_peers: Some(10),
-				max_peers: Some(20),
-				max_pending_peers: Some(30),
-				snapshot_peers: Some(40),
-				allow_ips: Some("public".into()),
-				nat: Some("any".into()),
-				id: None,
-				bootnodes: None,
-				discovery: Some(true),
-				node_key: None,
-				reserved_peers: Some("./path/to/reserved_peers".into()),
-				reserved_only: Some(true),
-				no_serve_light: None,
-			}),
-			websockets: Some(Ws {
-				disable: Some(true),
-				port: None,
-				interface: None,
-				apis: None,
-				origins: Some(vec!["none".into()]),
-				hosts: None,
-				max_connections: None,
-			}),
-			rpc: Some(Rpc {
-				disable: Some(true),
-				port: Some(8180),
-				interface: None,
-				cors: None,
-				apis: None,
-				hosts: None,
-				server_threads: None,
-				processing_threads: None,
-				max_payload: None,
-				keep_alive: None,
-				experimental_rpcs: None,
-				poll_lifetime: None,
-				allow_missing_blocks: None
-			}),
-			ipc: Some(Ipc {
-				disable: None,
-				path: None,
-				apis: Some(vec!["rpc".into(), "eth".into()]),
-			}),
-			rabbitmq: Some(RabbitMQ {
-				uri: Some("amqp://localhost:5672".into()),
-			}),
-			dapps: Some(Dapps {
-				_legacy_disable: None,
-				_legacy_port: Some(8080),
-				_legacy_path: None,
-				_legacy_interface: None,
-				_legacy_hosts: None,
-				_legacy_cors: None,
-				_legacy_user: Some("username".into()),
-				_legacy_pass: Some("password".into())
-			}),
-			secretstore: Some(SecretStore {
-				disable: None,
-				disable_http: None,
-				disable_auto_migrate: None,
-				acl_contract: None,
-				service_contract: None,
-				service_contract_srv_gen: None,
-				service_contract_srv_retr: None,
-				service_contract_doc_store: None,
-				service_contract_doc_sretr: None,
-				self_secret: None,
-				admin_public: None,
-				nodes: None,
-				server_set_contract: None,
-				interface: None,
-				port: Some(8083),
-				http_interface: None,
-				http_port: Some(8082),
-				path: None,
-			}),
-			private_tx: None,
-			ipfs: Some(Ipfs {
-				enable: Some(false),
-				port: Some(5001),
-				interface: None,
-				cors: None,
-				hosts: None,
-			}),
-			mining: Some(Mining {
-				author: Some("0xdeadbeefcafe0000000000000000000000000001".into()),
-				engine_signer: Some("0xdeadbeefcafe0000000000000000000000000001".into()),
-				force_sealing: Some(true),
-				reseal_on_txs: Some("all".into()),
-				reseal_on_uncle: None,
-				reseal_min_period: Some(4000),
-				reseal_max_period: Some(60000),
-				work_queue_size: None,
-				relay_set: None,
-				min_gas_price: None,
-				gas_price_percentile: None,
-				usd_per_tx: None,
-				usd_per_eth: None,
-				price_update_period: Some("hourly".into()),
-				gas_floor_target: None,
-				gas_cap: None,
-				tx_queue_size: Some(8192),
-				tx_queue_per_sender: None,
-				tx_queue_mem_limit: None,
-				tx_queue_locals: None,
-				tx_queue_strategy: None,
-				tx_queue_ban_count: None,
-				tx_queue_ban_time: None,
-				tx_queue_no_unfamiliar_locals: None,
-				tx_queue_no_early_reject: None,
-				tx_gas_limit: None,
-				tx_time_limit: None,
-				extra_data: None,
-				remove_solved: None,
-				notify_work: None,
-				refuse_service_transactions: None,
-				infinite_pending_block: None,
-				max_round_blocks_to_import: None,
-			}),
-			footprint: Some(Footprint {
-				tracing: Some("on".into()),
-				pruning: Some("fast".into()),
-				pruning_history: Some(64),
-				pruning_memory: None,
-				fast_and_loose: None,
-				cache_size: None,
-				cache_size_db: Some(256),
-				cache_size_blocks: Some(16),
-				cache_size_queue: Some(100),
-				cache_size_state: Some(25),
-				db_compaction: Some("ssd".into()),
-				fat_db: Some("off".into()),
-				scale_verifiers: Some(false),
-				num_verifiers: None,
-			}),
-			light: Some(Light {
-				on_demand_response_time_window: Some(2),
-				on_demand_request_backoff_start: Some(9),
-				on_demand_request_backoff_max: Some(15),
-				on_demand_request_backoff_rounds_max: Some(10),
-				on_demand_request_consecutive_failures: Some(1),
-			}),
-			snapshots: Some(Snapshots {
-				disable_periodic: Some(true),
-				processing_threads: None,
-			}),
-			misc: Some(Misc {
-				logging: Some("own_tx=trace".into()),
-				log_file: Some("/var/log/parity.log".into()),
-				color: Some(true),
-				ports_shift: Some(0),
-				unsafe_expose: Some(false),
-			}),
-			whisper: Some(Whisper {
-				enabled: Some(true),
-				pool_size: Some(50),
-			}),
-			stratum: None,
-		});
+		assert_eq!(
+			config,
+			Config {
+				parity: Some(Operating {
+					mode: Some("dark".into()),
+					mode_timeout: Some(15u64),
+					mode_alarm: Some(10u64),
+					auto_update: None,
+					auto_update_delay: None,
+					auto_update_check_frequency: None,
+					release_track: None,
+					no_download: None,
+					no_consensus: None,
+					chain: Some("./chain.json".into()),
+					base_path: None,
+					db_path: None,
+					keys_path: None,
+					identity: None,
+					light: None,
+					no_hardcoded_sync: None,
+					no_persistent_txqueue: None,
+					_legacy_public_node: None,
+				}),
+				account: Some(Account {
+					unlock: Some(vec!["0x1".into(), "0x2".into(), "0x3".into()]),
+					password: Some(vec!["passwdfile path".into()]),
+					keys_iterations: None,
+					refresh_time: None,
+					disable_hardware: None,
+					fast_unlock: None,
+				}),
+				ui: Some(Ui {
+					path: None,
+					_legacy_force: None,
+					_legacy_disable: Some(true),
+					_legacy_port: None,
+					_legacy_interface: None,
+					_legacy_hosts: None,
+				}),
+				network: Some(Network {
+					warp: Some(false),
+					warp_barrier: None,
+					port: None,
+					interface: None,
+					min_peers: Some(10),
+					max_peers: Some(20),
+					max_pending_peers: Some(30),
+					snapshot_peers: Some(40),
+					allow_ips: Some("public".into()),
+					nat: Some("any".into()),
+					id: None,
+					bootnodes: None,
+					discovery: Some(true),
+					node_key: None,
+					reserved_peers: Some("./path/to/reserved_peers".into()),
+					reserved_only: Some(true),
+					no_serve_light: None,
+				}),
+				websockets: Some(Ws {
+					disable: Some(true),
+					port: None,
+					interface: None,
+					apis: None,
+					origins: Some(vec!["none".into()]),
+					hosts: None,
+					max_connections: None,
+				}),
+				rpc: Some(Rpc {
+					disable: Some(true),
+					port: Some(8180),
+					interface: None,
+					cors: None,
+					apis: None,
+					hosts: None,
+					server_threads: None,
+					processing_threads: None,
+					max_payload: None,
+					keep_alive: None,
+					experimental_rpcs: None,
+					poll_lifetime: None,
+					allow_missing_blocks: None
+				}),
+				ipc: Some(Ipc {
+					disable: None,
+					path: None,
+					apis: Some(vec!["rpc".into(), "eth".into()]),
+				}),
+				rabbitmq: Some(RabbitMQ {
+					uri: Some("amqp://localhost:5672".into()),
+					prometheus_address: None,
+					prometheus_user: None,
+					prometheus_password: None
+				}),
+				dapps: Some(Dapps {
+					_legacy_disable: None,
+					_legacy_port: Some(8080),
+					_legacy_path: None,
+					_legacy_interface: None,
+					_legacy_hosts: None,
+					_legacy_cors: None,
+					_legacy_user: Some("username".into()),
+					_legacy_pass: Some("password".into())
+				}),
+				secretstore: Some(SecretStore {
+					disable: None,
+					disable_http: None,
+					disable_auto_migrate: None,
+					acl_contract: None,
+					service_contract: None,
+					service_contract_srv_gen: None,
+					service_contract_srv_retr: None,
+					service_contract_doc_store: None,
+					service_contract_doc_sretr: None,
+					self_secret: None,
+					admin_public: None,
+					nodes: None,
+					server_set_contract: None,
+					interface: None,
+					port: Some(8083),
+					http_interface: None,
+					http_port: Some(8082),
+					path: None,
+				}),
+				private_tx: None,
+				ipfs: Some(Ipfs {
+					enable: Some(false),
+					port: Some(5001),
+					interface: None,
+					cors: None,
+					hosts: None,
+				}),
+				mining: Some(Mining {
+					author: Some("0xdeadbeefcafe0000000000000000000000000001".into()),
+					engine_signer: Some("0xdeadbeefcafe0000000000000000000000000001".into()),
+					force_sealing: Some(true),
+					reseal_on_txs: Some("all".into()),
+					reseal_on_uncle: None,
+					reseal_min_period: Some(4000),
+					reseal_max_period: Some(60000),
+					work_queue_size: None,
+					relay_set: None,
+					min_gas_price: None,
+					gas_price_percentile: None,
+					usd_per_tx: None,
+					usd_per_eth: None,
+					price_update_period: Some("hourly".into()),
+					gas_floor_target: None,
+					gas_cap: None,
+					tx_queue_size: Some(8192),
+					tx_queue_per_sender: None,
+					tx_queue_mem_limit: None,
+					tx_queue_locals: None,
+					tx_queue_strategy: None,
+					tx_queue_ban_count: None,
+					tx_queue_ban_time: None,
+					tx_queue_no_unfamiliar_locals: None,
+					tx_queue_no_early_reject: None,
+					tx_gas_limit: None,
+					tx_time_limit: None,
+					extra_data: None,
+					remove_solved: None,
+					notify_work: None,
+					refuse_service_transactions: None,
+					infinite_pending_block: None,
+					max_round_blocks_to_import: None,
+				}),
+				footprint: Some(Footprint {
+					tracing: Some("on".into()),
+					pruning: Some("fast".into()),
+					pruning_history: Some(64),
+					pruning_memory: None,
+					fast_and_loose: None,
+					cache_size: None,
+					cache_size_db: Some(256),
+					cache_size_blocks: Some(16),
+					cache_size_queue: Some(100),
+					cache_size_state: Some(25),
+					db_compaction: Some("ssd".into()),
+					fat_db: Some("off".into()),
+					scale_verifiers: Some(false),
+					num_verifiers: None,
+				}),
+				light: Some(Light {
+					on_demand_response_time_window: Some(2),
+					on_demand_request_backoff_start: Some(9),
+					on_demand_request_backoff_max: Some(15),
+					on_demand_request_backoff_rounds_max: Some(10),
+					on_demand_request_consecutive_failures: Some(1),
+				}),
+				snapshots: Some(Snapshots {
+					disable_periodic: Some(true),
+					processing_threads: None,
+				}),
+				misc: Some(Misc {
+					logging: Some("own_tx=trace".into()),
+					log_file: Some("/var/log/parity.log".into()),
+					color: Some(true),
+					ports_shift: Some(0),
+					unsafe_expose: Some(false),
+				}),
+				whisper: Some(Whisper {
+					enabled: Some(true),
+					pool_size: Some(50),
+				}),
+				stratum: None,
+			}
+		);
 	}
 
 	#[test]
