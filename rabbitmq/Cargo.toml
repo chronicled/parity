@@ -27,3 +27,7 @@ rlp = { version = "0.3.0", features = ["ethereum"] }
 
 [dev-dependencies]
 macros = { path = "../util/macros" }
+
+[dependencies.prometheus]
+git = "https://github.com/pingcap/rust-prometheus.git"
+features = ["push", "process"]

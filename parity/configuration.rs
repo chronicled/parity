@@ -785,7 +785,11 @@ impl Configuration {
 
 	fn rabbitmq_config(&self) -> RabbitMqConfig {
 		RabbitMqConfig {
-			uri: self.args.arg_rabbitmq_uri.clone()
+			uri: self.args.arg_rabbitmq_uri.clone(),
+			prometheus_reporting_enabled: self.args.arg_prometheus_reporting.clone(),
+			prometheus_address: self.args.arg_prometheus_address.clone(),
+			prometheus_user: self.args.arg_prometheus_user.clone(),
+			prometheus_password: self.args.arg_prometheus_password.clone(),
 		}
 	}
 
@@ -1449,6 +1453,10 @@ mod tests {
 			net_conf: default_network_config(),
 			rabbitmq_conf: RabbitMqConfig {
 				uri: "amqp://localhost:5672".into(),
+				prometheus_reporting_enabled: false,
+				prometheus_address: "localhost:9091".into(),
+				prometheus_user: "".into(),
+				prometheus_password: "".into()
 			},
 			network_id: None,
 			warp_sync: true,
