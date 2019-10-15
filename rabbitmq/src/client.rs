@@ -32,7 +32,7 @@ use PUBLIC_TRANSACTION_QUEUE;
 use TX_ERROR_EXCHANGE_NAME;
 use TX_ERROR_ROUTING_KEY;
 
-const METRIC_PUSH_INTERVAL_MS: u64 = 2000;
+const METRIC_PUSH_INTERVAL_MS: u64 = 5000;
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct RabbitMqConfig {
