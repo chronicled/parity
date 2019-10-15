@@ -1787,6 +1787,12 @@ mod tests {
 			// RabbitMQ
 			arg_rabbitmq_uri: "amqp://localhost:5672".into(),
 
+			// Prometheus
+			arg_prometheus_reporting: false,
+			arg_prometheus_address: "localhost:9091".into(),
+			arg_prometheus_user: "".into(),
+			arg_prometheus_password: "".into(),
+
 			// DAPPS
 			arg_dapps_path: Some("$HOME/.parity/dapps".into()),
 			flag_no_dapps: false,
@@ -2061,6 +2067,10 @@ mod tests {
 			}),
 			rabbitmq: Some(RabbitMQ {
 				uri: Some("amqp://localhost:5672".into()),
+				prometheus_reporting_enabled: None,
+				prometheus_user: None,
+				prometheus_password: None,
+				prometheus_address: None,
 			}),
 			dapps: Some(Dapps {
 				_legacy_disable: None,

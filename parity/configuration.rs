@@ -1453,6 +1453,10 @@ mod tests {
 			net_conf: default_network_config(),
 			rabbitmq_conf: RabbitMqConfig {
 				uri: "amqp://localhost:5672".into(),
+				prometheus_reporting_enabled: false,
+				prometheus_address: "localhost:9091".into(),
+				prometheus_user: "".into(),
+				prometheus_password: "".into()
 			},
 			network_id: None,
 			warp_sync: true,
