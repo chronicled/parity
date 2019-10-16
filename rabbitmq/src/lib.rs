@@ -1,5 +1,6 @@
 extern crate futures;
 extern crate hex;
+extern crate hyper;
 extern crate lapin_futures as lapin;
 extern crate prometheus;
 extern crate rustc_hex;
