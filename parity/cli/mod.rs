@@ -578,17 +578,9 @@ usage! {
 			"--prometheus-reporting=[BOOL]",
 			"Enable reporting prometheus metrics to the prometheus pushgateway",
 
-			ARG arg_prometheus_address: (String) = "localhost:9091", or |c: &Config| c.rabbitmq.as_ref()?.prometheus_address.clone(),
-			"--prometheus-address=[URI]",
-			"Specify the prometheus pushgateway URI",
-
-			ARG arg_prometheus_user: (String) = "", or |c: &Config| c.rabbitmq.as_ref()?.prometheus_user.clone(),
-			"--prometheus-user=[USERNAME]",
-			"Specify the prometheus pushgateway username",
-
-			ARG arg_prometheus_password: (String) = "", or |c: &Config| c.rabbitmq.as_ref()?.prometheus_password.clone(),
-			"--prometheus-password=[PASSWORD]",
-			"Specify the prometheus pushgateway password",
+			ARG arg_prometheus_export_service_port: (u16) = 9898u16, or |c: &Config| c.rabbitmq.as_ref()?.prometheus_export_service_port.clone(),
+			"--prometheus-export-service-port=[PORT]",
+			"Specify the port to run the export service",
 
 		["API and Console Options – IPFS"]
 			FLAG flag_ipfs_api: (bool) = false, or |c: &Config| c.ipfs.as_ref()?.enable.clone(),
@@ -1312,9 +1304,7 @@ struct Ipc {
 struct RabbitMQ {
 	uri: Option<String>,
 	prometheus_reporting_enabled: Option<bool>,
-	prometheus_address: Option<String>,
-	prometheus_user: Option<String>,
-	prometheus_password: Option<String>,
+	prometheus_export_service_port: Option<u16>,
 }
 
 #[derive(Default, Debug, PartialEq, Deserialize)]
@@ -1789,9 +1779,7 @@ mod tests {
 
 			// Prometheus
 			arg_prometheus_reporting: false,
-			arg_prometheus_address: "localhost:9091".into(),
-			arg_prometheus_user: "".into(),
-			arg_prometheus_password: "".into(),
+			arg_prometheus_export_service_port: 9898,
 
 			// DAPPS
 			arg_dapps_path: Some("$HOME/.parity/dapps".into()),
@@ -2068,9 +2056,7 @@ mod tests {
 			rabbitmq: Some(RabbitMQ {
 				uri: Some("amqp://localhost:5672".into()),
 				prometheus_reporting_enabled: None,
-				prometheus_user: None,
-				prometheus_password: None,
-				prometheus_address: None,
+				prometheus_export_service_port: None,
 			}),
 			dapps: Some(Dapps {
 				_legacy_disable: None,
