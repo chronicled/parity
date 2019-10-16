@@ -786,7 +786,7 @@ impl Configuration {
 	fn rabbitmq_config(&self) -> RabbitMqConfig {
 		RabbitMqConfig {
 			uri: self.args.arg_rabbitmq_uri.clone(),
-			prometheus_reporting_enabled: self.args.arg_prometheus_reporting.clone(),
+			prometheus_export_service: self.args.arg_prometheus_export_service.clone(),
 			prometheus_export_service_port: self.args.arg_prometheus_export_service_port.clone(),
 		}
 	}
@@ -1451,7 +1451,7 @@ mod tests {
 			net_conf: default_network_config(),
 			rabbitmq_conf: RabbitMqConfig {
 				uri: "amqp://localhost:5672".into(),
-				prometheus_reporting_enabled: false,
+				prometheus_export_service: false,
 				prometheus_export_service_port: 9898,
 			},
 			network_id: None,

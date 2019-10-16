@@ -574,9 +574,9 @@ usage! {
 			"Specify the RabbitMQ server uri",
 
 		["API and Console Options – Prometheus"]
-			ARG arg_prometheus_reporting: (bool) = false, or |c: &Config| c.rabbitmq.as_ref()?.prometheus_reporting_enabled.clone(),
-			"--prometheus-reporting=[BOOL]",
-			"Enable reporting prometheus metrics to the prometheus pushgateway",
+			ARG arg_prometheus_export_service: (bool) = false, or |c: &Config| c.rabbitmq.as_ref()?.prometheus_export_service.clone(),
+			"--prometheus-export-service=[BOOL]",
+			"Enable prometheus export service",
 
 			ARG arg_prometheus_export_service_port: (u16) = 9898u16, or |c: &Config| c.rabbitmq.as_ref()?.prometheus_export_service_port.clone(),
 			"--prometheus-export-service-port=[PORT]",
@@ -1303,7 +1303,7 @@ struct Ipc {
 #[serde(deny_unknown_fields)]
 struct RabbitMQ {
 	uri: Option<String>,
-	prometheus_reporting_enabled: Option<bool>,
+	prometheus_export_service: Option<bool>,
 	prometheus_export_service_port: Option<u16>,
 }
 
@@ -1778,7 +1778,7 @@ mod tests {
 			arg_rabbitmq_uri: "amqp://localhost:5672".into(),
 
 			// Prometheus
-			arg_prometheus_reporting: false,
+			arg_prometheus_export_service: false,
 			arg_prometheus_export_service_port: 9898,
 
 			// DAPPS
@@ -2055,7 +2055,7 @@ mod tests {
 			}),
 			rabbitmq: Some(RabbitMQ {
 				uri: Some("amqp://localhost:5672".into()),
-				prometheus_reporting_enabled: None,
+				prometheus_export_service: None,
 				prometheus_export_service_port: None,
 			}),
 			dapps: Some(Dapps {

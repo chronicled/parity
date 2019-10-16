@@ -33,7 +33,7 @@ use TX_ERROR_ROUTING_KEY;
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct RabbitMqConfig {
 	pub uri: String,
-	pub prometheus_reporting_enabled: bool,
+	pub prometheus_export_service: bool,
 	pub prometheus_export_service_port: u16,
 }
 
@@ -73,10 +73,10 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		let sender_handler = Box::new(Sender::new(client.clone(), miner.clone()));
 		let config_uri = ConfigUri::Uri(config.uri);
 
-		let prometheus_reporting_enabled = config.prometheus_reporting_enabled;
-		let prometheus_export_service_port = config.prometheus_export_service_port;
+		let export_service_enabled = config.prometheus_export_service;
+		let export_service_port = config.prometheus_export_service_port;
 
-		let export_service_address = ([127, 0, 0, 1], prometheus_export_service_port).into();
+		let export_service_address = ([127, 0, 0, 1], export_service_port).into();
 		info!(
 			"Prometheus export service listening at address: {:?}",
 			export_service_address
@@ -179,7 +179,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 					);
 				})
 		}));
-		if prometheus_reporting_enabled {
+		if export_service_enabled {
 			executor.spawn(export_service);
 		}
 		Ok(Self { client, sender })
