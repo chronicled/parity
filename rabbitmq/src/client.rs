@@ -62,6 +62,13 @@ pub enum ErrorType {
 	TransactionRejected,
 }
 
+lazy_static! {
+    static ref NEW_BLOCK_COUNTER: Counter = register_counter!(opts!(
+        "new_blocks",
+        "Total number of new block pubsub messages received."
+	)).unwrap();
+}
+
 impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 	pub fn new(
 		client: Arc<C>,
@@ -81,9 +88,6 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 			"Prometheus export service listening at address: {:?}",
 			export_service_address
 		);
-
-		let new_block_counter =
-			Counter::with_opts(Opts::new("new_block_counter", "New block count")).unwrap();
 
 		let export_service_handler = || {
 			let encoder = TextEncoder::new();
@@ -160,7 +164,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 			// Send new block messages
 			receiver
 				.for_each(enclose!((rabbit) move |message| {
-					new_block_counter.inc();
+					NEW_BLOCK_COUNTER.inc();
 					try_spawn(
 					rabbit.clone()
 					.publish(
