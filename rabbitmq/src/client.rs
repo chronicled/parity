@@ -9,8 +9,9 @@ use failure::{format_err, Error};
 use futures::future::{err, lazy};
 use handler::{Handler, Sender};
 
+use hyper::{header::CONTENT_TYPE, rt::Future, service::service_fn_ok, Body, Response, Server};
 use parity_runtime::Executor;
-use prometheus::{Counter, Opts, Encoder, TextEncoder};
+use prometheus::{Counter, Encoder, Opts, TextEncoder};
 use rabbitmq_adaptor::{ConfigUri, ConsumerResult, DeliveryExt, RabbitConnection, RabbitExt};
 use serde::Deserialize;
 use serde_json;
@@ -18,7 +19,6 @@ use std::sync::Arc;
 use tokio::prelude::*;
 use tokio::sync::mpsc::{channel, Sender as ChannelSender};
 use types::{Block, BlockTransactions, Bytes, Log, RichBlock, Transaction};
-use hyper::{header::CONTENT_TYPE, rt::Future, service::service_fn_ok, Body, Response, Server};
 
 use DEFAULT_CHANNEL_SIZE;
 use DEFAULT_REPLY_QUEUE;
@@ -63,10 +63,11 @@ pub enum ErrorType {
 }
 
 lazy_static! {
-    static ref NEW_BLOCK_COUNTER: Counter = register_counter!(opts!(
-        "new_blocks",
-        "Total number of new block pubsub messages received."
-	)).unwrap();
+	static ref NEW_BLOCK_COUNTER: Counter = register_counter!(opts!(
+		"new_blocks",
+		"Total number of new block pubsub messages received."
+	))
+	.unwrap();
 }
 
 impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
@@ -92,7 +93,6 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		let export_service_handler = || {
 			let encoder = TextEncoder::new();
 			service_fn_ok(move |_request| {
-
 				let metric_families = prometheus::gather();
 				let mut buffer = vec![];
 				encoder.encode(&metric_families, &mut buffer).unwrap();
@@ -107,9 +107,9 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 			})
 		};
 
-		let export_service =  Server::bind(&export_service_address)
-        .serve(export_service_handler)
-        .map_err(|e| eprintln!("Server error: {}", e));
+		let export_service = Server::bind(&export_service_address)
+			.serve(export_service_handler)
+			.map_err(|e| eprintln!("Server error: {}", e));
 
 		executor.spawn(lazy(move || {
 			let rabbit = RabbitConnection::new(config_uri, None, DEFAULT_REPLY_QUEUE);
