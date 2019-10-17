@@ -2063,7 +2063,10 @@ mod tests {
 			rabbitmq: Some(RabbitMQ {
 				uri: Some("amqp://localhost:5672".into()),
 			}),
-			prometheus_export_service: None,
+			prometheus_export_service: Some(PrometheusExportService {
+				prometheus_export_service: Some(true),
+				prometheus_export_service_port: Some(9999),
+			}),
 			dapps: Some(Dapps {
 				_legacy_disable: None,
 				_legacy_port: Some(8080),
