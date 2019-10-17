@@ -38,7 +38,7 @@ use miner::pool;
 use num_cpus;
 
 use rpc::{IpcConfiguration, HttpConfiguration, WsConfiguration};
-use parity_rabbitmq::client::RabbitMqConfig;
+use parity_rabbitmq::client::{RabbitMqConfig, PrometheusExportServiceConfig};
 use parity_rpc::NetworkSettings;
 use cache::CacheConfig;
 use helpers::{to_duration, to_mode, to_block_id, to_u256, to_pending_set, to_price, geth_ipc_path, parity_ipc_path, to_bootnodes, to_addresses, to_address, to_queue_strategy, to_queue_penalization};
@@ -135,6 +135,7 @@ impl Configuration {
 		let ipc_conf = self.ipc_config()?;
 		let net_conf = self.net_config()?;
 		let rabbitmq_conf = self.rabbitmq_config();
+		let prometheus_export_service_config = self.prometheus_export_service_config();
 		let network_id = self.network_id();
 		let cache_config = self.cache_config();
 		let tracing = self.args.arg_tracing.parse()?;
@@ -384,6 +385,7 @@ impl Configuration {
 				ipc_conf: ipc_conf,
 				net_conf: net_conf,
 				rabbitmq_conf: rabbitmq_conf,
+				prometheus_export_service_conf: prometheus_export_service_config,
 				network_id: network_id,
 				acc_conf: self.accounts_config()?,
 				gas_pricer_conf: self.gas_pricer_config()?,
@@ -785,11 +787,14 @@ impl Configuration {
 
 	fn rabbitmq_config(&self) -> RabbitMqConfig {
 		RabbitMqConfig {
-			uri: self.args.arg_rabbitmq_uri.clone(),
-			prometheus_reporting_enabled: self.args.arg_prometheus_reporting.clone(),
-			prometheus_address: self.args.arg_prometheus_address.clone(),
-			prometheus_user: self.args.arg_prometheus_user.clone(),
-			prometheus_password: self.args.arg_prometheus_password.clone(),
+			uri: self.args.arg_rabbitmq_uri.clone()
+		}
+	}
+
+	fn prometheus_export_service_config(&self) -> PrometheusExportServiceConfig {
+		PrometheusExportServiceConfig {
+			prometheus_export_service: self.args.arg_prometheus_export_service.clone(),
+			prometheus_export_service_port: self.args.arg_prometheus_export_service_port.clone()
 		}
 	}
 
@@ -1453,10 +1458,10 @@ mod tests {
 			net_conf: default_network_config(),
 			rabbitmq_conf: RabbitMqConfig {
 				uri: "amqp://localhost:5672".into(),
-				prometheus_reporting_enabled: false,
-				prometheus_address: "localhost:9091".into(),
-				prometheus_user: "".into(),
-				prometheus_password: "".into()
+			},
+			prometheus_export_service_conf: PrometheusExportServiceConfig {
+				prometheus_export_service: false,
+				prometheus_export_service_port: 9898,
 			},
 			network_id: None,
 			warp_sync: true,

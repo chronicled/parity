@@ -38,7 +38,7 @@ use light::Cache as LightDataCache;
 use miner::external::ExternalMiner;
 use miner::work_notify::WorkPoster;
 use node_filter::NodeFilter;
-use parity_rabbitmq::client::{PubSubClient, RabbitMqConfig};
+use parity_rabbitmq::client::{PubSubClient, RabbitMqConfig, PrometheusExportServiceConfig};
 use parity_runtime::Runtime;
 use sync::{self, SyncConfig, PrivateTxHandler};
 use parity_rpc::{
@@ -101,6 +101,7 @@ pub struct RunCmd {
 	pub ipc_conf: rpc::IpcConfiguration,
 	pub net_conf: sync::NetworkConfiguration,
 	pub rabbitmq_conf: RabbitMqConfig,
+	pub prometheus_export_service_conf: PrometheusExportServiceConfig,
 	pub network_id: Option<u64>,
 	pub warp_sync: bool,
 	pub warp_barrier: Option<u64>,
@@ -759,7 +760,7 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	let ipc_server = rpc::new_ipc(cmd.ipc_conf, &dependencies)?;
 	let http_server = rpc::new_http("HTTP JSON-RPC", "jsonrpc", cmd.http_conf.clone(), &dependencies)?;
 
-	let rabbitmq_client = match PubSubClient::new(client.clone(), miner.clone(), runtime.executor(), cmd.rabbitmq_conf) {
+	let rabbitmq_client = match PubSubClient::new(client.clone(), miner.clone(), runtime.executor(), cmd.rabbitmq_conf, cmd.prometheus_export_service_conf) {
 		Ok(client) => Arc::new(client),
 		Err(e) => return Err(format!("Failed to connect to the RabbitMQ Server: {}", e)),
 	};
