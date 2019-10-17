@@ -11,7 +11,7 @@ use handler::{Handler, Sender};
 
 use hyper::{header::CONTENT_TYPE, rt::Future, service::service_fn_ok, Body, Response, Server};
 use parity_runtime::Executor;
-use prometheus::{Counter, Encoder, Opts, TextEncoder};
+use prometheus::{Counter, Encoder, TextEncoder};
 use rabbitmq_adaptor::{ConfigUri, ConsumerResult, DeliveryExt, RabbitConnection, RabbitExt};
 use serde::Deserialize;
 use serde_json;
@@ -33,6 +33,10 @@ use TX_ERROR_ROUTING_KEY;
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct RabbitMqConfig {
 	pub uri: String,
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct PrometheusExportServiceConfig {
 	pub prometheus_export_service: bool,
 	pub prometheus_export_service_port: u16,
 }
@@ -75,14 +79,15 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		client: Arc<C>,
 		miner: Arc<miner::Miner>,
 		executor: Executor,
-		config: RabbitMqConfig,
+		rabbit_config: RabbitMqConfig,
+		prometheus_export_service_config: PrometheusExportServiceConfig,
 	) -> Result<Self, Error> {
 		let (sender, receiver) = channel::<Vec<u8>>(DEFAULT_CHANNEL_SIZE);
 		let sender_handler = Box::new(Sender::new(client.clone(), miner.clone()));
-		let config_uri = ConfigUri::Uri(config.uri);
+		let config_uri = ConfigUri::Uri(rabbit_config.uri);
 
-		let export_service_enabled = config.prometheus_export_service;
-		let export_service_port = config.prometheus_export_service_port;
+		let export_service_enabled = prometheus_export_service_config.prometheus_export_service;
+		let export_service_port = prometheus_export_service_config.prometheus_export_service_port;
 
 		let export_service_address = ([127, 0, 0, 1], export_service_port).into();
 		info!(

@@ -574,11 +574,11 @@ usage! {
 			"Specify the RabbitMQ server uri",
 
 		["API and Console Options – Prometheus"]
-			ARG arg_prometheus_export_service: (bool) = false, or |c: &Config| c.rabbitmq.as_ref()?.prometheus_export_service.clone(),
+			ARG arg_prometheus_export_service: (bool) = false, or |c: &Config| c.prometheus_export_service.as_ref()?.prometheus_export_service.clone(),
 			"--prometheus-export-service=[BOOL]",
 			"Enable prometheus export service",
 
-			ARG arg_prometheus_export_service_port: (u16) = 9898u16, or |c: &Config| c.rabbitmq.as_ref()?.prometheus_export_service_port.clone(),
+			ARG arg_prometheus_export_service_port: (u16) = 9898u16, or |c: &Config| c.prometheus_export_service.as_ref()?.prometheus_export_service_port.clone(),
 			"--prometheus-export-service-port=[PORT]",
 			"Specify the port to run the export service",
 
@@ -1161,6 +1161,7 @@ struct Config {
 	websockets: Option<Ws>,
 	ipc: Option<Ipc>,
 	rabbitmq: Option<RabbitMQ>,
+	prometheus_export_service: Option<PrometheusExportService>,
 	dapps: Option<Dapps>,
 	secretstore: Option<SecretStore>,
 	private_tx: Option<PrivateTransactions>,
@@ -1303,9 +1304,15 @@ struct Ipc {
 #[serde(deny_unknown_fields)]
 struct RabbitMQ {
 	uri: Option<String>,
-	prometheus_export_service: Option<bool>,
-	prometheus_export_service_port: Option<u16>,
 }
+
+#[derive(Default, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrometheusExportService {
+	prometheus_export_service: Option<bool>,
+	prometheus_export_service_port: Option<u16>
+}
+
 
 #[derive(Default, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1465,7 +1472,7 @@ mod tests {
 	use super::{
 		Args, ArgsError,
 		Config, Operating, Account, Ui, Network, Ws, Rpc, Ipc, RabbitMQ, Dapps, Ipfs, Mining, Footprint,
-		Snapshots, Misc, Whisper, SecretStore, Light,
+		Snapshots, Misc, Whisper, SecretStore, Light, PrometheusExportService
 	};
 	use toml;
 	use clap::{ErrorKind as ClapErrorKind};
@@ -2055,9 +2062,8 @@ mod tests {
 			}),
 			rabbitmq: Some(RabbitMQ {
 				uri: Some("amqp://localhost:5672".into()),
-				prometheus_export_service: None,
-				prometheus_export_service_port: None,
 			}),
+			prometheus_export_service: None,
 			dapps: Some(Dapps {
 				_legacy_disable: None,
 				_legacy_port: Some(8080),
