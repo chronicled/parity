@@ -32,4 +32,4 @@ macros = { path = "../util/macros" }
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
-features = ["push", "process"]
+features = ["process"]
