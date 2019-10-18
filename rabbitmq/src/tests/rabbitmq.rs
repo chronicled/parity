@@ -1,4 +1,5 @@
 use futures::Stream;
+use kvdb_rocksdb::Database;
 use tokio::sync::mpsc::channel;
 use std::sync::Arc;
 
@@ -25,6 +26,7 @@ fn should_subscribe_to_new_blocks() {
 	let dummy_rabbitmq_client = PubSubClient {
 		client: Arc::new(client),
 		sender: sender,
+		database: Database::open_default("").unwrap(),
 	};
 
 	// Check notifications

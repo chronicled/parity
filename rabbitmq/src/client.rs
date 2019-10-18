@@ -1,19 +1,22 @@
 //! RabbitMQ ChainNotfiy implementation
 
+use byteorder::{LittleEndian, ByteOrder};
 use common::try_spawn;
 use enclose::enclose;
-use ethcore::client::{BlockChainClient, BlockId, ChainNotify, ChainRouteType, NewBlocks};
+use ethcore::client::{BlockChainClient, BlockId, ChainNotify, ChainRoute, ChainRouteType, NewBlocks};
 use ethcore::miner;
 use ethereum_types::H256;
 use failure::{format_err, Error};
 use futures::future::{err, lazy};
 use handler::{Handler, Sender};
-
+use kvdb::DBTransaction;
+use kvdb_rocksdb::Database;
 use parity_runtime::Executor;
 use prometheus::{labels, Counter, Opts};
 use rabbitmq_adaptor::{ConfigUri, ConsumerResult, DeliveryExt, RabbitConnection, RabbitExt};
 use serde::Deserialize;
 use serde_json;
+use std::path::Path;
 use std::sync::Arc;
 use std::time;
 use tokio::prelude::*;
@@ -21,6 +24,7 @@ use tokio::sync::mpsc::{channel, Sender as ChannelSender};
 use tokio::timer;
 use types::{Block, BlockTransactions, Bytes, Log, RichBlock, Transaction};
 
+use DB_NAME;
 use DEFAULT_CHANNEL_SIZE;
 use DEFAULT_REPLY_QUEUE;
 use LOG_TARGET;
@@ -46,6 +50,7 @@ pub struct RabbitMqConfig {
 pub struct PubSubClient<C> {
 	pub client: Arc<C>,
 	pub sender: ChannelSender<Vec<u8>>,
+	pub database: Database,
 }
 
 #[derive(Deserialize)]
@@ -73,16 +78,21 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		miner: Arc<miner::Miner>,
 		executor: Executor,
 		config: RabbitMqConfig,
+		client_path: Option<&str>
 	) -> Result<Self, Error> {
 		let (sender, receiver) = channel::<Vec<u8>>(DEFAULT_CHANNEL_SIZE);
 		let sender_handler = Box::new(Sender::new(client.clone(), miner.clone()));
 		let config_uri = ConfigUri::Uri(config.uri);
+		let db_path = Path::new(client_path.unwrap()).join(DB_NAME);
+		let db_path = db_path.to_str().ok_or_else(|| format_err!("Invalid rabbitmq db path"))?;
+		let database = Database::open_default(db_path)?;
 		let prometheus_reporting_enabled = config.prometheus_reporting_enabled;
 		let prometheus_address = config.prometheus_address;
 		let prometheus_user = config.prometheus_user;
 		let prometheus_password = config.prometheus_password;
 		let new_block_counter =
 			Counter::with_opts(Opts::new("new_block_counter", "New block count")).unwrap();
+
 		executor.spawn(lazy(move || {
 			let rabbit = RabbitConnection::new(config_uri, None, DEFAULT_REPLY_QUEUE);
 			// Consume to public transaction messages
@@ -175,7 +185,35 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 					}),
 			);
 		}
-		Ok(Self { client, sender })
+		let pub_sub_client = Self { client, sender, database };
+		pub_sub_client.init()?;
+		Ok(pub_sub_client)
+	}
+
+	fn init(&self) -> Result<(), Error> {
+		let latest_sent_block: u64 = self.database.get(None, b"latest")
+			.expect("low-level database error")
+			.and_then(|val| {
+				Some(LittleEndian::read_u64(&val[..]))
+			})
+			.unwrap_or(1u64);
+		let latest_blockchain_block = self.client.block(BlockId::Latest)
+			.ok_or_else(|| format_err!("Could not get the latest block from the Blockchain database"))?;
+		let latest_blockchain_block_number: u64 = latest_blockchain_block.decode_header().number();
+		if latest_sent_block < latest_blockchain_block_number {
+			let mut route: Vec<(H256, ChainRouteType)> = vec![];
+			for new_block_number in latest_sent_block..latest_blockchain_block_number {
+				let new_block = self.client.block(BlockId::Number(new_block_number))
+					.ok_or_else(|| format_err!("Could not retreive raw block data for block: {}", new_block_number))?;
+				let new_block_hash = new_block.hash();
+				route.push((new_block_hash, ChainRouteType::Enacted));
+			}
+
+			let chain_route = ChainRoute::new(route);
+			let new_blocks = NewBlocks::new(vec![], vec![], chain_route, vec![], vec![], time::Duration::from_secs(0), false);
+			self.new_blocks(new_blocks);
+		}
+		Ok(())
 	}
 }
 
@@ -185,6 +223,7 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 			(*t).into()
 		}
 
+		let mut highest_block_number: u64 = 0;
 		let blocks = new_blocks
 			.route
 			.route()
@@ -204,6 +243,10 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 					.client
 					.block_extra_info(BlockId::Hash(hash))
 					.expect("Extra info from block");
+				let block_number = header.number();
+				if header.number() > highest_block_number {
+					highest_block_number = block_number;
+				}
 				RichBlock {
 					inner: Block {
 						hash: Some(hash.into()),
@@ -214,7 +257,7 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 						miner: cast(header.author()),
 						state_root: cast(header.state_root()),
 						receipts_root: cast(header.receipts_root()),
-						number: Some(header.number().into()),
+						number: Some(block_number.into()),
 						gas_used: cast(header.gas_used()),
 						gas_limit: cast(header.gas_limit()),
 						logs_bloom: Some(cast(header.log_bloom())),
@@ -253,5 +296,11 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 				.try_send(serialized_block.into())
 				.unwrap();
 		}
+		let mut transaction = DBTransaction::new();
+		transaction.put(None, b"latest", &highest_block_number.to_le_bytes());
+		self.database.write(transaction).map_err(|err| {
+			error!("Error writing latest block number in RocksDB: {}", err);
+			()
+		});
 	}
 }
