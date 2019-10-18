@@ -26,7 +26,7 @@ fn should_subscribe_to_new_blocks() {
 	let dummy_rabbitmq_client = PubSubClient {
 		client: Arc::new(client),
 		sender: sender,
-		database: Database::open_default("").unwrap(),
+		database: Database::open_default("testdb").unwrap(),
 	};
 
 	// Check notifications
