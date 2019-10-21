@@ -19,8 +19,11 @@ use serde::Deserialize;
 use serde_json;
 use std::path::Path;
 use std::sync::Arc;
+use std::time;
 use tokio::prelude::*;
-use tokio::sync::mpsc::{channel, Sender as ChannelSender};
+use tokio::sync::mpsc::{
+	channel, Sender as ChannelSender, Receiver as ChannelReceiver
+};
 use types::{Block, BlockTransactions, Bytes, Log, RichBlock, Transaction};
 
 use DB_NAME;
@@ -85,46 +88,31 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		miner: Arc<miner::Miner>,
 		executor: Executor,
 		client_path: Option<&str>,
-    config: RabbitMqConfig,
-    prometheus_export_service_config: PrometheusExportServiceConfig
+		config: RabbitMqConfig,
+		prometheus_export_service_config: PrometheusExportServiceConfig
 	) -> Result<Self, Error> {
 		let (sender, receiver) = channel::<Vec<u8>>(DEFAULT_CHANNEL_SIZE);
-		let sender_handler = Box::new(Sender::new(client.clone(), miner.clone()));
 		let config_uri = ConfigUri::Uri(config.uri);
-		let db_path = Path::new(client_path.unwrap()).join(DB_NAME);
+		let db_path = Path::new(client_path.ok_or_else(|| format_err!("Client path does not exist"))?)
+			.join(DB_NAME);
 		let db_path = db_path.to_str().ok_or_else(|| format_err!("Invalid rabbitmq db path"))?;
 		let database = Database::open_default(db_path)?;
-	
-		let export_service_enabled = prometheus_export_service_config.prometheus_export_service;
-		let export_service_port = prometheus_export_service_config.prometheus_export_service_port;
 
-		let export_service_address = ([127, 0, 0, 1], export_service_port).into();
-		info!(
-			"Prometheus export service listening at address: {:?}",
-			export_service_address
-		);
+		let pub_sub_client = Self { client, sender, database };
+		pub_sub_client.serve(executor.clone(), receiver, miner, config_uri)?;
+		pub_sub_client.send_missed_blocks()?;
+		pub_sub_client.start_monitoring(executor, prometheus_export_service_config)?;
+		Ok(pub_sub_client)
+	}
 
-		let export_service_handler = || {
-			let encoder = TextEncoder::new();
-			service_fn_ok(move |_request| {
-				let metric_families = prometheus::gather();
-				let mut buffer = vec![];
-				encoder.encode(&metric_families, &mut buffer).unwrap();
-
-				let response = Response::builder()
-					.status(200)
-					.header(CONTENT_TYPE, encoder.format_type())
-					.body(Body::from(buffer))
-					.unwrap();
-
-				response
-			})
-		};
-
-		let export_service = Server::bind(&export_service_address)
-			.serve(export_service_handler)
-			.map_err(|e| eprintln!("Server error: {}", e));
-
+	fn serve(
+		&self,
+		executor: Executor,
+		receiver: ChannelReceiver<Vec<u8>>,
+		miner: Arc<miner::Miner>,
+		config_uri: ConfigUri
+	) -> Result<(), Error> {
+		let sender_handler = Box::new(Sender::new(self.client.clone(), miner.clone()));
 		executor.spawn(lazy(move || {
 			let rabbit = RabbitConnection::new(config_uri, None, DEFAULT_REPLY_QUEUE);
 			// Consume to public transaction messages
@@ -136,7 +124,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 						enclose!((rabbit) move |message| {
 							let operation_id = message.get_header(OPERATION_ID);
 							if operation_id.is_none() {
-								return Box::new(err(format_err!("Missing protocol-id header")));
+								return Box::new(err(format_err!("Missing operation-id header")));
 							}
 							let operation_id = operation_id.unwrap();
 							let payload = std::str::from_utf8(&message.data);
@@ -197,15 +185,10 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 					);
 				})
 		}));
-		if export_service_enabled {
-			executor.spawn(export_service);
-		}
-		let pub_sub_client = Self { client, sender, database };
-		pub_sub_client.init()?;
-		Ok(pub_sub_client)
+		Ok(())
 	}
 
-	fn init(&self) -> Result<(), Error> {
+	fn send_missed_blocks(&self) -> Result<(), Error> {
 		let latest_sent_block: u64 = self.database.get(None, b"latest")
 			.expect("low-level database error")
 			.and_then(|val| {
@@ -227,6 +210,46 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 			let chain_route = ChainRoute::new(route);
 			let new_blocks = NewBlocks::new(vec![], vec![], chain_route, vec![], vec![], time::Duration::from_secs(0), false);
 			self.new_blocks(new_blocks);
+		}
+		Ok(())
+	}
+
+	fn start_monitoring(
+		&self, executor: Executor,
+		prometheus_export_service_config: PrometheusExportServiceConfig
+	) -> Result<(), Error> {
+		let export_service_enabled = prometheus_export_service_config.prometheus_export_service;
+
+		if export_service_enabled {
+			let export_service_port = prometheus_export_service_config.prometheus_export_service_port;
+
+			let export_service_address = ([127, 0, 0, 1], export_service_port).into();
+			info!(
+				"Prometheus export service listening at address: {:?}",
+				export_service_address
+			);
+
+			let export_service_handler = || {
+				let encoder = TextEncoder::new();
+				service_fn_ok(move |_request| {
+					let metric_families = prometheus::gather();
+					let mut buffer = vec![];
+					encoder.encode(&metric_families, &mut buffer).unwrap();
+
+					let response = Response::builder()
+						.status(200)
+						.header(CONTENT_TYPE, encoder.format_type())
+						.body(Body::from(buffer))
+						.unwrap();
+
+					response
+				})
+			};
+
+			let export_service = Server::bind(&export_service_address)
+				.serve(export_service_handler)
+				.map_err(|e| eprintln!("Server error: {}", e));
+			executor.spawn(export_service);
 		}
 		Ok(())
 	}

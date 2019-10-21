@@ -762,7 +762,7 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 
 	let rabbitmq_client = match PubSubClient::new(client.clone(), miner.clone(), runtime.executor(), client_path.to_str(), cmd.rabbitmq_conf, cmd.prometheus_export_service_conf) {
 		Ok(client) => Arc::new(client),
-		Err(e) => return Err(format!("Failed to connect to the RabbitMQ Server: {}", e)),
+		Err(e) => return Err(format!("Failed to start the Blockchain RabbitMQ Interface: {}", e)),
 	};
 	service.add_notify(rabbitmq_client.clone());
 
