@@ -9,19 +9,18 @@ use ethereum_types::H256;
 use failure::{format_err, Error};
 use futures::future::{err, lazy};
 use handler::{Handler, Sender};
+use hyper::{header::CONTENT_TYPE, rt::Future, service::service_fn_ok, Body, Response, Server};
 use kvdb::DBTransaction;
 use kvdb_rocksdb::Database;
 use parity_runtime::Executor;
-use prometheus::{labels, Counter, Opts};
+use prometheus::{Counter, Encoder, TextEncoder};
 use rabbitmq_adaptor::{ConfigUri, ConsumerResult, DeliveryExt, RabbitConnection, RabbitExt};
 use serde::Deserialize;
 use serde_json;
 use std::path::Path;
 use std::sync::Arc;
-use std::time;
 use tokio::prelude::*;
 use tokio::sync::mpsc::{channel, Sender as ChannelSender};
-use tokio::timer;
 use types::{Block, BlockTransactions, Bytes, Log, RichBlock, Transaction};
 
 use DB_NAME;
@@ -35,15 +34,15 @@ use PUBLIC_TRANSACTION_QUEUE;
 use TX_ERROR_EXCHANGE_NAME;
 use TX_ERROR_ROUTING_KEY;
 
-const METRIC_PUSH_INTERVAL_MS: u64 = 5000;
-
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct RabbitMqConfig {
 	pub uri: String,
-	pub prometheus_reporting_enabled: bool,
-	pub prometheus_address: String,
-	pub prometheus_user: String,
-	pub prometheus_password: String,
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct PrometheusExportServiceConfig {
+	pub prometheus_export_service: bool,
+	pub prometheus_export_service_port: u16,
 }
 
 /// Eth PubSub implementation.
@@ -72,13 +71,22 @@ pub enum ErrorType {
 	TransactionRejected,
 }
 
+lazy_static! {
+	static ref NEW_BLOCK_COUNTER: Counter = register_counter!(opts!(
+		"new_blocks",
+		"Total number of new block pubsub messages received."
+	))
+	.unwrap();
+}
+
 impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 	pub fn new(
 		client: Arc<C>,
 		miner: Arc<miner::Miner>,
 		executor: Executor,
-		config: RabbitMqConfig,
-		client_path: Option<&str>
+		client_path: Option<&str>,
+    config: RabbitMqConfig,
+    prometheus_export_service_config: PrometheusExportServiceConfig
 	) -> Result<Self, Error> {
 		let (sender, receiver) = channel::<Vec<u8>>(DEFAULT_CHANNEL_SIZE);
 		let sender_handler = Box::new(Sender::new(client.clone(), miner.clone()));
@@ -86,12 +94,36 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		let db_path = Path::new(client_path.unwrap()).join(DB_NAME);
 		let db_path = db_path.to_str().ok_or_else(|| format_err!("Invalid rabbitmq db path"))?;
 		let database = Database::open_default(db_path)?;
-		let prometheus_reporting_enabled = config.prometheus_reporting_enabled;
-		let prometheus_address = config.prometheus_address;
-		let prometheus_user = config.prometheus_user;
-		let prometheus_password = config.prometheus_password;
-		let new_block_counter =
-			Counter::with_opts(Opts::new("new_block_counter", "New block count")).unwrap();
+	
+		let export_service_enabled = prometheus_export_service_config.prometheus_export_service;
+		let export_service_port = prometheus_export_service_config.prometheus_export_service_port;
+
+		let export_service_address = ([127, 0, 0, 1], export_service_port).into();
+		info!(
+			"Prometheus export service listening at address: {:?}",
+			export_service_address
+		);
+
+		let export_service_handler = || {
+			let encoder = TextEncoder::new();
+			service_fn_ok(move |_request| {
+				let metric_families = prometheus::gather();
+				let mut buffer = vec![];
+				encoder.encode(&metric_families, &mut buffer).unwrap();
+
+				let response = Response::builder()
+					.status(200)
+					.header(CONTENT_TYPE, encoder.format_type())
+					.body(Body::from(buffer))
+					.unwrap();
+
+				response
+			})
+		};
+
+		let export_service = Server::bind(&export_service_address)
+			.serve(export_service_handler)
+			.map_err(|e| eprintln!("Server error: {}", e));
 
 		executor.spawn(lazy(move || {
 			let rabbit = RabbitConnection::new(config_uri, None, DEFAULT_REPLY_QUEUE);
@@ -146,7 +178,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 			// Send new block messages
 			receiver
 				.for_each(enclose!((rabbit) move |message| {
-					new_block_counter.inc();
+					NEW_BLOCK_COUNTER.inc();
 					try_spawn(
 					rabbit.clone()
 					.publish(
@@ -165,25 +197,8 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 					);
 				})
 		}));
-		if prometheus_reporting_enabled {
-			executor.spawn(
-				timer::Interval::new_interval(time::Duration::from_millis(METRIC_PUSH_INTERVAL_MS))
-					.map_err(|_| ())
-					.for_each(move |_| {
-						let metric_families = prometheus::gather();
-						prometheus::push_metrics(
-							"parity_prometheus_metrics",
-							labels! {},
-							&prometheus_address,
-							metric_families,
-							Some(prometheus::BasicAuthentication {
-								username: prometheus_user.clone(),
-								password: prometheus_password.clone(),
-							}),
-						)
-						.map_err(|e| log::warn!("{}", e))
-					}),
-			);
+		if export_service_enabled {
+			executor.spawn(export_service);
 		}
 		let pub_sub_client = Self { client, sender, database };
 		pub_sub_client.init()?;

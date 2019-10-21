@@ -8,7 +8,9 @@ byteorder = "1.0"
 failure = "0.1"
 futures = "0.1.6"
 hex = "0.3.2"
+hyper = "0.12"
 lapin-futures = "0.15.0"
+lazy_static = "1.4"
 log = "0.4"
 rustc-hex = "1.0"
 serde = "1.0"
@@ -32,4 +34,4 @@ macros = { path = "../util/macros" }
 
 [dependencies.prometheus]
 git = "https://github.com/pingcap/rust-prometheus.git"
-features = ["push", "process"]
+features = ["process"]
