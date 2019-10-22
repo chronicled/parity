@@ -10,7 +10,7 @@ use failure::{format_err, Error};
 use futures::future::{err, lazy};
 use handler::{Handler, Sender};
 use hyper::{header::CONTENT_TYPE, rt::Future, service::service_fn_ok, Body, Response, Server};
-use kvdb::DBTransaction;
+use kvdb::{DBTransaction, KeyValueDB};
 use kvdb_rocksdb::Database;
 use parity_runtime::Executor;
 use prometheus::{Counter, Encoder, TextEncoder};
@@ -52,7 +52,7 @@ pub struct PrometheusExportServiceConfig {
 pub struct PubSubClient<C> {
 	pub client: Arc<C>,
 	pub sender: ChannelSender<Vec<u8>>,
-	pub database: Database,
+	pub database: Arc<KeyValueDB>,
 }
 
 #[derive(Deserialize)]
@@ -96,7 +96,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		let db_path = Path::new(client_path.ok_or_else(|| format_err!("Client path does not exist"))?)
 			.join(DB_NAME);
 		let db_path = db_path.to_str().ok_or_else(|| format_err!("Invalid rabbitmq db path"))?;
-		let database = Database::open_default(db_path)?;
+		let database = Arc::new(Database::open_default(db_path)?);
 
 		let pub_sub_client = Self { client, sender, database };
 		pub_sub_client.serve(executor.clone(), receiver, miner, config_uri)?;
@@ -188,21 +188,21 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		Ok(())
 	}
 
-	fn send_missed_blocks(&self) -> Result<(), Error> {
+	pub fn send_missed_blocks(&self) -> Result<(), Error> {
 		let latest_sent_block: u64 = self.database.get(None, b"latest")
 			.expect("low-level database error")
 			.and_then(|val| {
 				Some(LittleEndian::read_u64(&val[..]))
 			})
-			.unwrap_or(1u64);
+			.unwrap_or(0u64);
 		let latest_blockchain_block = self.client.block(BlockId::Latest)
 			.ok_or_else(|| format_err!("Could not get the latest block from the Blockchain database"))?;
 		let latest_blockchain_block_number: u64 = latest_blockchain_block.decode_header().number();
 		if latest_sent_block < latest_blockchain_block_number {
 			let mut route: Vec<(H256, ChainRouteType)> = vec![];
 			for new_block_number in latest_sent_block..latest_blockchain_block_number {
-				let new_block = self.client.block(BlockId::Number(new_block_number))
-					.ok_or_else(|| format_err!("Could not retreive raw block data for block: {}", new_block_number))?;
+				let new_block = self.client.block(BlockId::Number(new_block_number + 1))
+					.ok_or_else(|| format_err!("Could not retreive raw block data for block: {}", new_block_number + 1))?;
 				let new_block_hash = new_block.hash();
 				route.push((new_block_hash, ChainRouteType::Enacted));
 			}

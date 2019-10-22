@@ -33,6 +33,8 @@ extern crate rabbitmq_adaptor;
 extern crate rlp;
 
 #[cfg(test)]
+extern crate kvdb_memorydb;
+#[cfg(test)]
 #[macro_use]
 extern crate macros;
 
