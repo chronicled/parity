@@ -1,6 +1,9 @@
+extern crate byteorder;
 extern crate futures;
 extern crate hex;
 extern crate hyper;
+extern crate kvdb;
+extern crate kvdb_rocksdb;
 extern crate lapin_futures as lapin;
 
 extern crate rustc_hex;
@@ -39,7 +42,8 @@ pub mod handler;
 pub mod tests;
 mod types;
 
-const DEFAULT_CHANNEL_SIZE: usize = 100;
+const DB_NAME: &'static str = "rabbitmq";
+const DEFAULT_CHANNEL_SIZE: usize = 10000;
 const DEFAULT_REPLY_QUEUE: &'static str = "BlockchainInterface.default";
 const LOG_TARGET: &'static str = "rabbitmq";
 const NEW_BLOCK_EXCHANGE_NAME: &'static str = "BlockchainInterface.Output";
