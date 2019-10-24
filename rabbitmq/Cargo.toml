@@ -30,6 +30,7 @@ rabbitmq_adaptor = {version = "0.3.3", registry = "chronicled-platform-v2"}
 rlp = { version = "0.3.0", features = ["ethereum"] }
 
 [dev-dependencies]
+kvdb-memorydb = "0.1"
 macros = { path = "../util/macros" }
 
 [dependencies.prometheus]

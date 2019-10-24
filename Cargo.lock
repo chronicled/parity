@@ -3058,6 +3058,7 @@ dependencies = [
  "hex 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "hyper 0.12.35 (registry+https://github.com/rust-lang/crates.io-index)",
  "kvdb 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "kvdb-memorydb 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "kvdb-rocksdb 0.1.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "lapin-futures 0.15.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 1.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
