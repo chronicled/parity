@@ -232,14 +232,14 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 							flag_gap = true;
 					}
 					let new_block = self.client.block(BlockId::Number(new_block_number + 1))
-						.ok_or_else(|| format_err!("Could not retreive raw block data for block: {}", new_block_number + 1))?;
+						.ok_or_else(|| format_err!("Could not retrieve raw block data for block: {}", new_block_number + 1))?;
 					let new_block_hash = new_block.hash();
 					route.push((new_block_hash, ChainRouteType::Enacted));
 				}
 			}
 
 			if route.is_empty() {
-				info!(target: LOG_TARGET, "Update start_from_index in RocksDB: {:?} ", latest_blockchain_block_number);
+				info!(target: LOG_TARGET, "No missed blocks: Update start_from_index in RocksDB: {:?} ", latest_blockchain_block_number);
 				let mut transaction = DBTransaction::new();
 				transaction.put(None,  b"start_from_index", &latest_blockchain_block_number.to_le_bytes());
 				self.database.clone().write(transaction).map_err(|err| {
