@@ -101,7 +101,6 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 
 		let pub_sub_client = Self { client, sender, database };
 		pub_sub_client.serve(executor.clone(), receiver, miner, config_uri)?;
-		pub_sub_client.send_missed_blocks()?;
 		pub_sub_client.start_monitoring(executor, prometheus_export_service_config)?;
 		Ok(pub_sub_client)
 	}
@@ -196,9 +195,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 							});
 							ok(())
 						}))
-						.map_err(|_| ())
 				}))
-				.map_err(|_| ())
 		}));
 		Ok(())
 	}
