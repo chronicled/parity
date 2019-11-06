@@ -765,6 +765,7 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 		Err(e) => return Err(format!("Failed to start the Blockchain RabbitMQ Interface: {}", e)),
 	};
 	service.add_notify(rabbitmq_client.clone());
+	rabbitmq_client.send_missed_blocks().map_err(|e| format!("Error sending the missing blocks: {:?}", e))?;
 
 	// secret store key server
 	let secretstore_deps = secretstore::Dependencies {
