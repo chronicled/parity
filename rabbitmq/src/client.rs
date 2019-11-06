@@ -28,6 +28,7 @@ use types::{Block, BlockTransactions, Bytes, Log, RichBlock, Transaction};
 
 use DB_NAME;
 use ONE;
+use START_FROM_INDEX;
 use DEFAULT_CHANNEL_SIZE;
 use DEFAULT_REPLY_QUEUE;
 use LOG_TARGET;
@@ -202,7 +203,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 
 	pub fn send_missed_blocks(&self) -> Result<(), Error> {
 		let mut flag_gap: bool = false;
-		let start_from_index: u64 = self.database.get(None, b"start_from_index")
+		let start_from_index: u64 = self.database.get(None, START_FROM_INDEX)
 			.expect("low-level database error")
 			.and_then(|val| {
 				Some(LittleEndian::read_u64(&val[..]))
@@ -225,7 +226,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 					if flag_gap == false {
 							info!(target: LOG_TARGET, "Update start_from_index in RocksDB: {:?} ", new_block_number);
 							let mut transaction = DBTransaction::new();
-							transaction.put(None,  b"start_from_index", &new_block_number.to_le_bytes());
+							transaction.put(None, START_FROM_INDEX, &new_block_number.to_le_bytes());
 							self.database.clone().write(transaction).map_err(|err| {
 								handle_fatal_error(err.into());
 							});
@@ -241,7 +242,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 			if route.is_empty() {
 				info!(target: LOG_TARGET, "No missed blocks: Update start_from_index in RocksDB: {:?} ", latest_blockchain_block_number);
 				let mut transaction = DBTransaction::new();
-				transaction.put(None,  b"start_from_index", &latest_blockchain_block_number.to_le_bytes());
+				transaction.put(None, START_FROM_INDEX, &latest_blockchain_block_number.to_le_bytes());
 				self.database.clone().write(transaction).map_err(|err| {
 					handle_fatal_error(err.into());
 				});
