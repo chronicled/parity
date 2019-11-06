@@ -190,7 +190,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 						.and_then(enclose!((db) move |_| {
 							info!(target: LOG_TARGET, "Update block status in RocksDB: {:?}", block_number);
 							let mut transaction = DBTransaction::new();
-							transaction.put(None,  &block_number.to_le_bytes(), &ONE.to_le_bytes());
+							transaction.put(None, &block_number.to_le_bytes(), &ONE.to_le_bytes());
 							db.clone().write(transaction).map_err(|err| {
 								handle_fatal_error(err.into());
 							});
@@ -224,13 +224,13 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 					.unwrap_or(0u64);
 				if is_block_sent == 0 {
 					if flag_gap == false {
-							info!(target: LOG_TARGET, "Update start_from_index in RocksDB: {:?} ", new_block_number);
-							let mut transaction = DBTransaction::new();
-							transaction.put(None, START_FROM_INDEX, &new_block_number.to_le_bytes());
-							self.database.clone().write(transaction).map_err(|err| {
-								handle_fatal_error(err.into());
-							});
-							flag_gap = true;
+						info!(target: LOG_TARGET, "Update start_from_index in RocksDB: {:?} ", new_block_number);
+						let mut transaction = DBTransaction::new();
+						transaction.put(None, START_FROM_INDEX, &new_block_number.to_le_bytes());
+						self.database.clone().write(transaction).map_err(|err| {
+							handle_fatal_error(err.into());
+						});
+						flag_gap = true;
 					}
 					let new_block = self.client.block(BlockId::Number(new_block_number + 1))
 						.ok_or_else(|| format_err!("Could not retrieve raw block data for block: {}", new_block_number + 1))?;
