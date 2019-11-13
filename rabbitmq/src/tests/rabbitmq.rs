@@ -11,6 +11,7 @@ use client::PubSubClient;
 use ethcore::client::{
 	ChainNotify, ChainRoute, ChainRouteType, EachBlockWith, NewBlocks, TestBlockChainClient,
 };
+use parity_runtime::Executor;
 
 const DURATION_ZERO: Duration = Duration::from_millis(0);
 const ONE: u64 = 1;
@@ -30,6 +31,7 @@ fn should_subscribe_to_new_blocks() {
 		client: Arc::new(client),
 		sender: sender,
 		database: Arc::new(kvdb_memorydb::create(0)),
+		executor: Executor::new_sync(),
 	};
 
 	// Check notifications
@@ -77,6 +79,7 @@ pub fn should_send_missed_blocks() {
 		client: Arc::new(client),
 		sender: sender,
 		database: Arc::new(kvdb_memorydb::create(0)),
+		executor: Executor::new_sync(),
 	};
 
 	let mut transaction = DBTransaction::new();

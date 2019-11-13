@@ -55,6 +55,7 @@ pub struct PubSubClient<C> {
 	pub client: Arc<C>,
 	pub sender: ChannelSender<(Vec<u8>, u64)>,
 	pub database: Arc<KeyValueDB>,
+	pub executor: Executor,
 }
 
 #[derive(Deserialize)]
@@ -100,22 +101,21 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		let db_path = db_path.to_str().ok_or_else(|| format_err!("Invalid rabbitmq db path"))?;
 		let database = Arc::new(Database::open_default(db_path)?);
 
-		let pub_sub_client = Self { client, sender, database };
-		pub_sub_client.serve(executor.clone(), receiver, miner, config_uri)?;
-		pub_sub_client.start_monitoring(executor, prometheus_export_service_config)?;
+		let pub_sub_client = Self { client, sender, database, executor };
+		pub_sub_client.serve(receiver, miner, config_uri)?;
+		pub_sub_client.start_monitoring(prometheus_export_service_config)?;
 		Ok(pub_sub_client)
 	}
 
 	fn serve(
 		&self,
-		executor: Executor,
 		receiver: ChannelReceiver<(Vec<u8>, u64)>,
 		miner: Arc<miner::Miner>,
 		config_uri: ConfigUri
 	) -> Result<(), Error> {
 		let sender_handler = Box::new(Sender::new(self.client.clone(), miner.clone()));
 		let db = self.database.clone();
-		executor.spawn(lazy(move || {
+		self.executor.spawn(lazy(move || {
 			let rabbit = RabbitConnection::new(config_uri, None, DEFAULT_REPLY_QUEUE);
 			// Consume to public transaction messages
 			try_spawn(
@@ -256,7 +256,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 	}
 
 	fn start_monitoring(
-		&self, executor: Executor,
+		&self,
 		prometheus_export_service_config: PrometheusExportServiceConfig
 	) -> Result<(), Error> {
 		let export_service_enabled = prometheus_export_service_config.prometheus_export_service;
@@ -291,7 +291,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 			let export_service = Server::bind(&export_service_address)
 				.serve(export_service_handler)
 				.map_err(|e| eprintln!("Server error: {}", e));
-			executor.spawn(export_service);
+			self.executor.spawn(export_service);
 		}
 		Ok(())
 	}
@@ -364,14 +364,16 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 			})
 			.collect::<Vec<_>>();
 
-		for ref rich_block in blocks {
-			let serialized_block = serde_json::to_string(&rich_block.0).unwrap();
-			info!(target: LOG_TARGET, "Serialized: {:?} ", serialized_block);
-			&self
-				.sender
-				.clone()
-				.try_send((serialized_block.into(), rich_block.1))
-				.unwrap();
-		}
+		let block_messages = blocks
+			.into_iter()
+			.map(|rich_block| (serde_json::to_string(&rich_block.0).unwrap().into(), rich_block.1))
+			.collect::<Vec<_>>();
+		let channel_sender = self.sender.clone();
+		self.executor.spawn(
+			channel_sender
+				.send_all(stream::iter_ok(block_messages))
+				.map(|_| ())
+				.map_err(|err| handle_fatal_error(err.into())),
+		);
 	}
 }
