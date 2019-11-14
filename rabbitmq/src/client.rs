@@ -1,6 +1,6 @@
 //! RabbitMQ ChainNotfiy implementation
 
-use common_types::BlockNumber;
+use common_types::{BlockNumber, ids::TransactionId};
 use byteorder::{LittleEndian, ByteOrder};
 use boolinator::Boolinator;
 use common::{handle_fatal_error, try_spawn};
@@ -28,7 +28,6 @@ use tokio::sync::mpsc::{
 use types::{Block, BlockTransactions, Bytes, Log, RichBlock, Transaction};
 
 use DB_NAME;
-use ONE;
 use START_FROM_INDEX;
 use DEFAULT_CHANNEL_SIZE;
 use DEFAULT_REPLY_QUEUE;
@@ -334,6 +333,10 @@ fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, client: A
 					.view()
 					.localized_transactions()
 					.into_iter()
+					.map(|tx| {
+						let transaction_id = TransactionId::Location(BlockId::Number(tx.block_number), tx.transaction_index);
+						(tx, client.transaction_receipt(transaction_id).unwrap().outcome)
+					})
 					.map(Transaction::from_localized)
 					.collect(),
 			),
