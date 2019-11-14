@@ -4,6 +4,7 @@ name = "parity-rabbitmq"
 version = "0.1.0"
 
 [dependencies]
+boolinator = "2.4.0"
 byteorder = "1.0"
 failure = "0.1"
 futures = "0.1.6"
