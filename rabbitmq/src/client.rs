@@ -258,7 +258,6 @@ fn publish_new_block(
 	serialized_message: Vec<u8>,
 	block_number: u64
 ) ->  Box<dyn Future<Item = (), Error = ()> + Send> {
-	NEW_BLOCK_COUNTER.inc();
 		Box::new(rabbit.clone()
 		.publish(
 			NEW_BLOCK_EXCHANGE_NAME.to_string(),
@@ -275,6 +274,7 @@ fn publish_new_block(
 			handle_fatal_error(err);
 		})
 		.and_then(move |_| {
+			NEW_BLOCK_COUNTER.inc();
 			info!(target: LOG_TARGET, "Update block status in RocksDB: {:?}", block_number);
 			let mut transaction = DBTransaction::new();
 			transaction.put(None, START_FROM_INDEX, &(block_number).to_le_bytes());
