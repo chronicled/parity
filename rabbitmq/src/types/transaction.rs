@@ -150,15 +150,16 @@ impl Serialize for LocalTransactionStatus {
 }
 
 impl Transaction {
-	fn outcome_to_status_code(outcome: &TransactionOutcome) -> Option<U64> {
-		match *outcome {
+	fn outcome_to_status_code(outcome: Option<TransactionOutcome>) -> Option<U64> {
+		let tx_outcome = outcome?;
+		match tx_outcome {
 			TransactionOutcome::Unknown | TransactionOutcome::StateRoot(_) => None,
-			TransactionOutcome::StatusCode(ref code) => Some((*code as u64).into()),
+			TransactionOutcome::StatusCode(code) => Some((code as u64).into()),
 		}
 	}
 
 	/// Convert `LocalizedTransaction` into RPC Transaction.
-	pub fn from_localized((mut t, r): (LocalizedTransaction, TransactionOutcome)) -> Transaction {
+	pub fn from_localized((mut t, r): (LocalizedTransaction, Option<TransactionOutcome>)) -> Transaction {
 		let signature = t.signature();
 		let scheme = CreateContractAddress::FromSenderAndNonce;
 		Transaction {
@@ -188,7 +189,7 @@ impl Transaction {
 			r: signature.r().into(),
 			s: signature.s().into(),
 			condition: None,
-			status: Self::outcome_to_status_code(&r),
+			status: Self::outcome_to_status_code(r),
 		}
 	}
 }

@@ -1,6 +1,6 @@
 //! RabbitMQ ChainNotfiy implementation
 
-use common_types::{BlockNumber, ids::TransactionId};
+use common_types::{BlockNumber, ids::TransactionId, receipt::TransactionOutcome};
 use byteorder::{LittleEndian, ByteOrder};
 use boolinator::Boolinator;
 use common::{handle_fatal_error, try_spawn};
@@ -335,7 +335,11 @@ fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, client: A
 					.into_iter()
 					.map(|tx| {
 						let transaction_id = TransactionId::Location(BlockId::Number(tx.block_number), tx.transaction_index);
-						(tx, client.transaction_receipt(transaction_id).unwrap().outcome)
+						let outcome: Option<TransactionOutcome> = match client.transaction_receipt(transaction_id) {
+							Some(receipt) => Some(receipt.outcome),
+							None => None
+						};
+						(tx, outcome)
 					})
 					.map(Transaction::from_localized)
 					.collect(),
