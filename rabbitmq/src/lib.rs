@@ -46,7 +46,7 @@ pub mod tests;
 mod types;
 
 const DB_NAME: &'static str = "rabbitmq";
-const DEFAULT_CHANNEL_SIZE: usize = 100;
+const DEFAULT_CHANNEL_SIZE: usize = 10;
 const ONE: u64 = 1;
 const START_FROM_INDEX: &[u8] = b"start_from_index";
 const DEFAULT_REPLY_QUEUE: &'static str = "BlockchainInterface.default";

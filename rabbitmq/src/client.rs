@@ -172,33 +172,27 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 
 						if start_from_index < (block_number - 1) {
 							start_from_index += 1;
-							match construct_new_block(start_from_index, client.clone()) {
-								Some(serialized_data) => {
-									serialized_block = serialized_data;
-								},
-								None => {
-									should_break = true;
-									should_send = false;
-								}
-							};
-						}	else {
+						} else {
 							start_from_index = block_number;
 							should_break = true;
-							serialized_block = construct_new_block(start_from_index, client.clone()).unwrap();
 						}
+						match construct_new_block(start_from_index, client.clone()) {
+							Some(serialized_data) => {
+								serialized_block = serialized_data;
+							},
+							None => {
+								should_break = true;
+								should_send = false;
+							}
+						};
 
 						should_send.ok_or(()).into_future()
 						.and_then(enclose!((db, rabbit) move |_| {
 							publish_new_block(db.clone(), rabbit.clone(), serialized_block.into(), start_from_index)
 						}))
-						.or_else(enclose!((db) move |_| {
-							let mut transaction = DBTransaction::new();
-							transaction.put(None, START_FROM_INDEX, &(start_from_index).to_le_bytes());
-							db.clone().write(transaction).map_err(|err| {
-								handle_fatal_error(err.into());
-							});
+						.or_else(|_| {
 							ok(())
-						}))
+						})
 						.and_then(move |_| {
 							if should_break {
 								Ok(Loop::Break(()))
