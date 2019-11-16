@@ -6,11 +6,11 @@ version = "0.1.0"
 [dependencies]
 boolinator = "2.4.0"
 byteorder = "1.0"
-failure = "0.1"
+failure = "0.1.6"
 futures = "0.1.6"
 hex = "0.3.2"
 hyper = "0.12"
-lapin-futures = "0.15.0"
+lapin-futures = "0.28.1"
 lazy_static = "1.4"
 log = "0.4"
 rustc-hex = "1.0"
@@ -27,7 +27,7 @@ common-types = { path = "../ethcore/types" }
 ethereum-types = "0.4"
 futures-executor = "0.2.1"
 parity-runtime = { path = "../util/runtime" }
-rabbitmq_adaptor = {version = "0.3.3", registry = "chronicled-platform-v2"}
+rabbitmq_adaptor = { version = "0.4.3", registry = "chronicled-platform-v2" }
 rlp = { version = "0.3.0", features = ["ethereum"] }
 
 [dev-dependencies]
