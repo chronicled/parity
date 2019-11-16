@@ -1,4 +1,4 @@
-FROM rust:1.36 AS builder
+FROM rust:1.39 AS builder
 # show backtraces
 ENV RUST_BACKTRACE 1
 
