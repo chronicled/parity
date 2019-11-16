@@ -21,6 +21,7 @@ use serde::Deserialize;
 use serde_json;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::prelude::*;
 use tokio::sync::mpsc::{
 	channel, Sender as ChannelSender
@@ -189,7 +190,8 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 						.and_then(enclose!((db, rabbit) move |_| {
 							publish_new_block(db.clone(), rabbit.clone(), serialized_block.into(), start_from_index)
 						}))
-						.or_else(|_| {
+						.or_else(move |_| {
+							should_break = true;
 							ok(())
 						})
 						.and_then(move |_| {
@@ -264,13 +266,15 @@ fn publish_new_block(
 			serialized_message,
 			vec![],
 		)
-		.map(move |_| {
-			info!(target: LOG_TARGET, "Block message published: {:?}", block_number);
-			()
-		})
 		.map_err(|err| {
 			info!(target: LOG_TARGET, "Error publishing: {}", err);
 			handle_fatal_error(err);
+		})
+		.timeout(Duration::from_secs(10))
+		.map_err(|_| ())
+		.map(move |_| {
+			info!(target: LOG_TARGET, "Block message published: {:?}", block_number);
+			()
 		})
 		.and_then(move |_| {
 			NEW_BLOCK_COUNTER.inc();
