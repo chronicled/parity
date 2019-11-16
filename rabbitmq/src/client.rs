@@ -21,7 +21,7 @@ use serde::Deserialize;
 use serde_json;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::prelude::*;
 use tokio::sync::mpsc::{
 	channel, Sender as ChannelSender
