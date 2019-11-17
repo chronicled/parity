@@ -31,6 +31,9 @@ RUN mkdir -p /home/parity/node0/keys/prv
 RUN mkdir -p /home/parity/.local/share/io.parity.ethereum/
 RUN mkdir -p /home/parity/src
 RUN chown -R parity:parity /home/parity
+RUN apt update -y && \
+  apt install -y libssl1.1
+
 COPY . /home/parity/src
 COPY --from=builder /parity/target/release/parity ./
 
