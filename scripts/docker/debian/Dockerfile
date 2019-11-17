@@ -18,6 +18,8 @@ ENV RUST_BACKTRACE 1
 
 RUN addgroup --gid 1000 parity && \
 	adduser --uid 1000 --ingroup parity --shell /bin/sh parity
+RUN apt-get update -y && \
+  apt-get install -y libssl1.1
 
 USER parity
 
@@ -31,6 +33,7 @@ RUN mkdir -p /home/parity/node0/keys/prv
 RUN mkdir -p /home/parity/.local/share/io.parity.ethereum/
 RUN mkdir -p /home/parity/src
 RUN chown -R parity:parity /home/parity
+
 COPY . /home/parity/src
 COPY --from=builder /parity/target/release/parity ./
 
