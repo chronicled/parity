@@ -4,14 +4,14 @@ ENV RUST_BACKTRACE 1
 
 RUN apt update -y && \
 	apt upgrade -y && \
-	apt install -y perl yasm libudev-dev linux-headers-amd64 gcc g++ pkg-config file make cmake
+	apt install -y perl yasm libudev-dev linux-headers-amd64 gcc g++ pkg-config file make cmake libssl1.1
 
 WORKDIR /parity
 COPY . /parity
 RUN cargo build --release
 RUN strip target/release/parity
 
-FROM debian:stretch
+FROM debian:buster
 
 # show backtraces
 ENV RUST_BACKTRACE 1
