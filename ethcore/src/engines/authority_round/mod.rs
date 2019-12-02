@@ -958,7 +958,7 @@ impl Engine<EthereumMachine> for AuthorityRound {
 		let mut info = map![
 			"step".into() => step,
 			"signature".into() => signature,
-			"validatorCount".into() => validator_count.to_string()
+			"validatorCount".into() => format!("{:#x}", validator_count)
 		];
 
 		if header.number() >= self.empty_steps_transition {
