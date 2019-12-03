@@ -29,6 +29,7 @@ futures-executor = "0.2.1"
 parity-runtime = { path = "../util/runtime" }
 rabbitmq_adaptor = { version = "0.4.3", registry = "chronicled-platform-v2" }
 rlp = { version = "0.3.0", features = ["ethereum"] }
+vm = { path = "../ethcore/vm" }
 
 [dev-dependencies]
 kvdb-memorydb = "0.1"

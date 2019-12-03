@@ -32,6 +32,7 @@ extern crate failure;
 extern crate parity_runtime;
 extern crate rabbitmq_adaptor;
 extern crate rlp;
+extern crate vm;
 
 #[cfg(test)]
 extern crate kvdb_memorydb;
