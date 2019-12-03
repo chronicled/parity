@@ -338,7 +338,7 @@ fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, client: A
 							None => None
 						};
 						let traces = match client.transaction_traces(transaction_id) {
-							Some(traces) => traces.into_iter().map(|trace| Trace::from(trace)).collect(),
+							Some(traces) => traces.into_iter().map(Trace::from).collect(),
 							None => vec![],
 						};
 						(tx, outcome, traces)
@@ -358,10 +358,6 @@ fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, client: A
 
 impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 	fn new_blocks(&self, new_blocks: NewBlocks) {
-		fn cast<O, T: Copy + Into<O>>(t: &T) -> O {
-			(*t).into()
-		}
-
 		let blocks = new_blocks
 			.route
 			.route()
