@@ -288,7 +288,7 @@ fn publish_new_block(
 		}))
 }
 
-fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, client: Arc<C>) -> Option<String> {
+pub fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, client: Arc<C>) -> Option<String> {
 	fn cast<O, T: Copy + Into<O>>(t: &T) -> O {
 		(*t).into()
 	}
