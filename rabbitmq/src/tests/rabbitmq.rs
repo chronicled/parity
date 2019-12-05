@@ -13,7 +13,6 @@ use std::time::Duration;
 use tokio::sync::mpsc::channel;
 
 const DURATION_ZERO: Duration = Duration::from_millis(0);
-const ONE: u64 = 1;
 
 #[test]
 fn should_subscribe_to_new_blocks() {
