@@ -15,10 +15,11 @@ use hyper::{header::CONTENT_TYPE, service::service_fn_ok, Body, Response, Server
 use kvdb::{DBTransaction, KeyValueDB};
 use kvdb_rocksdb::Database;
 use parity_runtime::Executor;
-use prometheus::{Counter, Encoder, TextEncoder};
+use prometheus::{Counter, Encoder, Gauge, TextEncoder};
 use rabbitmq_adaptor::{ConfigUri, ConsumerResult, DeliveryExt, RabbitConnection, RabbitExt};
 use serde::Deserialize;
 use serde_json;
+use sync::SyncProvider;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,6 +55,7 @@ pub struct PrometheusExportServiceConfig {
 /// Eth PubSub implementation.
 pub struct PubSubClient<C> {
 	pub blockchain_client: Arc<C>,
+	pub sync: Arc<SyncProvider>,
 	pub sender: ChannelSender<BlockNumber>,
 	pub database: Arc<KeyValueDB>,
 }
@@ -83,12 +85,18 @@ lazy_static! {
 		"Total number of new block pubsub messages received."
 	))
 	.unwrap();
+	static ref MINER_GAUGE_COUNTER: Gauge = register_gauge!(opts!(
+		"miners",
+		"Number of active miners"
+	))
+	.unwrap();
 }
 
 impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 	pub fn new(
 		blockchain_client: Arc<C>,
 		miner: Arc<miner::Miner>,
+		sync_provider: Arc<SyncProvider>,
 		executor: Executor,
 		client_path: Option<&str>,
 		config: RabbitMqConfig,
@@ -204,8 +212,14 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 					})
 				}))
 		}));
-		let pubsub_client = PubSubClient { blockchain_client, sender, database };
-		pubsub_client.start_monitoring(executor, prometheus_export_service_config);
+
+		let pubsub_client = PubSubClient {
+			blockchain_client,
+			sync: sync_provider.clone(),
+			sender,
+			database
+		};
+		pubsub_client.start_monitoring(executor, prometheus_export_service_config)?;
 
 		Ok(pubsub_client)
 	}
@@ -358,6 +372,8 @@ pub fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, clien
 
 impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 	fn new_blocks(&self, new_blocks: NewBlocks) {
+		let connected_peers = self.sync.status().num_active_peers;
+		MINER_GAUGE_COUNTER.set(connected_peers as f64);
 		let blocks = new_blocks
 			.route
 			.route()
@@ -379,7 +395,7 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 				.try_send(block)
 				.map_err(|err| {
 					if err.is_full() {
-						info!(target: LOG_TARGET, "MPSC channel is full: {:?}, Reciever is already processing new block messages", err);
+						trace!(target: LOG_TARGET, "MPSC channel is full: {:?}, Receiver is already processing new block messages", err);
 					} else {
 						panic!(err)
 					}

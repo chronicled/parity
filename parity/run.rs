@@ -760,7 +760,7 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	let ipc_server = rpc::new_ipc(cmd.ipc_conf, &dependencies)?;
 	let http_server = rpc::new_http("HTTP JSON-RPC", "jsonrpc", cmd.http_conf.clone(), &dependencies)?;
 
-	let rabbitmq_client = match PubSubClient::new(client.clone(), miner.clone(), runtime.executor(), client_path.to_str(), cmd.rabbitmq_conf, cmd.prometheus_export_service_conf) {
+	let rabbitmq_client = match PubSubClient::new(client.clone(), miner.clone(), sync_provider.clone(), runtime.executor(), client_path.to_str(), cmd.rabbitmq_conf, cmd.prometheus_export_service_conf) {
 		Ok(client) => Arc::new(client),
 		Err(e) => return Err(format!("Failed to start the Blockchain RabbitMQ Interface: {}", e)),
 	};

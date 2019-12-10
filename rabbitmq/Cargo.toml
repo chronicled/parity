@@ -13,6 +13,7 @@ hyper = "0.12"
 lapin-futures = "0.28.1"
 lazy_static = "1.4"
 log = "0.4"
+parking_lot = "0.7"
 rustc-hex = "1.0"
 serde = "1.0"
 serde_derive = "1.0"
@@ -23,6 +24,8 @@ kvdb-rocksdb = "0.1.3"
 enclose = "0.1.4"
 ethcore = { path = "../ethcore", features = ["test-helpers"] }
 ethcore-miner = { path = "../miner" }
+ethcore-network = { path = "../util/network" }
+ethcore-sync = { path = "../ethcore/sync" }
 common-types = { path = "../ethcore/types" }
 ethereum-types = "0.4"
 futures-executor = "0.2.1"
