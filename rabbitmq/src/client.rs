@@ -80,14 +80,19 @@ pub enum ErrorType {
 }
 
 lazy_static! {
-	static ref NEW_BLOCK_COUNTER: Counter = register_counter!(opts!(
-		"new_blocks",
-		"Total number of new block pubsub messages received."
+	static ref SENT_BLOCKS_COUNTER: Counter = register_counter!(opts!(
+		"sent_blocks",
+		"Total number of new blocks published to the RabbitMQ interface since parity started."
 	))
 	.unwrap();
-	static ref MINER_GAUGE_COUNTER: Gauge = register_gauge!(opts!(
-		"miners",
-		"Number of active miners"
+	static ref CONNECTED_PEERS_GAUGE: Gauge = register_gauge!(opts!(
+		"connected_peers",
+		"Number of connected peers."
+	))
+	.unwrap();
+	static ref LATEST_BLOCK_RECEIVED: Gauge = register_gauge!(opts!(
+		"latest_block",
+		"Block number of the latest imported block."
 	))
 	.unwrap();
 }
@@ -291,7 +296,7 @@ fn publish_new_block(
 			()
 		})
 		.and_then(move |_| {
-			NEW_BLOCK_COUNTER.inc();
+			SENT_BLOCKS_COUNTER.inc();
 			info!(target: LOG_TARGET, "Update block status in RocksDB: {:?}", block_number);
 			let mut transaction = DBTransaction::new();
 			transaction.put(None, START_FROM_INDEX, &(block_number).to_le_bytes());
@@ -372,8 +377,8 @@ pub fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, clien
 
 impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 	fn new_blocks(&self, new_blocks: NewBlocks) {
-		let connected_peers = self.sync.status().num_active_peers;
-		MINER_GAUGE_COUNTER.set(connected_peers as f64);
+		let connected_peers = self.sync.status().num_peers;
+		CONNECTED_PEERS_GAUGE.set(connected_peers as f64);
 		let blocks = new_blocks
 			.route
 			.route()
@@ -389,6 +394,7 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 			.collect::<Vec<_>>();
 
 		blocks.into_iter().for_each(|block| {
+			LATEST_BLOCK_RECEIVED.set(block as f64);
 			&self
 				.sender
 				.clone()
