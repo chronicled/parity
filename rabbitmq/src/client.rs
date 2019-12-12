@@ -15,10 +15,11 @@ use hyper::{header::CONTENT_TYPE, service::service_fn_ok, Body, Response, Server
 use kvdb::{DBTransaction, KeyValueDB};
 use kvdb_rocksdb::Database;
 use parity_runtime::Executor;
-use prometheus::{Counter, Encoder, TextEncoder};
+use prometheus::{Counter, Encoder, Gauge, TextEncoder};
 use rabbitmq_adaptor::{ConfigUri, ConsumerResult, DeliveryExt, RabbitConnection, RabbitExt};
 use serde::Deserialize;
 use serde_json;
+use sync::SyncProvider;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,6 +55,7 @@ pub struct PrometheusExportServiceConfig {
 /// Eth PubSub implementation.
 pub struct PubSubClient<C> {
 	pub blockchain_client: Arc<C>,
+	pub sync: Arc<SyncProvider>,
 	pub sender: ChannelSender<BlockNumber>,
 	pub database: Arc<KeyValueDB>,
 }
@@ -78,9 +80,19 @@ pub enum ErrorType {
 }
 
 lazy_static! {
-	static ref NEW_BLOCK_COUNTER: Counter = register_counter!(opts!(
-		"new_blocks",
-		"Total number of new block pubsub messages received."
+	static ref SENT_BLOCKS_COUNTER: Counter = register_counter!(opts!(
+		"sent_blocks",
+		"Total number of new blocks published to the RabbitMQ interface since parity started."
+	))
+	.unwrap();
+	static ref CONNECTED_PEERS_GAUGE: Gauge = register_gauge!(opts!(
+		"connected_peers",
+		"Number of connected peers."
+	))
+	.unwrap();
+	static ref LATEST_BLOCK_RECEIVED: Gauge = register_gauge!(opts!(
+		"latest_block",
+		"Block number of the latest imported block."
 	))
 	.unwrap();
 }
@@ -89,6 +101,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 	pub fn new(
 		blockchain_client: Arc<C>,
 		miner: Arc<miner::Miner>,
+		sync_provider: Arc<SyncProvider>,
 		executor: Executor,
 		client_path: Option<&str>,
 		config: RabbitMqConfig,
@@ -204,8 +217,14 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 					})
 				}))
 		}));
-		let pubsub_client = PubSubClient { blockchain_client, sender, database };
-		pubsub_client.start_monitoring(executor, prometheus_export_service_config);
+
+		let pubsub_client = PubSubClient {
+			blockchain_client,
+			sync: sync_provider.clone(),
+			sender,
+			database
+		};
+		pubsub_client.start_monitoring(executor, prometheus_export_service_config)?;
 
 		Ok(pubsub_client)
 	}
@@ -277,7 +296,7 @@ fn publish_new_block(
 			()
 		})
 		.and_then(move |_| {
-			NEW_BLOCK_COUNTER.inc();
+			SENT_BLOCKS_COUNTER.inc();
 			info!(target: LOG_TARGET, "Update block status in RocksDB: {:?}", block_number);
 			let mut transaction = DBTransaction::new();
 			transaction.put(None, START_FROM_INDEX, &(block_number).to_le_bytes());
@@ -358,6 +377,8 @@ pub fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, clien
 
 impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 	fn new_blocks(&self, new_blocks: NewBlocks) {
+		let connected_peers = self.sync.status().num_peers;
+		CONNECTED_PEERS_GAUGE.set(connected_peers as f64);
 		let blocks = new_blocks
 			.route
 			.route()
@@ -373,13 +394,14 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 			.collect::<Vec<_>>();
 
 		blocks.into_iter().for_each(|block| {
+			LATEST_BLOCK_RECEIVED.set(block as f64);
 			&self
 				.sender
 				.clone()
 				.try_send(block)
 				.map_err(|err| {
 					if err.is_full() {
-						info!(target: LOG_TARGET, "MPSC channel is full: {:?}, Reciever is already processing new block messages", err);
+						trace!(target: LOG_TARGET, "MPSC channel is full: {:?}, Receiver is already processing new block messages", err);
 					} else {
 						panic!(err)
 					}

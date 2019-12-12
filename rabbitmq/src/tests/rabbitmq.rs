@@ -10,6 +10,7 @@ use client::construct_new_block;
 use ethcore::client::{
 	ChainNotify, ChainRoute, ChainRouteType, EachBlockWith, NewBlocks, TestBlockChainClient,
 };
+use super::sync_provider::{Config, TestSyncProvider};
 
 const DURATION_ZERO: Duration = Duration::from_millis(0);
 
@@ -22,11 +23,16 @@ fn should_subscribe_to_new_blocks() {
 	let h3 = client.block_hash_delta_minus(2);
 	let h2 = client.block_hash_delta_minus(3);
 	let h1 = client.block_hash_delta_minus(4);
+	let test_sync = TestSyncProvider::new(Config {
+		network_id: 3,
+		num_peers: 5,
+	});
 
 	// Create a sync_channel with buffer size 3
 	let (sender, receiver) = channel::<u64>(4);
 	let dummy_rabbitmq_client = PubSubClient {
 		blockchain_client: Arc::new(client),
+		sync: Arc::new(test_sync),
 		sender: sender,
 		database: Arc::new(kvdb_memorydb::create(0)),
 	};
