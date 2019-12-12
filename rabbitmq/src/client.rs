@@ -239,7 +239,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		if export_service_enabled {
 			let export_service_port = prometheus_export_service_config.prometheus_export_service_port;
 
-			let export_service_address = ([127, 0, 0, 1], export_service_port).into();
+			let export_service_address = ([0, 0, 0, 0], export_service_port).into();
 			info!(
 				target: LOG_TARGET,
 				"Prometheus export service listening at address: {:?}",
