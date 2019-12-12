@@ -6,7 +6,7 @@ extern crate hyper;
 extern crate kvdb;
 extern crate kvdb_rocksdb;
 extern crate lapin_futures as lapin;
-
+extern crate parking_lot;
 extern crate rustc_hex;
 extern crate serde;
 extern crate serde_json;
@@ -27,11 +27,14 @@ extern crate common_types;
 extern crate enclose;
 extern crate ethcore;
 extern crate ethcore_miner as miner;
+extern crate ethcore_network as network;
 extern crate ethereum_types;
 extern crate failure;
 extern crate parity_runtime;
 extern crate rabbitmq_adaptor;
 extern crate rlp;
+extern crate ethcore_sync as sync;
+extern crate vm;
 
 #[cfg(test)]
 extern crate kvdb_memorydb;
