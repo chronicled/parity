@@ -904,10 +904,14 @@ impl IoHandler<()> for TransitionHandler {
 			// has not been called fast enough.
 			// Make sure to advance up to the actual step.
 			while AsMillis::as_millis(&self.step.inner.duration_remaining()) == 0 {
+				trace!(target: "chron", "Timeout duration remaining == 0");
 				self.step.inner.increment();
 				self.step.can_propose.store(true, AtomicOrdering::SeqCst);
+				trace!(target: "chron", "Try to get a read lock on the client");
 				if let Some(ref weak) = *self.client.read() {
+					trace!(target: "chron", "Try to upgrade the Weak pointer");
 					if let Some(c) = weak.upgrade() {
+						trace!(target: "chron", "Read access aquired will call update_sealing");
 						c.update_sealing();
 					}
 				}
@@ -953,12 +957,12 @@ impl Engine<EthereumMachine> for AuthorityRound {
 		let signature = header_signature(header, self.empty_steps_transition).as_ref()
 			.map(ToString::to_string)
 			.unwrap_or_default();
-		let validator_count = self.validators.count(&header.hash());
+		// let validator_count = self.validators.count(&header.hash());
 
 		let mut info = map![
 			"step".into() => step,
-			"signature".into() => signature,
-			"validatorCount".into() => format!("{:#x}", validator_count)
+			"signature".into() => signature
+			// "validatorCount".into() => format!("{:#x}", validator_count)
 		];
 
 		if header.number() >= self.empty_steps_transition {
