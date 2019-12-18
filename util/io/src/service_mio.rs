@@ -438,6 +438,7 @@ pub struct IoService<Message> where Message: Send + Sync + 'static {
 impl<Message> IoService<Message> where Message: Send + Sync + 'static {
 	/// Starts IO event loop
 	pub fn start() -> Result<IoService<Message>, IoError> {
+		trace!(target: "chron", "Start the IoService");
 		let mut config = EventLoopBuilder::new();
 		config.messages_per_tick(1024);
 		let mut event_loop = config.build().expect("Error creating event loop");
@@ -456,6 +457,7 @@ impl<Message> IoService<Message> where Message: Send + Sync + 'static {
 
 	pub fn stop(&mut self) {
 		trace!(target: "shutdown", "[IoService] Closing...");
+		trace!(target: "chron", "Stop the IoService");
 		// Clear handlers so that shared pointers are not stuck on stack
 		// in Channel::send_sync
 		self.handlers.write().clear();
@@ -470,6 +472,7 @@ impl<Message> IoService<Message> where Message: Send + Sync + 'static {
 
 	/// Regiter an IO handler with the event loop.
 	pub fn register_handler(&self, handler: Arc<IoHandler<Message>+Send>) -> Result<(), IoError> {
+		trace!(target: "chron", "Register new handler");
 		self.host_channel.lock().send(IoMessage::AddHandler {
 			handler: handler,
 		})?;
@@ -490,6 +493,7 @@ impl<Message> IoService<Message> where Message: Send + Sync + 'static {
 
 impl<Message> Drop for IoService<Message> where Message: Send + Sync {
 	fn drop(&mut self) {
+		trace!(target: "chron", "Drop the IoService");
 		self.stop()
 	}
 }

@@ -134,6 +134,7 @@ impl Step {
 			.checked_add(1)
 			.and_then(|ctr| ctr.checked_mul(self.duration as u64))
 			.map(Duration::from_secs);
+		trace!(target: "chron", "Expected seconds {:?}", expected_seconds);
 
 		match expected_seconds {
 			Some(step_end) if step_end > now => step_end - now,
@@ -899,6 +900,7 @@ impl IoHandler<()> for TransitionHandler {
 	}
 
 	fn timeout(&self, io: &IoContext<()>, timer: TimerToken) {
+		trace!(target: "chron", "Timeout called with token: {:?}", timer);
 		if timer == ENGINE_TIMEOUT_TOKEN {
 			// NOTE we might be lagging by couple of steps in case the timeout
 			// has not been called fast enough.
@@ -918,6 +920,7 @@ impl IoHandler<()> for TransitionHandler {
 			}
 
 			let next_run_at = AsMillis::as_millis(&self.step.inner.duration_remaining()) >> 2;
+			trace!(target: "chron", "Timeout nex run at: {:?}", next_run_at);
 			io.register_timer_once(ENGINE_TIMEOUT_TOKEN, Duration::from_millis(next_run_at))
 				.unwrap_or_else(|e| warn!(target: "engine", "Failed to restart consensus step timer: {}.", e))
 		}
