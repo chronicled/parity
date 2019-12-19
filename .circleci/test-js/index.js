@@ -8,17 +8,17 @@ const compose = require('docker-compose');
 const Docker =  dockerCLI.Docker;
 const docker = new Docker();
 
+const RABBITMQ_URL = 'amqp://guest:guest@localhost:5672';
 const ETH_RPC_URL = 'http://localhost:8545';
-const RABBIT_MQ_URL = 'amqp://guest:guest@localhost:5676';
 const EXPECTED_MESSAGES = 100;
 
 const web3 = new Web3(ETH_RPC_URL);
 
 
-const isParityActive = function(tries) {
+const isParityActive = function() {
+  let tries = 10;
   return new Promise(function cb(resolve, reject) {
     web3.eth.getBlock('latest', (err, res) => {
-      console.log(res);
       if (err || res.number < 100) {
         if (--tries > 0) {
           setTimeout(function() {
@@ -40,7 +40,7 @@ describe('Test Blockchain RabbitMQ Interface', function() {
   before(function() {
     this.timeout(300000);
     return compose.upAll({ cwd: '..', config: 'docker-compose.test.yml', log: true })
-      .then(isParityActive(10), err => console.log('docker-compose up error: ', err.message))
+      .then(isParityActive, err => console.log('docker-compose up error: ', err.message))
       .then(() => rabbit.connect(RABBITMQ_URL));
   });
 
@@ -61,6 +61,7 @@ describe('Test Blockchain RabbitMQ Interface', function() {
   })
 
   it('should stop the Blockchain Interface when RabbitMQ stops', function() {
+    this.timeout(30000);
     return compose.stopOne('rabbitmq', { cwd: '..', config: 'docker-compose.test.yml'})
     .then(() => Bluebird.delay(5000), err => Bluebird.reject(err))
     .then(() => {
