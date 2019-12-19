@@ -1,0 +1,33 @@
+FROM rust:1.39 AS builder
+# show backtraces
+ENV RUST_BACKTRACE 1
+
+RUN apt update -y && \
+	apt upgrade -y && \
+	apt install -y perl yasm libudev-dev linux-headers-amd64 gcc g++ pkg-config file make cmake libssl1.1
+
+WORKDIR /parity
+COPY . /parity
+RUN cargo build
+
+FROM debian:buster
+
+# show backtraces
+ENV RUST_BACKTRACE 1
+
+RUN addgroup --gid 1000 parity && \
+	adduser --uid 1000 --ingroup parity --shell /bin/sh parity
+RUN apt-get update -y && \
+  apt-get install -y libssl1.1
+
+USER parity
+
+EXPOSE 8080 8545 8180
+
+WORKDIR /home/parity
+
+COPY --from=builder /parity/target/debug/parity ./
+COPY --chown=parity:parity .circleci/docker/parity /home/parity
+
+# wait for RMQ and topology service init
+ENTRYPOINT sleep 30 && exec /home/parity/parity --config config.toml --no-warp
