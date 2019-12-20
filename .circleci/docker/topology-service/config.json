@@ -1,0 +1,16 @@
+{
+  "exchangeNames": [
+    "BlockchainInterface.Output"
+  ],
+  "queueNames": [
+    "BlockchainService.NewBlocks"
+  ],
+  "bindings": [
+    [
+      "BlockchainInterface.Output",
+      "BlockchainService.NewBlocks",
+      "interface.in.new-block"
+    ]
+  ],
+  "AMQP_URI": "amqp://guest:guest@rabbitmq:5672/"
+}

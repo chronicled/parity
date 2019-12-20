@@ -1,0 +1,31 @@
+[parity]
+chain = "chainfile_aura.json"
+base_path = "."
+db_path = "."
+[network]
+port = 30300
+[rpc]
+port = 8545
+cors = ["all"]
+apis = ["web3", "eth", "net", "personal", "parity", "parity_set", "traces", "rpc", "parity_accounts"]
+interface = "all"
+[ui]
+port = 8180
+[websockets]
+port = 8550
+hosts = ["none"]
+origins = ["all"]
+interface = "local"
+apis = ["web3", "eth", "net", "parity", "traces", "rpc", "secretstore", "pubsub"]
+[account]
+password = ["password"]
+[mining]
+engine_signer="0x4E3572D88a6e04439EBb3C971327CDBdb91e6d44"
+force_sealing = true
+usd_per_tx = "0"
+gas_floor_target = "28000000"
+gas_cap = "0x0280de80"
+[footprint]
+pruning = "archive"
+[rabbitmq]
+uri = "amqp://guest:guest@rabbitmq:5672/%2f?frame_max=65535"
