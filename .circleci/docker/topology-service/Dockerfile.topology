@@ -1,0 +1,5 @@
+FROM registry.dev.infra.chronicled.com/topology-service:668e929
+COPY ./docker/topology-service/*.json ./
+
+# wait for RMQ init
+ENTRYPOINT sleep 25 && npm start

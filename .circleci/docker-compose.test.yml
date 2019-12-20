@@ -1,0 +1,27 @@
+version: '3'
+services:
+  rabbitmq:
+    image: "rabbitmq:3-management"
+    logging:
+      driver: none
+    ports:
+      - "15672:15672"
+      - "5672:5672"
+  topology_service:
+    build:
+      context: .
+      dockerfile: ./docker/topology-service/Dockerfile.topology
+    depends_on:
+      - rabbitmq
+  parity:
+    build:
+      context: ..
+      dockerfile: ./.circleci/docker/parity/Dockerfile.blockchain
+    ports:
+      - "8545:8545"
+    depends_on:
+      - rabbitmq
+      - topology_service
+    environment:
+      - RUST_LOG=info,lapin_futures=warn
+    # restart: always
