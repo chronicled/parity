@@ -13,7 +13,7 @@ use hyper::{header::CONTENT_TYPE, rt::Future, service::service_fn_ok, Body, Resp
 use kvdb::{DBTransaction, KeyValueDB};
 use kvdb_rocksdb::Database;
 use parity_runtime::Executor;
-use prometheus::{Counter, Encoder, TextEncoder};
+use prometheus::{Counter, Encoder, Gauge, TextEncoder};
 use rabbitmq_adaptor::{ConfigUri, ConsumerResult, DeliveryExt, RabbitConnection, RabbitExt};
 use serde::Deserialize;
 use serde_json;
@@ -77,9 +77,19 @@ pub enum ErrorType {
 }
 
 lazy_static! {
-	static ref NEW_BLOCK_COUNTER: Counter = register_counter!(opts!(
-		"new_blocks",
-		"Total number of new block pubsub messages received."
+	static ref SENT_BLOCKS_COUNTER: Counter = register_counter!(opts!(
+		"sent_blocks",
+		"Total number of new blocks published to the RabbitMQ interface since parity started."
+	))
+	.unwrap();
+	static ref CONNECTED_PEERS_GAUGE: Gauge = register_gauge!(opts!(
+		"connected_peers",
+		"Number of connected peers."
+	))
+	.unwrap();
+	static ref LATEST_BLOCK_RECEIVED: Gauge = register_gauge!(opts!(
+		"latest_block",
+		"Block number of the latest imported block."
 	))
 	.unwrap();
 }
@@ -171,7 +181,6 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 				.for_each(enclose!((rabbit) move |message| {
 					let block_message = message.0;
 					let block_number = message.1;
-					NEW_BLOCK_COUNTER.inc();
 						rabbit.clone()
 						.publish(
 							NEW_BLOCK_EXCHANGE_NAME.to_string(),
@@ -188,6 +197,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 							handle_fatal_error(err);
 						})
 						.and_then(enclose!((db) move |_| {
+							SENT_BLOCKS_COUNTER.inc();
 							info!(target: LOG_TARGET, "Update block status in RocksDB: {:?}", block_number);
 							let mut transaction = DBTransaction::new();
 							transaction.put(None, &block_number.to_le_bytes(), &ONE.to_le_bytes());
@@ -264,7 +274,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		if export_service_enabled {
 			let export_service_port = prometheus_export_service_config.prometheus_export_service_port;
 
-			let export_service_address = ([127, 0, 0, 1], export_service_port).into();
+			let export_service_address = ([0, 0, 0, 0], export_service_port).into();
 			info!(
 				target: LOG_TARGET,
 				"Prometheus export service listening at address: {:?}",
@@ -323,6 +333,7 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 					.block_extra_info(BlockId::Hash(hash))
 					.expect("Extra info from block");
 				let block_number = header.number();
+				LATEST_BLOCK_RECEIVED.set(block_number as f64);
 
 				(RichBlock {
 					inner: Block {
