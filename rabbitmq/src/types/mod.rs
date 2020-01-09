@@ -28,7 +28,7 @@ pub use self::bytes::Bytes;
 pub use self::block::{RichBlock, Block, BlockTransactions, Header, RichHeader, Rich};
 pub use self::hash::{H64, H160, H256, H512, H520, H2048};
 pub use self::log::{Log};
-pub use self::trace::Trace;
+pub use self::trace::TraceResults;
 pub use self::transaction::{Transaction, LocalTransactionStatus};
 pub use self::transaction_condition::TransactionCondition;
 pub use self::uint::{U128, U256, U64};

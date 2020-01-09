@@ -5,7 +5,7 @@ use byteorder::{LittleEndian, ByteOrder};
 use boolinator::Boolinator;
 use common::{handle_fatal_error, try_spawn};
 use enclose::enclose;
-use ethcore::client::{BlockChainClient, BlockId, ChainNotify, ChainRouteType, NewBlocks};
+use ethcore::client::{BlockChainClient, BlockId, CallAnalytics, ChainNotify, ChainRouteType, NewBlocks};
 use ethcore::miner;
 use ethereum_types::H256;
 use failure::{format_err, Error};
@@ -27,7 +27,7 @@ use tokio::prelude::*;
 use tokio::sync::mpsc::{
 	channel, Sender as ChannelSender
 };
-use types::{Block, BlockTransactions, Bytes, Log, RichBlock, Trace, Transaction};
+use types::{Block, BlockTransactions, Bytes, Log, RichBlock, TraceResults, Transaction};
 
 use DB_NAME;
 use START_FROM_INDEX;
@@ -40,6 +40,12 @@ use OPERATION_ID;
 use PUBLIC_TRANSACTION_QUEUE;
 use TX_ERROR_EXCHANGE_NAME;
 use TX_ERROR_ROUTING_KEY;
+
+const DEFAULT_CALL_ANALYTICS: CallAnalytics = CallAnalytics {
+	transaction_tracing: true,
+	vm_tracing: false,
+	state_diffing: false,
+};
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct RabbitMqConfig {
@@ -356,11 +362,10 @@ pub fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, clien
 							Some(receipt) => Some(receipt.outcome),
 							None => None
 						};
-						let traces = match client.transaction_traces(transaction_id) {
-							Some(traces) => traces.into_iter().map(Trace::from).collect(),
-							None => vec![],
-						};
-						(tx, outcome, traces)
+						let trace = client.replay(transaction_id, DEFAULT_CALL_ANALYTICS)
+							.map(TraceResults::from)
+							.ok();
+						(tx, outcome, trace)
 					})
 					.map(Transaction::from_localized)
 					.collect(),
