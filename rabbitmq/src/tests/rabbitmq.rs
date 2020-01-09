@@ -1,16 +1,16 @@
-use futures::Stream;
-use kvdb_memorydb;
-use tokio::sync::mpsc::channel;
-use std::sync::Arc;
-
-use std::time::Duration;
-
-use client::PubSubClient;
+use super::sync_provider::{Config, TestSyncProvider};
 use client::construct_new_block;
+use client::PubSubClient;
 use ethcore::client::{
 	ChainNotify, ChainRoute, ChainRouteType, EachBlockWith, NewBlocks, TestBlockChainClient,
 };
-use super::sync_provider::{Config, TestSyncProvider};
+use ethereum_types::H256;
+use futures::Stream;
+use kvdb_memorydb;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::mpsc::channel;
 
 const DURATION_ZERO: Duration = Duration::from_millis(0);
 
@@ -29,11 +29,13 @@ fn should_subscribe_to_new_blocks() {
 	});
 
 	// Create a sync_channel with buffer size 3
-	let (sender, receiver) = channel::<u64>(4);
+	let (enacted_sender, enacted_receiver) = channel::<u64>(4);
+	let (retracted_sender, retracted_receiver) = channel::<H256>(4);
 	let dummy_rabbitmq_client = PubSubClient {
 		blockchain_client: Arc::new(client),
 		sync: Arc::new(test_sync),
-		sender: sender,
+		enacted_sender: enacted_sender,
+		retracted_sender: retracted_sender,
 		database: Arc::new(kvdb_memorydb::create(0)),
 	};
 
@@ -53,15 +55,22 @@ fn should_subscribe_to_new_blocks() {
 		DURATION_ZERO,
 		true,
 	));
-	let mut block_receiver = receiver.wait();
+	let mut enacted = enacted_receiver.wait();
+	let mut retracted = retracted_receiver.wait();
 
-	let new_block = block_receiver.next().unwrap().unwrap();
+	let new_block = enacted.next().unwrap().unwrap();
 	assert_eq!(new_block, 1);
 
-	let new_block = block_receiver.next().unwrap().unwrap();
+	let retracted_block = retracted.next().unwrap().unwrap();
+	assert_eq!(
+		retracted_block,
+		H256::from_str("44e5ecf454ea99af9d8a8f2ca0daba96964c90de05db7a78f59b84ae9e749706").unwrap()
+	);
+
+	let new_block = enacted.next().unwrap().unwrap();
 	assert_eq!(new_block, 3);
 
-	let new_block = block_receiver.next().unwrap().unwrap();
+	let new_block = enacted.next().unwrap().unwrap();
 	assert_eq!(new_block, 4);
 }
 
