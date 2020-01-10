@@ -3,7 +3,7 @@ defaults: &defaults
   working_directory: ~/parity
   resource_class: xlarge
   docker:
-    - image: circleci/rust:1.39.0
+    - image: circleci/rust:1.38.0
 
 jobs:
   test:

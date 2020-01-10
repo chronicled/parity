@@ -20,6 +20,7 @@ use rabbitmq_adaptor::{ConfigUri, ConsumerResult, DeliveryExt, RabbitConnection,
 use serde::Deserialize;
 use serde_json;
 use sync::SyncProvider;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,10 +33,12 @@ use types::{Block, BlockTransactions, Bytes, Log, RichBlock, TraceResults, Trans
 use DB_NAME;
 use START_FROM_INDEX;
 use DEFAULT_CHANNEL_SIZE;
+use RETRACTED_CHANNEL_SIZE;
 use DEFAULT_REPLY_QUEUE;
 use LOG_TARGET;
 use NEW_BLOCK_EXCHANGE_NAME;
 use NEW_BLOCK_ROUTING_KEY;
+use RETRACTED_BLOCK_ROUTING_KEY;
 use OPERATION_ID;
 use PUBLIC_TRANSACTION_QUEUE;
 use TX_ERROR_EXCHANGE_NAME;
@@ -62,7 +65,8 @@ pub struct PrometheusExportServiceConfig {
 pub struct PubSubClient<C> {
 	pub blockchain_client: Arc<C>,
 	pub sync: Arc<SyncProvider>,
-	pub sender: ChannelSender<BlockNumber>,
+	pub enacted_sender: ChannelSender<BlockNumber>,
+	pub retracted_sender: ChannelSender<H256>,
 	pub database: Arc<KeyValueDB>,
 }
 
@@ -113,7 +117,8 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		config: RabbitMqConfig,
 		prometheus_export_service_config: PrometheusExportServiceConfig
 	) -> Result<Self, Error> {
-		let (sender, receiver) = channel::<BlockNumber>(DEFAULT_CHANNEL_SIZE);
+		let (enacted_sender, enacted_receiver) = channel::<BlockNumber>(DEFAULT_CHANNEL_SIZE);
+		let (retracted_sender, retracted_receiver) = channel::<H256>(RETRACTED_CHANNEL_SIZE);
 		let config_uri = ConfigUri::Uri(config.uri);
 		let db_path = Path::new(client_path.ok_or_else(|| format_err!("Client path does not exist"))?)
 			.join(DB_NAME);
@@ -172,10 +177,30 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 						}),
 					)
 					.map_err(Error::from)
-					.map(|_| ())
+					.map(|_| ()),
+			);
+			try_spawn(
+				retracted_receiver
+					.map_err(Error::from)
+					.and_then(enclose!((client) move |block_hash| {
+						construct_retracted_block(block_hash, client.clone())
+							.ok_or(format_err!("Could not serialize retracted block"))
+					}))
+					.for_each(enclose!((rabbit, client) move |serialized_block| {
+						rabbit.clone()
+						.publish(
+							NEW_BLOCK_EXCHANGE_NAME.to_string(),
+							RETRACTED_BLOCK_ROUTING_KEY.to_string(),
+							serialized_block.into(),
+							vec![],
+						)
+						.map_err(Error::from)
+						.map(|_| ())
+					}))
+					.map_err(Error::from),
 			);
 
-			receiver
+			enacted_receiver
 				.map_err(|err| handle_fatal_error(err.into()))
 				.for_each(enclose!((db, client, rabbit) move |block_number| {
 					loop_fn((db.clone(), client.clone(), rabbit.clone()), move |(db, client, rabbit)| {
@@ -227,8 +252,9 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		let pubsub_client = PubSubClient {
 			blockchain_client,
 			sync: sync_provider.clone(),
-			sender,
-			database
+			enacted_sender,
+			retracted_sender,
+			database,
 		};
 		pubsub_client.start_monitoring(executor, prometheus_export_service_config)?;
 
@@ -322,10 +348,8 @@ pub fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, clien
 
 	let hash = block.hash();
 	let header = block.decode_header();
-	let receipts = client
-		.localized_block_receipts(BlockId::Number(header.number()))?;
-	let extra_info = client
-		.block_extra_info(BlockId::Hash(hash))?;
+	let receipts = client.localized_block_receipts(BlockId::Number(block_number))?;
+	let extra_info = client.block_extra_info(BlockId::Hash(hash))?;
 
 	let rich_block = RichBlock {
 		inner: Block {
@@ -380,11 +404,57 @@ pub fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, clien
 	Some(serialized_block)
 }
 
+pub fn construct_retracted_block<C: BlockChainClient>(
+	block_hash: H256,
+	client: Arc<C>,
+) -> Option<String> {
+	fn cast<O, T: Copy + Into<O>>(t: &T) -> O {
+		(*t).into()
+	}
+
+	let block = client.block(BlockId::Hash(block_hash))?;
+
+	let header = block.decode_header();
+
+	let rich_block = RichBlock {
+		inner: Block {
+			hash: Some(block_hash.into()),
+			size: Some(block.rlp().as_raw().len().into()),
+			parent_hash: cast(header.parent_hash()),
+			uncles_hash: cast(header.uncles_hash()),
+			author: cast(header.author()),
+			miner: cast(header.author()),
+			state_root: cast(header.state_root()),
+			receipts_root: cast(header.receipts_root()),
+			number: Some(cast(&header.number())),
+			gas_used: cast(header.gas_used()),
+			gas_limit: cast(header.gas_limit()),
+			logs_bloom: Some(cast(header.log_bloom())),
+			timestamp: header.timestamp().into(),
+			difficulty: cast(header.difficulty()),
+			total_difficulty: None,
+			seal_fields: header.seal().into_iter().cloned().map(Into::into).collect(),
+			uncles: block.uncle_hashes().into_iter().map(Into::into).collect(),
+			logs: vec![],
+			transactions: BlockTransactions::Hashes(vec![]),
+			transactions_root: cast(header.transactions_root()),
+			extra_data: header.extra_data().clone().into(),
+		},
+		extra_info: BTreeMap::default(),
+	};
+	let serialized_block = serde_json::to_string(&rich_block).unwrap();
+	info!(
+		target: LOG_TARGET,
+		"Serialized retracted block: {:?} ", serialized_block
+	);
+	Some(serialized_block)
+}
+
 impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 	fn new_blocks(&self, new_blocks: NewBlocks) {
 		let connected_peers = self.sync.status().num_peers;
 		CONNECTED_PEERS_GAUGE.set(connected_peers as f64);
-		let blocks = new_blocks
+		let enacted_blocks = new_blocks
 			.route
 			.route()
 			.iter()
@@ -397,11 +467,21 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 				header.number()
 			})
 			.collect::<Vec<_>>();
+		let retracted_blocks = new_blocks
+			.route
+			.route()
+			.iter()
+			.filter_map(|&(hash, ref typ)| match typ {
+				&ChainRouteType::Retracted => Some(hash),
+				&ChainRouteType::Enacted => None,
+			})
+			.collect::<Vec<_>>();
 
-		blocks.into_iter().for_each(|block| {
+
+		enacted_blocks.into_iter().for_each(|block| {
 			LATEST_BLOCK_RECEIVED.set(block as f64);
 			&self
-				.sender
+				.enacted_sender
 				.clone()
 				.try_send(block)
 				.map_err(|err| {
@@ -412,5 +492,15 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 					}
 				});
 		});
+		retracted_blocks.into_iter().for_each(|block_hash| {
+			&self.retracted_sender.clone().try_send(block_hash)
+			.map_err(|err| {
+				if err.is_full() {
+					trace!(target: LOG_TARGET, "MPSC channel is full: {:?}, Receiver is already processing new block messages", err);
+				} else {
+					panic!(err)
+				}
+			});
+		})
 	}
 }
