@@ -14,16 +14,14 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
-use ethcore::trace::{LocalizedTrace as EthLocalizedTrace, trace, TraceError};
+use ethcore::client::Executed;
+use ethcore::trace::{FlatTrace, LocalizedTrace as EthLocalizedTrace, trace, TraceError};
 use ethereum_types::{H160, U256};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
-// use types::account_diff;
-// use types::state_diff;
 use vm;
 
 use types::Bytes;
-
 
 /// Create response
 #[derive(Debug, Serialize)]
@@ -321,13 +319,32 @@ impl Serialize for Trace {
 	}
 }
 
-impl From<EthLocalizedTrace> for Trace {
-	fn from(t: EthLocalizedTrace) -> Self {
+impl From<FlatTrace> for Trace {
+	fn from(t: FlatTrace) -> Self {
 		Trace {
-			action: t.action.into(),
-			result: t.result.into(),
 			trace_address: t.trace_address.into_iter().map(Into::into).collect(),
 			subtraces: t.subtraces,
+			action: t.action.into(),
+			result: t.result.into(),
+		}
+	}
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+/// A diff of some chunk of memory.
+pub struct TraceResults {
+	/// The output of the call/create
+	pub output: Bytes,
+	/// The transaction trace.
+	pub trace: Vec<Trace>,
+}
+
+impl From<Executed> for TraceResults {
+	fn from(t: Executed) -> Self {
+		TraceResults {
+			output: t.output.into(),
+			trace: t.trace.into_iter().map(Into::into).collect(),
 		}
 	}
 }
