@@ -19,7 +19,7 @@ use serde::ser::SerializeStruct;
 use ethcore::{contract_address, CreateContractAddress};
 use common_types::transaction::{LocalizedTransaction, Action, SignedTransaction};
 use common_types::receipt::TransactionOutcome;
-use types::{Bytes, H160, H256, U256, H512, U64, Trace, TransactionCondition};
+use types::{Bytes, H160, H256, U256, H512, U64, TraceResults, TransactionCondition};
 
 /// Transaction
 #[derive(Debug, Default, Serialize)]
@@ -68,7 +68,7 @@ pub struct Transaction {
 	/// Transaction status code
 	pub status: Option<U64>,
 	/// Traces created by transaction
-	pub traces: Vec<Trace>,
+	pub traces: Option<TraceResults>,
 }
 
 /// Local Transaction Status
@@ -161,7 +161,7 @@ impl Transaction {
 	}
 
 	/// Convert `LocalizedTransaction` into RPC Transaction.
-	pub fn from_localized((mut t, o, traces): (LocalizedTransaction, Option<TransactionOutcome>, Vec<Trace>)) -> Transaction {
+	pub fn from_localized((mut t, o, trace): (LocalizedTransaction, Option<TransactionOutcome>, Option<TraceResults>)) -> Transaction {
 		let signature = t.signature();
 		let scheme = CreateContractAddress::FromSenderAndNonce;
 		Transaction {
@@ -192,7 +192,7 @@ impl Transaction {
 			s: signature.s().into(),
 			condition: None,
 			status: Self::outcome_to_status_code(o),
-			traces: traces,
+			traces: trace,
 		}
 	}
 }
@@ -206,7 +206,7 @@ mod tests {
 	fn test_transaction_serialize() {
 		let t = Transaction::default();
 		let serialized = serde_json::to_string(&t).unwrap();
-		assert_eq!(serialized, r#"{"hash":"0x0000000000000000000000000000000000000000000000000000000000000000","nonce":"0x0","blockHash":null,"blockNumber":null,"transactionIndex":null,"from":"0x0000000000000000000000000000000000000000","to":null,"value":"0x0","gasPrice":"0x0","gas":"0x0","input":"0x","creates":null,"raw":"0x","publicKey":null,"chainId":null,"standardV":"0x0","v":"0x0","r":"0x0","s":"0x0","condition":null,"status":null,"traces":[]}"#);
+		assert_eq!(serialized, r#"{"hash":"0x0000000000000000000000000000000000000000000000000000000000000000","nonce":"0x0","blockHash":null,"blockNumber":null,"transactionIndex":null,"from":"0x0000000000000000000000000000000000000000","to":null,"value":"0x0","gasPrice":"0x0","gas":"0x0","input":"0x","creates":null,"raw":"0x","publicKey":null,"chainId":null,"standardV":"0x0","v":"0x0","r":"0x0","s":"0x0","condition":null,"status":null,"traces":null}"#);
 	}
 
 	#[test]
