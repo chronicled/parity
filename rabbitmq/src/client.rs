@@ -7,7 +7,7 @@ use common::{handle_fatal_error, try_spawn};
 use enclose::enclose;
 use ethcore::client::{BlockChainClient, BlockId, CallAnalytics, ChainNotify, ChainRouteType, NewBlocks};
 use ethcore::miner;
-use ethereum_types::H256;
+use ethereum_types::{H160, H256, U256};
 use failure::{format_err, Error};
 use futures::future::{ok, err, lazy, loop_fn, Future, Loop};
 use handler::{Handler, Sender};
@@ -35,6 +35,8 @@ use DEFAULT_REPLY_QUEUE;
 use LOG_TARGET;
 use NEW_BLOCK_EXCHANGE_NAME;
 use NEW_BLOCK_ROUTING_KEY;
+
+use GET_NONCE_QUEUE;
 use OPERATION_ID;
 use PUBLIC_TRANSACTION_QUEUE;
 use TX_ERROR_EXCHANGE_NAME;
@@ -68,6 +70,16 @@ pub struct PubSubClient<C> {
 struct TransactionMessage {
 	pub data: Bytes,
 	pub transaction_hash: H256,
+}
+
+#[derive(Deserialize)]
+struct NonceRequest {
+	pub address: H160,
+}
+
+#[derive(Serialize)]
+struct NonceResponse {
+	pub nonce: Option<U256>,
 }
 
 #[derive(Serialize)]
@@ -159,7 +171,43 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 						}),
 					)
 					.map_err(Error::from)
-					.map(|_| ())
+					.map(|_| ()),
+			);
+
+			try_spawn(
+				rabbit
+					.clone()
+					.register_consumer(
+						GET_NONCE_QUEUE.to_string(),
+						enclose!((rabbit, client) move |message| {
+							let payload = std::str::from_utf8(&message.data);
+							if payload.is_err() {
+								return Box::new(err(format_err!("Could not parse AMQP message")));
+							}
+							let payload = payload.unwrap();
+							let nonce_request = serde_json::from_str(payload);
+							if nonce_request.is_err() {
+								return Box::new(err(format_err!("Could not deserialize AMQP message payload")));
+							}
+							let nonce_request: NonceRequest = nonce_request.unwrap();
+							let nonce_result = client.nonce(&nonce_request.address, BlockId::Latest);
+							let nonce_response = NonceResponse {
+								nonce: nonce_result
+							};
+							let serialized_message = serde_json::to_string(&nonce_response).unwrap();
+							Box::new(rabbit.clone()
+							.rpc_response(
+								&message,
+								serialized_message.into(),
+								vec![],
+							)
+							.map_err(Error::from)
+							.map(|_| ConsumerResult::ACK)
+							)
+						}),
+					)
+					.map_err(Error::from)
+					.map(|_| ()),
 			);
 
 			receiver
