@@ -180,16 +180,10 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 					.register_consumer(
 						GET_NONCE_QUEUE.to_string(),
 						enclose!((rabbit, client) move |message| {
-							let payload = std::str::from_utf8(&message.data);
-							if payload.is_err() {
-								return Box::new(err(format_err!("Could not parse AMQP message")));
-							}
-							let payload = payload.unwrap();
-							let nonce_request = serde_json::from_str(payload);
-							if nonce_request.is_err() {
-								return Box::new(err(format_err!("Could not deserialize AMQP message payload")));
-							}
-							let nonce_request: NonceRequest = nonce_request.unwrap();
+							let payload = std::str::from_utf8(&message.data)
+								.expect("Could not parse AMQP message");
+							let nonce_request: NonceRequest = serde_json::from_str(payload)
+								.expect("Could not deserialize AMQP message payload");
 							let nonce_result = client.nonce(&nonce_request.address, BlockId::Latest);
 							let nonce_response = NonceResponse {
 								nonce: nonce_result
@@ -201,7 +195,8 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 								serialized_message.into(),
 								vec![],
 							)
-							.map_err(Error::from)
+							.map_err(handle_fatal_error)
+							.map_err(|_| format_err!("Could not send RPC response to RabbitMQ"))
 							.map(|_| ConsumerResult::ACK)
 							)
 						}),
