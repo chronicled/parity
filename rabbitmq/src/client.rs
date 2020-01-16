@@ -21,6 +21,8 @@ use serde::Deserialize;
 use serde_json;
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::io::BufReader;
+use std::fs::File;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::prelude::*;
@@ -37,6 +39,7 @@ use DEFAULT_REPLY_QUEUE;
 use LOG_TARGET;
 use NEW_BLOCK_EXCHANGE_NAME;
 use NEW_BLOCK_ROUTING_KEY;
+use CHAINFILE_ROUTING_KEY;
 use RETRACTED_BLOCK_ROUTING_KEY;
 use OPERATION_ID;
 use PUBLIC_TRANSACTION_QUEUE;
@@ -102,7 +105,8 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		executor: Executor,
 		client_path: Option<&str>,
 		config: RabbitMqConfig,
-		prometheus_export_service_config: PrometheusExportServiceConfig
+		prometheus_export_service_config: PrometheusExportServiceConfig,
+		chainfile_path: Option<&String>
 	) -> Result<Self, Error> {
 		let (enacted_sender, enacted_receiver) = channel::<BlockNumber>(DEFAULT_CHANNEL_SIZE);
 		let (retracted_sender, retracted_receiver) = channel::<H256>(RETRACTED_CHANNEL_SIZE);
@@ -117,8 +121,37 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		let db = database.clone();
 		let client = blockchain_client.clone();
 
+		// only send data when data exists
+		let mut send_chainfile = false;
+		// initialize buffer in which we will put all the data of chainfile into
+		let mut chainfile_buffer = Vec::new();
+		// if the spec was custom and file_path exists, open file and put data into buffer
+		if let Some(path) = chainfile_path {
+			// get chainfile as bytes of Vec<u8>
+			let mut chainfile = File::open(path)?;
+			// read the entire chainfile_aura.json to buffer
+			chainfile.read_to_end(&mut chainfile_buffer)?;
+			// upon successful reading, set send_chainfile to true to send data via RabbitConnection
+			send_chainfile = true;
+		}
+
 		executor.spawn(lazy(move || {
 			let rabbit = RabbitConnection::new(config_uri, None, DEFAULT_REPLY_QUEUE);
+
+			if send_chainfile {
+				try_spawn(
+					rabbit.clone()
+					.publish(
+						NEW_BLOCK_EXCHANGE_NAME.to_string(),
+						CHAINFILE_ROUTING_KEY.to_string(),
+						chainfile_buffer,
+						vec![],
+					)
+					.map_err(Error::from)
+					.map(|_| ())
+				);
+			}
+
 			// Consume to public transaction messages
 			try_spawn(
 				rabbit
