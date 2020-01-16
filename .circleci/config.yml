@@ -3,7 +3,7 @@ defaults: &defaults
   working_directory: ~/parity
   resource_class: xlarge
   docker:
-    - image: circleci/rust:latest
+    - image: circleci/rust:1.38.0
 
 jobs:
   test:
@@ -78,4 +78,6 @@ workflows:
             - test
           filters:
             branches:
-              only: blockchain-interface
+              only:
+                - blockchain-interface
+                - /epic.*/
