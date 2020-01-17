@@ -15,56 +15,59 @@
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::any::Any;
-use std::sync::{Arc, Weak, atomic};
-use std::time::{Duration, Instant};
+use std::sync::{atomic, Arc, Weak};
 use std::thread;
+use std::time::{Duration, Instant};
 
+use account_utils;
 use ansi_term::Colour;
 use bytes::Bytes;
+use cache::CacheConfig;
 use call_contract::CallContract;
-use ethcore::client::{BlockId, Client, Mode, DatabaseCompactionProfile, VMType, BlockChainClient, BlockInfo};
-use ethcore::miner::{self, stratum, Miner, MinerService, MinerOptions};
+use db;
+use dir::{DatabaseDirectories, Directories};
+use ethcore::client::{
+	BlockChainClient, BlockId, BlockInfo, Client, DatabaseCompactionProfile, Mode, VMType,
+};
+use ethcore::miner::{self, stratum, Miner, MinerOptions, MinerService};
 use ethcore::snapshot::{self, SnapshotConfiguration};
-use ethcore::spec::{SpecParams, OptimizeFor};
+use ethcore::spec::{OptimizeFor, SpecParams};
 use ethcore::verification::queue::VerifierSettings;
 use ethcore_logger::{Config as LogConfig, RotatingLogger};
+use ethcore_private_tx::{EncryptorConfig, ProviderConfig, SecretStoreEncryptor};
 use ethcore_service::ClientService;
 use ethereum_types::Address;
 use futures::IntoFuture;
 use hash_fetch::{self, fetch};
-use informant::{Informant, LightNodeInformantData, FullNodeInformantData};
+use helpers::{execute_upgrades, passwords_from_files, to_client_config};
+use informant::{FullNodeInformantData, Informant, LightNodeInformantData};
+use ipfs;
 use journaldb::Algorithm;
+use jsonrpc_core;
 use light::Cache as LightDataCache;
 use miner::external::ExternalMiner;
 use miner::work_notify::WorkPoster;
-use node_filter::NodeFilter;
-use parity_rabbitmq::client::{PubSubClient, RabbitMqConfig, PrometheusExportServiceConfig};
-use parity_runtime::Runtime;
-use sync::{self, SyncConfig, PrivateTxHandler};
-use parity_rpc::{
-	Origin, Metadata, NetworkSettings, informant, is_major_importing, PubSubSession, FutureResult, FutureResponse, FutureOutput
-};
-use updater::{UpdatePolicy, Updater};
-use parity_version::version;
-use ethcore_private_tx::{ProviderConfig, EncryptorConfig, SecretStoreEncryptor};
-use params::{
-	SpecType, Pruning, AccountsConfig, GasPricerConfig, MinerExtras, Switch,
-	tracing_switch_to_bool, fatdb_switch_to_bool, mode_switch_to_bool
-};
-use account_utils;
-use helpers::{to_client_config, execute_upgrades, passwords_from_files};
-use dir::{Directories, DatabaseDirectories};
-use cache::CacheConfig;
-use user_defaults::UserDefaults;
-use ipfs;
-use jsonrpc_core;
 use modules;
-use registrar::{RegistrarClient, Asynchronous};
+use node_filter::NodeFilter;
+use params::{
+	fatdb_switch_to_bool, mode_switch_to_bool, tracing_switch_to_bool, AccountsConfig,
+	GasPricerConfig, MinerExtras, Pruning, SpecType, Switch,
+};
+use parity_rabbitmq::client::{PrometheusExportServiceConfig, PubSubClient, RabbitMqConfig};
+use parity_rpc::{
+	informant, is_major_importing, FutureOutput, FutureResponse, FutureResult, Metadata,
+	NetworkSettings, Origin, PubSubSession,
+};
+use parity_runtime::Runtime;
+use parity_version::version;
+use registrar::{Asynchronous, RegistrarClient};
 use rpc;
 use rpc_apis;
 use secretstore;
 use signer;
-use db;
+use sync::{self, PrivateTxHandler, SyncConfig};
+use updater::{UpdatePolicy, Updater};
+use user_defaults::UserDefaults;
 
 // how often to take periodic snapshots.
 const SNAPSHOT_PERIOD: u64 = 5000;
@@ -155,10 +158,13 @@ impl ::local_store::NodeInfo for FullNodeInfo {
 			None => return Vec::new(),
 		};
 
-		miner.local_transactions()
+		miner
+			.local_transactions()
 			.values()
 			.filter_map(|status| match *status {
-				::miner::pool::local_transactions::Status::Pending(ref tx) => Some(tx.pending().clone()),
+				::miner::pool::local_transactions::Status::Pending(ref tx) => {
+					Some(tx.pending().clone())
+				}
 				_ => None,
 			})
 			.collect()
@@ -168,21 +174,33 @@ impl ::local_store::NodeInfo for FullNodeInfo {
 type LightClient = ::light::client::Client<::light_helpers::EpochFetch>;
 
 // helper for light execution.
-fn execute_light_impl<Cr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: Cr) -> Result<RunningClient, String>
-	where Cr: Fn(String) + 'static + Send
+fn execute_light_impl<Cr>(
+	cmd: RunCmd,
+	logger: Arc<RotatingLogger>,
+	on_client_rq: Cr,
+) -> Result<RunningClient, String>
+where
+	Cr: Fn(String) + 'static + Send,
 {
 	use light::client as light_client;
-	use sync::{LightSyncParams, LightSync, ManageNetwork};
 	use parking_lot::{Mutex, RwLock};
+	use sync::{LightSync, LightSyncParams, ManageNetwork};
 
 	// load spec
-	let spec = cmd.spec.spec(SpecParams::new(cmd.dirs.cache.as_ref(), OptimizeFor::Memory))?;
+	let spec = cmd.spec.spec(SpecParams::new(
+		cmd.dirs.cache.as_ref(),
+		OptimizeFor::Memory,
+	))?;
 
 	// load genesis hash
 	let genesis_hash = spec.genesis_header().hash();
 
 	// database paths
-	let db_dirs = cmd.dirs.database(genesis_hash, cmd.spec.legacy_fork_name(), spec.data_dir.clone());
+	let db_dirs = cmd.dirs.database(
+		genesis_hash,
+		cmd.spec.legacy_fork_name(),
+		spec.data_dir.clone(),
+	);
 
 	// user defaults path
 	let user_defaults_path = db_dirs.user_defaults_path();
@@ -197,15 +215,24 @@ fn execute_light_impl<Cr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq
 	execute_upgrades(&cmd.dirs.base, &db_dirs, algorithm, &cmd.compaction)?;
 
 	// create dirs used by parity
-	cmd.dirs.create_dirs(cmd.acc_conf.unlocked_accounts.len() == 0, cmd.secretstore_conf.enabled)?;
+	cmd.dirs.create_dirs(
+		cmd.acc_conf.unlocked_accounts.len() == 0,
+		cmd.secretstore_conf.enabled,
+	)?;
 
 	//print out running parity environment
 	print_running_environment(&spec.data_dir, &cmd.dirs, &db_dirs);
 
-	info!("Running in experimental {} mode.", Colour::Blue.bold().paint("Light Client"));
+	info!(
+		"Running in experimental {} mode.",
+		Colour::Blue.bold().paint("Light Client")
+	);
 
 	// TODO: configurable cache size.
-	let cache = LightDataCache::new(Default::default(), Duration::from_secs(60 * GAS_CORPUS_EXPIRATION_MINUTES));
+	let cache = LightDataCache::new(
+		Default::default(),
+		Duration::from_secs(60 * GAS_CORPUS_EXPIRATION_MINUTES),
+	);
 	let cache = Arc::new(Mutex::new(cache));
 
 	// start client and create transaction queue.
@@ -222,19 +249,20 @@ fn execute_light_impl<Cr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq
 
 	// start on_demand service.
 
-	let response_time_window = cmd.on_demand_response_time_window.map_or(
-		::light::on_demand::DEFAULT_RESPONSE_TIME_TO_LIVE,
-		|s| Duration::from_secs(s)
-	);
+	let response_time_window = cmd
+		.on_demand_response_time_window
+		.map_or(::light::on_demand::DEFAULT_RESPONSE_TIME_TO_LIVE, |s| {
+			Duration::from_secs(s)
+		});
 
 	let request_backoff_start = cmd.on_demand_request_backoff_start.map_or(
 		::light::on_demand::DEFAULT_REQUEST_MIN_BACKOFF_DURATION,
-		|s| Duration::from_secs(s)
+		|s| Duration::from_secs(s),
 	);
 
 	let request_backoff_max = cmd.on_demand_request_backoff_max.map_or(
 		::light::on_demand::DEFAULT_REQUEST_MAX_BACKOFF_DURATION,
-		|s| Duration::from_secs(s)
+		|s| Duration::from_secs(s),
 	);
 
 	let on_demand = Arc::new({
@@ -243,8 +271,10 @@ fn execute_light_impl<Cr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq
 			response_time_window,
 			request_backoff_start,
 			request_backoff_max,
-			cmd.on_demand_request_backoff_rounds_max.unwrap_or(::light::on_demand::DEFAULT_MAX_REQUEST_BACKOFF_ROUNDS),
-			cmd.on_demand_request_consecutive_failures.unwrap_or(::light::on_demand::DEFAULT_NUM_CONSECUTIVE_FAILED_REQUESTS)
+			cmd.on_demand_request_backoff_rounds_max
+				.unwrap_or(::light::on_demand::DEFAULT_MAX_REQUEST_BACKOFF_ROUNDS),
+			cmd.on_demand_request_consecutive_failures
+				.unwrap_or(::light::on_demand::DEFAULT_NUM_CONSECUTIVE_FAILED_REQUESTS),
 		)
 	});
 
@@ -255,14 +285,22 @@ fn execute_light_impl<Cr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq
 	};
 
 	// initialize database.
-	let db = db::open_db(&db_dirs.client_path(algorithm).to_str().expect("DB path could not be converted to string."),
-						 &cmd.cache_config,
-						 &cmd.compaction).map_err(|e| format!("Failed to open database {:?}", e))?;
+	let db = db::open_db(
+		&db_dirs
+			.client_path(algorithm)
+			.to_str()
+			.expect("DB path could not be converted to string."),
+		&cmd.cache_config,
+		&cmd.compaction,
+	)
+	.map_err(|e| format!("Failed to open database {:?}", e))?;
 
 	let service = light_client::Service::start(config, &spec, fetch, db, cache.clone())
 		.map_err(|e| format!("Error starting light client: {}", e))?;
 	let client = service.client().clone();
-	let txq = Arc::new(RwLock::new(::light::transaction_queue::TransactionQueue::default()));
+	let txq = Arc::new(RwLock::new(
+		::light::transaction_queue::TransactionQueue::default(),
+	));
 	let provider = ::light::provider::LightProvider::new(client.clone(), txq.clone());
 
 	// start network.
@@ -274,8 +312,9 @@ fn execute_light_impl<Cr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq
 
 	let mut attached_protos = Vec::new();
 	let whisper_factory = if cmd.whisper.enabled {
-		let whisper_factory = ::whisper::setup(cmd.whisper.target_message_pool_size, &mut attached_protos)
-			.map_err(|e| format!("Failed to initialize whisper: {}", e))?;
+		let whisper_factory =
+			::whisper::setup(cmd.whisper.target_message_pool_size, &mut attached_protos)
+				.map_err(|e| format!("Failed to initialize whisper: {}", e))?;
 		whisper_factory
 	} else {
 		None
@@ -284,14 +323,17 @@ fn execute_light_impl<Cr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq
 	// set network path.
 	net_conf.net_config_path = Some(db_dirs.network_path().to_string_lossy().into_owned());
 	let sync_params = LightSyncParams {
-		network_config: net_conf.into_basic().map_err(|e| format!("Failed to produce network config: {}", e))?,
+		network_config: net_conf
+			.into_basic()
+			.map_err(|e| format!("Failed to produce network config: {}", e))?,
 		client: Arc::new(provider),
 		network_id: cmd.network_id.unwrap_or(spec.network_id()),
 		subprotocol_name: sync::LIGHT_PROTOCOL,
 		handlers: vec![on_demand.clone()],
 		attached_protos: attached_protos,
 	};
-	let light_sync = LightSync::new(sync_params).map_err(|e| format!("Error starting network: {}", e))?;
+	let light_sync =
+		LightSync::new(sync_params).map_err(|e| format!("Error starting network: {}", e))?;
 	let light_sync = Arc::new(light_sync);
 	*sync_handle.write() = Arc::downgrade(&light_sync);
 
@@ -302,11 +344,18 @@ fn execute_light_impl<Cr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq
 	light_sync.start_network();
 
 	// fetch service
-	let fetch = fetch::Client::new(FETCH_LIGHT_NUM_DNS_THREADS).map_err(|e| format!("Error starting fetch client: {:?}", e))?;
+	let fetch = fetch::Client::new(FETCH_LIGHT_NUM_DNS_THREADS)
+		.map_err(|e| format!("Error starting fetch client: {:?}", e))?;
 	let passwords = passwords_from_files(&cmd.acc_conf.password_files)?;
 
 	// prepare account provider
-	let account_provider = Arc::new(account_utils::prepare_account_provider(&cmd.spec, &cmd.dirs, &spec.data_dir, cmd.acc_conf, &passwords)?);
+	let account_provider = Arc::new(account_utils::prepare_account_provider(
+		&cmd.spec,
+		&cmd.dirs,
+		&spec.data_dir,
+		cmd.acc_conf,
+		&passwords,
+	)?);
 	let rpc_stats = Arc::new(informant::RpcStats::default());
 
 	// the dapps server
@@ -332,7 +381,7 @@ fn execute_light_impl<Cr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq
 		whisper_rpc: whisper_factory,
 		private_tx_service: None, //TODO: add this to client.
 		gas_price_percentile: cmd.gas_price_percentile,
-		poll_lifetime: cmd.poll_lifetime
+		poll_lifetime: cmd.poll_lifetime,
 	});
 
 	let dependencies = rpc::Dependencies {
@@ -344,7 +393,12 @@ fn execute_light_impl<Cr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq
 	// start rpc servers
 	let rpc_direct = rpc::setup_apis(rpc_apis::ApiSet::All, &dependencies);
 	let ws_server = rpc::new_ws(cmd.ws_conf, &dependencies)?;
-	let http_server = rpc::new_http("HTTP JSON-RPC", "jsonrpc", cmd.http_conf.clone(), &dependencies)?;
+	let http_server = rpc::new_http(
+		"HTTP JSON-RPC",
+		"jsonrpc",
+		cmd.http_conf.clone(),
+		&dependencies,
+	)?;
 	let ipc_server = rpc::new_ipc(cmd.ipc_conf, &dependencies)?;
 
 	// the informant
@@ -359,7 +413,9 @@ fn execute_light_impl<Cr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq
 		cmd.logger_config.color,
 	));
 	service.add_notify(informant.clone());
-	service.register_handler(informant.clone()).map_err(|_| "Unable to register informant handler".to_owned())?;
+	service
+		.register_handler(informant.clone())
+		.map_err(|_| "Unable to register informant handler".to_owned())?;
 
 	client.set_exit_handler(on_client_rq);
 
@@ -369,14 +425,19 @@ fn execute_light_impl<Cr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq
 			informant,
 			client,
 			keep_alive: Box::new((service, ws_server, http_server, ipc_server, runtime)),
-		}
+		},
 	})
 }
 
-fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: Cr,
-						on_updater_rq: Rr) -> Result<RunningClient, String>
-	where Cr: Fn(String) + 'static + Send,
-		Rr: Fn() + 'static + Send
+fn execute_impl<Cr, Rr>(
+	cmd: RunCmd,
+	logger: Arc<RotatingLogger>,
+	on_client_rq: Cr,
+	on_updater_rq: Rr,
+) -> Result<RunningClient, String>
+where
+	Cr: Fn(String) + 'static + Send,
+	Rr: Fn() + 'static + Send,
 {
 	// load spec
 	let spec = cmd.spec.spec(&cmd.dirs.cache)?;
@@ -385,7 +446,11 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	let genesis_hash = spec.genesis_header().hash();
 
 	// database paths
-	let db_dirs = cmd.dirs.database(genesis_hash, cmd.spec.legacy_fork_name(), spec.data_dir.clone());
+	let db_dirs = cmd.dirs.database(
+		genesis_hash,
+		cmd.spec.legacy_fork_name(),
+		spec.data_dir.clone(),
+	);
 
 	// user defaults path
 	let user_defaults_path = db_dirs.user_defaults_path();
@@ -405,7 +470,10 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	// get the mode
 	let mode = mode_switch_to_bool(cmd.mode, &user_defaults)?;
 	trace!(target: "mode", "mode is {:?}", mode);
-	let network_enabled = match mode { Mode::Dark(_) | Mode::Off => false, _ => true, };
+	let network_enabled = match mode {
+		Mode::Dark(_) | Mode::Off => false,
+		_ => true,
+	};
 
 	// get the update policy
 	let update_policy = cmd.update_policy;
@@ -418,13 +486,17 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	execute_upgrades(&cmd.dirs.base, &db_dirs, algorithm, &cmd.compaction)?;
 
 	// create dirs used by parity
-	cmd.dirs.create_dirs(cmd.acc_conf.unlocked_accounts.len() == 0, cmd.secretstore_conf.enabled)?;
+	cmd.dirs.create_dirs(
+		cmd.acc_conf.unlocked_accounts.len() == 0,
+		cmd.secretstore_conf.enabled,
+	)?;
 
 	//print out running parity environment
 	print_running_environment(&spec.data_dir, &cmd.dirs, &db_dirs);
 
 	// display info about used pruning algorithm
-	info!("State DB configuration: {}{}{}",
+	info!(
+		"State DB configuration: {}{}{}",
 		Colour::White.bold().paint(algorithm.as_str()),
 		match fat_db {
 			true => Colour::White.bold().paint(" +Fat").to_string(),
@@ -435,11 +507,17 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 			false => "".to_owned(),
 		}
 	);
-	info!("Operating mode: {}", Colour::White.bold().paint(format!("{}", mode)));
+	info!(
+		"Operating mode: {}",
+		Colour::White.bold().paint(format!("{}", mode))
+	);
 
 	// display warning about using experimental journaldb algorithm
 	if !algorithm.is_stable() {
-		warn!("Your chosen strategy is {}! You can re-run with --pruning to change.", Colour::Red.bold().paint("unstable"));
+		warn!(
+			"Your chosen strategy is {}! You can re-run with --pruning to change.",
+			Colour::Red.bold().paint("unstable")
+		);
 	}
 
 	// create sync config
@@ -451,7 +529,9 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	if spec.subprotocol_name().len() != 3 {
 		warn!("Your chain specification's subprotocol length is not 3. Ignoring.");
 	} else {
-		sync_config.subprotocol_name.clone_from_slice(spec.subprotocol_name().as_bytes());
+		sync_config
+			.subprotocol_name
+			.clone_from_slice(spec.subprotocol_name().as_bytes());
 	}
 
 	sync_config.fork_block = spec.fork_block();
@@ -480,38 +560,54 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	let passwords = passwords_from_files(&cmd.acc_conf.password_files)?;
 
 	// prepare account provider
-	let account_provider = Arc::new(account_utils::prepare_account_provider(&cmd.spec, &cmd.dirs, &spec.data_dir, cmd.acc_conf, &passwords)?);
+	let account_provider = Arc::new(account_utils::prepare_account_provider(
+		&cmd.spec,
+		&cmd.dirs,
+		&spec.data_dir,
+		cmd.acc_conf,
+		&passwords,
+	)?);
 
 	// spin up event loop
 	let runtime = Runtime::with_default_thread_count();
 
 	// fetch service
-	let fetch = fetch::Client::new(FETCH_FULL_NUM_DNS_THREADS).map_err(|e| format!("Error starting fetch client: {:?}", e))?;
+	let fetch = fetch::Client::new(FETCH_FULL_NUM_DNS_THREADS)
+		.map_err(|e| format!("Error starting fetch client: {:?}", e))?;
 
 	let txpool_size = cmd.miner_options.pool_limits.max_count;
 	// create miner
 	let miner = Arc::new(Miner::new(
 		cmd.miner_options,
-		cmd.gas_pricer_conf.to_gas_pricer(fetch.clone(), runtime.executor()),
+		cmd.gas_pricer_conf
+			.to_gas_pricer(fetch.clone(), runtime.executor()),
 		&spec,
 		(
 			cmd.miner_extras.local_accounts,
 			account_utils::miner_local_accounts(account_provider.clone()),
-		)
+		),
 	));
 	miner.set_author(miner::Author::External(cmd.miner_extras.author));
 	miner.set_gas_range_target(cmd.miner_extras.gas_range_target);
 	miner.set_extra_data(cmd.miner_extras.extra_data);
 
 	if !cmd.miner_extras.work_notify.is_empty() {
-		miner.add_work_listener(Box::new(
-			WorkPoster::new(&cmd.miner_extras.work_notify, fetch.clone(), runtime.executor())
-		));
+		miner.add_work_listener(Box::new(WorkPoster::new(
+			&cmd.miner_extras.work_notify,
+			fetch.clone(),
+			runtime.executor(),
+		)));
 	}
 
 	let engine_signer = cmd.miner_extras.engine_signer;
 	if engine_signer != Default::default() {
-		if let Some(author) = account_utils::miner_author(&cmd.spec, &cmd.dirs, &account_provider, engine_signer, &passwords)? {
+		if let Some(author) = account_utils::miner_author(
+			&cmd.spec,
+			&cmd.dirs,
+			&account_provider,
+			engine_signer,
+			&passwords,
+		)? {
 			miner.set_author(author);
 		}
 	}
@@ -552,7 +648,8 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	net_conf.net_config_path = Some(db_dirs.network_path().to_string_lossy().into_owned());
 
 	let restoration_db_handler = db::restoration_db_handler(&client_path, &client_config);
-	let client_db = restoration_db_handler.open(&client_path)
+	let client_db = restoration_db_handler
+		.open(&client_path)
 		.map_err(|e| format!("Failed to open database {:?}", e))?;
 
 	let private_tx_signer = account_utils::private_tx_signer(account_provider.clone(), &passwords)?;
@@ -567,10 +664,18 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 		&cmd.dirs.ipc_path(),
 		miner.clone(),
 		private_tx_signer.clone(),
-		Box::new(SecretStoreEncryptor::new(cmd.private_encryptor_conf.clone(), fetch.clone(), private_tx_signer).map_err(|e| e.to_string())?),
+		Box::new(
+			SecretStoreEncryptor::new(
+				cmd.private_encryptor_conf.clone(),
+				fetch.clone(),
+				private_tx_signer,
+			)
+			.map_err(|e| e.to_string())?,
+		),
 		cmd.private_provider_conf,
 		cmd.private_encryptor_conf,
-	).map_err(|e| format!("Client service error: {:?}", e))?;
+	)
+	.map_err(|e| format!("Client service error: {:?}", e))?;
 
 	let connection_filter_address = spec.params().node_permission_contract;
 	// drop the spec to free up genesis state.
@@ -584,7 +689,12 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	// take handle to private transactions service
 	let private_tx_service = service.private_tx_service();
 	let private_tx_provider = private_tx_service.provider();
-	let connection_filter = connection_filter_address.map(|a| Arc::new(NodeFilter::new(Arc::downgrade(&client) as Weak<BlockChainClient>, a)));
+	let connection_filter = connection_filter_address.map(|a| {
+		Arc::new(NodeFilter::new(
+			Arc::downgrade(&client) as Weak<BlockChainClient>,
+			a,
+		))
+	});
 	let snapshot_service = service.snapshot_service();
 
 	// initialize the local node information store.
@@ -594,10 +704,14 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 			miner: match cmd.no_persistent_txqueue {
 				true => None,
 				false => Some(miner.clone()),
-			}
+			},
 		};
 
-		let store = ::local_store::create(db.key_value().clone(), ::ethcore_db::COL_NODE_INFO, node_info);
+		let store = ::local_store::create(
+			db.key_value().clone(),
+			::ethcore_db::COL_NODE_INFO,
+			node_info,
+		);
 
 		if cmd.no_persistent_txqueue {
 			info!("Running without a persistent transaction queue.");
@@ -623,7 +737,9 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	};
 
 	// register it as an IO service to update periodically.
-	service.register_io_handler(store).map_err(|_| "Unable to register local store handler".to_owned())?;
+	service
+		.register_io_handler(store)
+		.map_err(|_| "Unable to register local store handler".to_owned())?;
 
 	// create external miner
 	let external_miner = Arc::new(ExternalMiner::default());
@@ -637,8 +753,9 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	let mut attached_protos = Vec::new();
 
 	let whisper_factory = if cmd.whisper.enabled {
-		let whisper_factory = ::whisper::setup(cmd.whisper.target_message_pool_size, &mut attached_protos)
-			.map_err(|e| format!("Failed to initialize whisper: {}", e))?;
+		let whisper_factory =
+			::whisper::setup(cmd.whisper.target_message_pool_size, &mut attached_protos)
+				.map_err(|e| format!("Failed to initialize whisper: {}", e))?;
 
 		whisper_factory
 	} else {
@@ -660,8 +777,11 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 		client.clone(),
 		&cmd.logger_config,
 		attached_protos,
-		connection_filter.clone().map(|f| f as Arc<::sync::ConnectionFilter + 'static>),
-	).map_err(|e| format!("Sync error: {}", e))?;
+		connection_filter
+			.clone()
+			.map(|f| f as Arc<::sync::ConnectionFilter + 'static>),
+	)
+	.map_err(|e| format!("Sync error: {}", e))?;
 
 	service.add_notify(chain_notify.clone());
 
@@ -671,7 +791,8 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	miner.add_transactions_listener(Box::new(move |_hashes| {
 		// we want to have only one PendingTransactions task in the queue.
 		if is_ready.compare_and_swap(true, false, atomic::Ordering::SeqCst) {
-			let task = ::sync::PriorityTask::PropagateTransactions(Instant::now(), is_ready.clone());
+			let task =
+				::sync::PriorityTask::PropagateTransactions(Instant::now(), is_ready.clone());
 			// we ignore error cause it means that we are closing
 			let _ = tx.lock().send(task);
 		}
@@ -692,19 +813,28 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	}
 
 	let contract_client = {
-		struct FullRegistrar { client: Arc<Client> }
+		struct FullRegistrar {
+			client: Arc<Client>,
+		}
 		impl RegistrarClient for FullRegistrar {
 			type Call = Asynchronous;
 			fn registrar_address(&self) -> Result<Address, String> {
-				self.client.registrar_address()
+				self.client
+					.registrar_address()
 					.ok_or_else(|| "Registrar not defined.".into())
 			}
 			fn call_contract(&self, address: Address, data: Bytes) -> Self::Call {
-				Box::new(self.client.call_contract(BlockId::Latest, address, data).into_future())
+				Box::new(
+					self.client
+						.call_contract(BlockId::Latest, address, data)
+						.into_future(),
+				)
 			}
 		}
 
-		Arc::new(FullRegistrar { client: client.clone() })
+		Arc::new(FullRegistrar {
+			client: client.clone(),
+		})
 	};
 
 	// the updater service
@@ -713,7 +843,7 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 		&Arc::downgrade(&(service.client() as Arc<BlockChainClient>)),
 		&Arc::downgrade(&sync_provider),
 		update_policy,
-		hash_fetch::Client::with_fetch(contract_client.clone(), updater_fetch, runtime.executor())
+		hash_fetch::Client::with_fetch(contract_client.clone(), updater_fetch, runtime.executor()),
 	);
 	service.add_notify(updater.clone());
 
@@ -758,17 +888,35 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 	let rpc_direct = rpc::setup_apis(rpc_apis::ApiSet::All, &dependencies);
 	let ws_server = rpc::new_ws(cmd.ws_conf.clone(), &dependencies)?;
 	let ipc_server = rpc::new_ipc(cmd.ipc_conf, &dependencies)?;
-	let http_server = rpc::new_http("HTTP JSON-RPC", "jsonrpc", cmd.http_conf.clone(), &dependencies)?;
+	let http_server = rpc::new_http(
+		"HTTP JSON-RPC",
+		"jsonrpc",
+		cmd.http_conf.clone(),
+		&dependencies,
+	)?;
 
-    // if a chain specification was customized by the user, pass the path of the chainfile to the rabbitmq_client.
-    let chainfile_path = match &cmd.spec {
-        SpecType::Custom(filename) => Some(filename),
-        _ => None
-    };
+	// if a chain specification was customized by the user, pass the path of the chainfile to the rabbitmq_client.
+	let chainfile_path = match &cmd.spec {
+		SpecType::Custom(filename) => Some(filename),
+		_ => None,
+	};
 
-	let rabbitmq_client = match PubSubClient::new(client.clone(), miner.clone(), runtime.executor(), client_path.to_str(), cmd.rabbitmq_conf, cmd.prometheus_export_service_conf, chainfile_path) {
+	let rabbitmq_client = match PubSubClient::new(
+		client.clone(),
+		miner.clone(),
+		runtime.executor(),
+		client_path.to_str(),
+		cmd.rabbitmq_conf,
+		cmd.prometheus_export_service_conf,
+		chainfile_path,
+	) {
 		Ok(client) => Arc::new(client),
-		Err(e) => return Err(format!("Failed to start the Blockchain RabbitMQ Interface: {}", e)),
+		Err(e) => {
+			return Err(format!(
+				"Failed to start the Blockchain RabbitMQ Interface: {}",
+				e
+			))
+		}
 	};
 	service.add_notify(rabbitmq_client.clone());
 
@@ -780,7 +928,11 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 		account_provider,
 		accounts_passwords: &passwords,
 	};
-	let secretstore_key_server = secretstore::start(cmd.secretstore_conf.clone(), secretstore_deps, runtime.executor())?;
+	let secretstore_key_server = secretstore::start(
+		cmd.secretstore_conf.clone(),
+		secretstore_deps,
+		runtime.executor(),
+	)?;
 
 	// the ipfs server
 	let ipfs_server = ipfs::start_server(cmd.ipfs_conf.clone(), client.clone())?;
@@ -797,7 +949,9 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 		cmd.logger_config.color,
 	));
 	service.add_notify(informant.clone());
-	service.register_io_handler(informant.clone()).map_err(|_| "Unable to register informant handler".to_owned())?;
+	service
+		.register_io_handler(informant.clone())
+		.map_err(|_| "Unable to register informant handler".to_owned())?;
 
 	// save user defaults
 	user_defaults.is_first_launch = false;
@@ -812,7 +966,7 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 		if let Some(mode) = mode {
 			user_defaults.set_mode(mode);
 		}
-		let _ = user_defaults.save(&user_defaults_path);	// discard failures - there's nothing we can do
+		let _ = user_defaults.save(&user_defaults_path); // discard failures - there's nothing we can do
 	});
 
 	// the watcher must be kept alive.
@@ -831,7 +985,7 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 
 			service.add_notify(watcher.clone());
 			Some(watcher)
-		},
+		}
 	};
 
 	client.set_exit_handler(on_client_rq);
@@ -843,8 +997,18 @@ fn execute_impl<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>, on_client_rq: 
 			informant,
 			client,
 			client_service: Arc::new(service),
-			keep_alive: Box::new((watcher, updater, ws_server, http_server, ipc_server, secretstore_key_server, ipfs_server, runtime, rabbitmq_client)),
-		}
+			keep_alive: Box::new((
+				watcher,
+				updater,
+				ws_server,
+				http_server,
+				ipc_server,
+				secretstore_key_server,
+				ipfs_server,
+				runtime,
+				rabbitmq_client,
+			)),
+		},
 	})
 }
 
@@ -858,13 +1022,17 @@ pub struct RunningClient {
 
 enum RunningClientInner {
 	Light {
-		rpc: jsonrpc_core::MetaIoHandler<Metadata, informant::Middleware<rpc_apis::LightClientNotifier>>,
+		rpc: jsonrpc_core::MetaIoHandler<
+			Metadata,
+			informant::Middleware<rpc_apis::LightClientNotifier>,
+		>,
 		informant: Arc<Informant<LightNodeInformantData>>,
 		client: Arc<LightClient>,
 		keep_alive: Box<Any>,
 	},
 	Full {
-		rpc: jsonrpc_core::MetaIoHandler<Metadata, informant::Middleware<informant::ClientNotifier>>,
+		rpc:
+			jsonrpc_core::MetaIoHandler<Metadata, informant::Middleware<informant::ClientNotifier>>,
 		informant: Arc<Informant<FullNodeInformantData>>,
 		client: Arc<Client>,
 		client_service: Arc<ClientService>,
@@ -875,9 +1043,11 @@ enum RunningClientInner {
 impl RunningClient {
 	/// Performs an asynchronous RPC query.
 	// FIXME: [tomaka] This API should be better, with for example a Future
-	pub fn rpc_query(&self, request: &str, session: Option<Arc<PubSubSession>>)
-		-> FutureResult<FutureResponse, FutureOutput>
-	{
+	pub fn rpc_query(
+		&self,
+		request: &str,
+		session: Option<Arc<PubSubSession>>,
+	) -> FutureResult<FutureResponse, FutureOutput> {
 		let metadata = Metadata {
 			origin: Origin::CApi,
 			session,
@@ -892,7 +1062,12 @@ impl RunningClient {
 	/// Shuts down the client.
 	pub fn shutdown(self) {
 		match self.inner {
-			RunningClientInner::Light { rpc, informant, client, keep_alive } => {
+			RunningClientInner::Light {
+				rpc,
+				informant,
+				client,
+				keep_alive,
+			} => {
 				// Create a weak reference to the client so that we can wait on shutdown
 				// until it is dropped
 				let weak_client = Arc::downgrade(&client);
@@ -902,8 +1077,14 @@ impl RunningClient {
 				drop(informant);
 				drop(client);
 				wait_for_drop(weak_client);
-			},
-			RunningClientInner::Full { rpc, informant, client, client_service, keep_alive } => {
+			}
+			RunningClientInner::Full {
+				rpc,
+				informant,
+				client,
+				client_service,
+				keep_alive,
+			} => {
 				info!("Finishing work, please wait...");
 				// Create a weak reference to the client so that we can wait on shutdown
 				// until it is dropped
@@ -943,10 +1124,15 @@ impl RunningClient {
 /// `on_updater_rq` is the action to perform when the updater has a new binary to execute.
 ///
 /// On error, returns what to print on stderr.
-pub fn execute<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>,
-						on_client_rq: Cr, on_updater_rq: Rr) -> Result<RunningClient, String>
-	where Cr: Fn(String) + 'static + Send,
-		Rr: Fn() + 'static + Send
+pub fn execute<Cr, Rr>(
+	cmd: RunCmd,
+	logger: Arc<RotatingLogger>,
+	on_client_rq: Cr,
+	on_updater_rq: Rr,
+) -> Result<RunningClient, String>
+where
+	Cr: Fn(String) + 'static + Send,
+	Rr: Fn() + 'static + Send,
 {
 	if cmd.light {
 		execute_light_impl(cmd, logger, on_client_rq)
@@ -957,8 +1143,18 @@ pub fn execute<Cr, Rr>(cmd: RunCmd, logger: Arc<RotatingLogger>,
 
 fn print_running_environment(data_dir: &str, dirs: &Directories, db_dirs: &DatabaseDirectories) {
 	info!("Starting {}", Colour::White.bold().paint(version()));
-	info!("Keys path {}", Colour::White.bold().paint(dirs.keys_path(data_dir).to_string_lossy().into_owned()));
-	info!("DB path {}", Colour::White.bold().paint(db_dirs.db_root_path().to_string_lossy().into_owned()));
+	info!(
+		"Keys path {}",
+		Colour::White
+			.bold()
+			.paint(dirs.keys_path(data_dir).to_string_lossy().into_owned())
+	);
+	info!(
+		"DB path {}",
+		Colour::White
+			.bold()
+			.paint(db_dirs.db_root_path().to_string_lossy().into_owned())
+	);
 }
 
 fn wait_for_drop<T>(w: Weak<T>) {
@@ -990,4 +1186,3 @@ fn wait_for_drop<T>(w: Weak<T>) {
 
 	warn!("Shutdown timeout reached, exiting uncleanly.");
 }
-
