@@ -5,8 +5,8 @@ use byteorder::{LittleEndian, ByteOrder};
 use boolinator::Boolinator;
 use common::{handle_fatal_error, try_spawn};
 use enclose::enclose;
-use ethcore::client::{BlockChainClient, BlockId, CallAnalytics, ChainNotify, ChainRouteType, NewBlocks};
-use ethcore::miner;
+use ethcore::client::{BlockChainClient, BlockId, CallAnalytics, ChainNotify, ChainRouteType, NewBlocks, Nonce};
+use ethcore::miner::{self, MinerService};
 use ethereum_types::{H160, H256, U256};
 use failure::{format_err, Error};
 use futures::future::{ok, err, lazy, loop_fn, Future, Loop};
@@ -79,7 +79,7 @@ struct NonceRequest {
 
 #[derive(Serialize)]
 struct NonceResponse {
-	pub nonce: Option<U256>,
+	pub nonce: U256,
 }
 
 #[derive(Serialize)]
@@ -103,10 +103,10 @@ lazy_static! {
 	.unwrap();
 }
 
-impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
-	pub fn new(
+impl<C: 'static + miner::BlockChainClient + BlockChainClient + Nonce> PubSubClient<C> {
+	pub fn new<S: ethcore::client::StateInfo + 'static, M: MinerService<State=S> + 'static>(
 		blockchain_client: Arc<C>,
-		miner: Arc<miner::Miner>,
+		miner: Arc<M>,
 		executor: Executor,
 		client_path: Option<&str>,
 		config: RabbitMqConfig,
@@ -184,7 +184,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 								.expect("Could not parse AMQP message");
 							let nonce_request: NonceRequest = serde_json::from_str(payload)
 								.expect("Could not deserialize AMQP message payload");
-							let nonce_result = client.nonce(&nonce_request.address, BlockId::Latest);
+							let nonce_result = miner.next_nonce(&*client, &nonce_request.address);
 							let nonce_response = NonceResponse {
 								nonce: nonce_result
 							};
