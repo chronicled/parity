@@ -188,16 +188,17 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient + Nonce> PubSubClie
 							let nonce_response = NonceResponse {
 								nonce: nonce_result
 							};
-							let serialized_message = serde_json::to_string(&nonce_response).unwrap();
+							let serialized_message = serde_json::to_string(&nonce_response)
+								.expect("Could not serialize RPC response message");
 							Box::new(rabbit.clone()
-							.rpc_response(
-								&message,
-								serialized_message.into(),
-								vec![],
-							)
-							.map_err(handle_fatal_error)
-							.map_err(|_| format_err!("Could not send RPC response to RabbitMQ"))
-							.map(|_| ConsumerResult::ACK)
+								.rpc_response(
+									&message,
+									serialized_message.into(),
+									vec![],
+								)
+								.map_err(handle_fatal_error)
+								.map_err(|_| format_err!("Could not send RPC response to RabbitMQ"))
+								.map(|_| ConsumerResult::ACK)
 							)
 						}),
 					)
