@@ -1,17 +1,15 @@
 //! RabbitMQ ChainNotfiy implementation
 
+use common_types::{BlockNumber, ids::TransactionId, receipt::TransactionOutcome};
+use byteorder::{LittleEndian, ByteOrder};
 use boolinator::Boolinator;
-use byteorder::{ByteOrder, LittleEndian};
 use common::{handle_fatal_error, try_spawn};
-use common_types::{ids::TransactionId, receipt::TransactionOutcome, BlockNumber};
 use enclose::enclose;
-use ethcore::client::{
-	BlockChainClient, BlockId, CallAnalytics, ChainNotify, ChainRouteType, NewBlocks,
-};
+use ethcore::client::{BlockChainClient, BlockId, CallAnalytics, ChainNotify, ChainRouteType, NewBlocks};
 use ethcore::miner;
 use ethereum_types::H256;
 use failure::{format_err, Error};
-use futures::future::{err, lazy, loop_fn, ok, Future, Loop};
+use futures::future::{ok, err, lazy, loop_fn, Future, Loop};
 use handler::{Handler, Sender};
 use hyper::{header::CONTENT_TYPE, service::service_fn_ok, Body, Response, Server};
 use kvdb::{DBTransaction, KeyValueDB};
@@ -21,24 +19,26 @@ use prometheus::{Counter, Encoder, TextEncoder};
 use rabbitmq_adaptor::{ConfigUri, ConsumerResult, DeliveryExt, RabbitConnection, RabbitExt};
 use serde::Deserialize;
 use serde_json;
-use std::fs::File;
 use std::path::Path;
+use std::fs::File;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::prelude::*;
-use tokio::sync::mpsc::{channel, Sender as ChannelSender};
+use tokio::sync::mpsc::{
+	channel, Sender as ChannelSender
+};
 use types::{Block, BlockTransactions, Bytes, Log, RichBlock, TraceResults, Transaction};
 
-use CHAINFILE_ROUTING_KEY;
 use DB_NAME;
+use START_FROM_INDEX;
 use DEFAULT_CHANNEL_SIZE;
 use DEFAULT_REPLY_QUEUE;
 use LOG_TARGET;
 use NEW_BLOCK_EXCHANGE_NAME;
 use NEW_BLOCK_ROUTING_KEY;
+use CHAINFILE_ROUTING_KEY;
 use OPERATION_ID;
 use PUBLIC_TRANSACTION_QUEUE;
-use START_FROM_INDEX;
 use TX_ERROR_EXCHANGE_NAME;
 use TX_ERROR_ROUTING_KEY;
 
@@ -101,16 +101,13 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		client_path: Option<&str>,
 		config: RabbitMqConfig,
 		prometheus_export_service_config: PrometheusExportServiceConfig,
-		chainfile_path: Option<&String>,
+        chainfile_path: Option<&String>
 	) -> Result<Self, Error> {
 		let (sender, receiver) = channel::<BlockNumber>(DEFAULT_CHANNEL_SIZE);
 		let config_uri = ConfigUri::Uri(config.uri);
-		let db_path =
-			Path::new(client_path.ok_or_else(|| format_err!("Client path does not exist"))?)
-				.join(DB_NAME);
-		let db_path = db_path
-			.to_str()
-			.ok_or_else(|| format_err!("Invalid rabbitmq db path"))?;
+		let db_path = Path::new(client_path.ok_or_else(|| format_err!("Client path does not exist"))?)
+			.join(DB_NAME);
+		let db_path = db_path.to_str().ok_or_else(|| format_err!("Invalid rabbitmq db path"))?;
 		let database = Arc::new(Database::open_default(db_path)?);
 
 		let sender_handler = Box::new(Sender::new(blockchain_client.clone(), miner.clone()));
@@ -123,7 +120,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		// initialize buffer in which we will put all the data of chainfile into
 		let mut chainfile_buffer = Vec::new();
 		// check if START_FROM_INDEX is at 0, if so, emit genesis block and chainfile
-		let mut start_from_index: u64 = db
+		let start_from_index: u64 = db
 			.get(None, START_FROM_INDEX)
 			.expect("low-level database error")
 			.and_then(|val| Some(LittleEndian::read_u64(&val[..])))
@@ -141,7 +138,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		}
 
 		executor.spawn(lazy(move || {
-			let rabbit = RabbitConnection::new(config_uri, None, DEFAULT_REPLY_QUEUE);
+            let rabbit = RabbitConnection::new(config_uri, None, DEFAULT_REPLY_QUEUE);
 
 			// Consume to public transaction messages
 			try_spawn(
@@ -181,14 +178,14 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 										TX_ERROR_ROUTING_KEY.to_string(),
 										serialized_message.into(),
 										vec![(OPERATION_ID.to_string(), operation_id)],
-										).map(|_| ())
+									).map(|_| ())
 								}))
 								.map(|_| ConsumerResult::ACK)
-								)
+							)
 						}),
 					)
 					.map_err(Error::from)
-					.map(|_| ()),
+					.map(|_| ())
 			);
 
 			send_chainfile
@@ -212,11 +209,11 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 						.for_each(enclose!((db, client, rabbit) move |block_number| {
 							loop_fn((db.clone(), client.clone(), rabbit.clone()), move |(db, client, rabbit)| {
 								let mut start_from_index: u64 = db.get(None, START_FROM_INDEX)
-								.expect("low-level database error")
-								.and_then(|val| {
-									Some(LittleEndian::read_u64(&val[..]))
-								})
-								.unwrap_or(0u64);
+									.expect("low-level database error")
+									.and_then(|val| {
+										Some(LittleEndian::read_u64(&val[..]))
+									})
+									.unwrap_or(0u64);
 								let mut serialized_block = String::default();
 								let mut should_break = false;
 								let mut should_send = true;
@@ -256,11 +253,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 						}))
 				})
 		}));
-		let pubsub_client = PubSubClient {
-			blockchain_client,
-			sender,
-			database,
-		};
+		let pubsub_client = PubSubClient { blockchain_client, sender, database };
 		pubsub_client.start_monitoring(executor, prometheus_export_service_config);
 
 		Ok(pubsub_client)
@@ -269,18 +262,18 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 	fn start_monitoring(
 		&self,
 		executor: Executor,
-		prometheus_export_service_config: PrometheusExportServiceConfig,
+		prometheus_export_service_config: PrometheusExportServiceConfig
 	) -> Result<(), Error> {
 		let export_service_enabled = prometheus_export_service_config.prometheus_export_service;
 
 		if export_service_enabled {
-			let export_service_port =
-				prometheus_export_service_config.prometheus_export_service_port;
+			let export_service_port = prometheus_export_service_config.prometheus_export_service_port;
 
 			let export_service_address = ([127, 0, 0, 1], export_service_port).into();
 			info!(
 				target: LOG_TARGET,
-				"Prometheus export service listening at address: {:?}", export_service_address
+				"Prometheus export service listening at address: {:?}",
+				export_service_address
 			);
 
 			let export_service_handler = || {
@@ -313,50 +306,38 @@ fn publish_new_block(
 	database: Arc<KeyValueDB>,
 	rabbit: RabbitConnection,
 	serialized_message: Vec<u8>,
-	block_number: u64,
-) -> Box<dyn Future<Item = (), Error = ()> + Send> {
-	Box::new(
-		rabbit
-			.clone()
-			.publish(
-				NEW_BLOCK_EXCHANGE_NAME.to_string(),
-				NEW_BLOCK_ROUTING_KEY.to_string(),
-				serialized_message,
-				vec![],
-			)
-			.map_err(|err| {
-				info!(target: LOG_TARGET, "Error publishing: {}", err);
-				handle_fatal_error(err);
-			})
-			.timeout(Duration::from_secs(10))
-			.map_err(|_| ())
-			.map(move |_| {
-				info!(
-					target: LOG_TARGET,
-					"Block message published: {:?}", block_number
-				);
-				()
-			})
-			.and_then(move |_| {
-				NEW_BLOCK_COUNTER.inc();
-				info!(
-					target: LOG_TARGET,
-					"Update block status in RocksDB: {:?}", block_number
-				);
-				let mut transaction = DBTransaction::new();
-				transaction.put(None, START_FROM_INDEX, &(block_number).to_le_bytes());
-				database.clone().write(transaction).map_err(|err| {
-					handle_fatal_error(err.into());
-				});
-				ok(())
-			}),
-	)
+	block_number: u64
+) ->  Box<dyn Future<Item = (), Error = ()> + Send> {
+		Box::new(rabbit.clone()
+		.publish(
+			NEW_BLOCK_EXCHANGE_NAME.to_string(),
+			NEW_BLOCK_ROUTING_KEY.to_string(),
+			serialized_message,
+			vec![],
+		)
+		.map_err(|err| {
+			info!(target: LOG_TARGET, "Error publishing: {}", err);
+			handle_fatal_error(err);
+		})
+		.timeout(Duration::from_secs(10))
+		.map_err(|_| ())
+		.map(move |_| {
+			info!(target: LOG_TARGET, "Block message published: {:?}", block_number);
+			()
+		})
+		.and_then(move |_| {
+			NEW_BLOCK_COUNTER.inc();
+			info!(target: LOG_TARGET, "Update block status in RocksDB: {:?}", block_number);
+			let mut transaction = DBTransaction::new();
+			transaction.put(None, START_FROM_INDEX, &(block_number).to_le_bytes());
+			database.clone().write(transaction).map_err(|err| {
+				handle_fatal_error(err.into());
+			});
+			ok(())
+		}))
 }
 
-pub fn construct_new_block<C: BlockChainClient>(
-	block_number: BlockNumber,
-	client: Arc<C>,
-) -> Option<String> {
+pub fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, client: Arc<C>) -> Option<String> {
 	fn cast<O, T: Copy + Into<O>>(t: &T) -> O {
 		(*t).into()
 	}
@@ -365,8 +346,10 @@ pub fn construct_new_block<C: BlockChainClient>(
 
 	let hash = block.hash();
 	let header = block.decode_header();
-	let receipts = client.localized_block_receipts(BlockId::Number(header.number()))?;
-	let extra_info = client.block_extra_info(BlockId::Hash(hash))?;
+	let receipts = client
+		.localized_block_receipts(BlockId::Number(header.number()))?;
+	let extra_info = client
+		.block_extra_info(BlockId::Hash(hash))?;
 
 	let rich_block = RichBlock {
 		inner: Block {
@@ -398,17 +381,12 @@ pub fn construct_new_block<C: BlockChainClient>(
 					.localized_transactions()
 					.into_iter()
 					.map(|tx| {
-						let transaction_id = TransactionId::Location(
-							BlockId::Number(tx.block_number),
-							tx.transaction_index,
-						);
-						let outcome: Option<TransactionOutcome> =
-							match client.transaction_receipt(transaction_id.clone()) {
-								Some(receipt) => Some(receipt.outcome),
-								None => None,
-							};
-						let trace = client
-							.replay(transaction_id, DEFAULT_CALL_ANALYTICS)
+						let transaction_id = TransactionId::Location(BlockId::Number(tx.block_number), tx.transaction_index);
+						let outcome: Option<TransactionOutcome> = match client.transaction_receipt(transaction_id.clone()) {
+							Some(receipt) => Some(receipt.outcome),
+							None => None
+						};
+						let trace = client.replay(transaction_id, DEFAULT_CALL_ANALYTICS)
 							.map(TraceResults::from)
 							.ok();
 						(tx, outcome, trace)
@@ -444,16 +422,16 @@ impl<C: BlockChainClient> ChainNotify for PubSubClient<C> {
 
 		blocks.into_iter().for_each(|block| {
 			&self
-			.sender
-			.clone()
-			.try_send(block)
-			.map_err(|err| {
-				if err.is_full() {
-					info!(target: LOG_TARGET, "MPSC channel is full: {:?}, Reciever is already processing new block messages", err);
-				} else {
-					panic!(err)
-				}
-			});
+				.sender
+				.clone()
+				.try_send(block)
+				.map_err(|err| {
+					if err.is_full() {
+						info!(target: LOG_TARGET, "MPSC channel is full: {:?}, Reciever is already processing new block messages", err);
+					} else {
+						panic!(err)
+					}
+				});
 		});
 	}
 }
