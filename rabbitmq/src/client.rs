@@ -138,7 +138,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		}
 
 		executor.spawn(lazy(move || {
-            let rabbit = RabbitConnection::new(config_uri, None, DEFAULT_REPLY_QUEUE);
+			let rabbit = RabbitConnection::new(config_uri, None, DEFAULT_REPLY_QUEUE);
 
 			// Consume to public transaction messages
 			try_spawn(
