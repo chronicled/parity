@@ -5,9 +5,9 @@ use byteorder::{LittleEndian, ByteOrder};
 use boolinator::Boolinator;
 use common::{handle_fatal_error, try_spawn};
 use enclose::enclose;
-use ethcore::client::{BlockChainClient, BlockId, CallAnalytics, ChainNotify, ChainRouteType, NewBlocks};
-use ethcore::miner;
-use ethereum_types::H256;
+use ethcore::client::{BlockChainClient, BlockId, CallAnalytics, ChainNotify, ChainRouteType, NewBlocks, Nonce};
+use ethcore::miner::{self, MinerService};
+use ethereum_types::{H160, H256, U256};
 use failure::{format_err, Error};
 use futures::future::{ok, err, lazy, loop_fn, Future, Loop};
 use handler::{Handler, Sender};
@@ -39,6 +39,7 @@ use LOG_TARGET;
 use NEW_BLOCK_EXCHANGE_NAME;
 use NEW_BLOCK_ROUTING_KEY;
 use RETRACTED_BLOCK_ROUTING_KEY;
+use GET_NONCE_QUEUE;
 use OPERATION_ID;
 use PUBLIC_TRANSACTION_QUEUE;
 use TX_ERROR_EXCHANGE_NAME;
@@ -76,6 +77,16 @@ struct TransactionMessage {
 	pub transaction_hash: H256,
 }
 
+#[derive(Deserialize)]
+struct NonceRequest {
+	pub address: H160,
+}
+
+#[derive(Serialize)]
+struct NonceResponse {
+	pub nonce: U256,
+}
+
 #[derive(Serialize)]
 struct TransactionErrorMessage {
 	pub transaction_hash: H256,
@@ -107,8 +118,8 @@ lazy_static! {
 	.unwrap();
 }
 
-impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
-	pub fn new(
+impl<C: 'static + miner::BlockChainClient + BlockChainClient + Nonce> PubSubClient<C> {
+	pub fn new<S: ethcore::client::StateInfo + 'static, M: MinerService<State=S> + 'static>(
 		blockchain_client: Arc<C>,
 		miner: Arc<miner::Miner>,
 		sync_provider: Arc<SyncProvider>,
@@ -199,6 +210,37 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 						.map(|_| ())
 					}))
 					.map_err(Error::from),
+			);
+			try_spawn(
+				rabbit
+					.clone()
+					.register_consumer(
+						GET_NONCE_QUEUE.to_string(),
+						enclose!((rabbit, client) move |message| {
+							let payload = std::str::from_utf8(&message.data)
+								.expect("Could not parse AMQP message");
+							let nonce_request: NonceRequest = serde_json::from_str(payload)
+								.expect("Could not deserialize AMQP message payload");
+							let nonce_result = miner.next_nonce(&*client, &nonce_request.address);
+							let nonce_response = NonceResponse {
+								nonce: nonce_result
+							};
+							let serialized_message = serde_json::to_string(&nonce_response)
+								.expect("Could not serialize RPC response message");
+							Box::new(rabbit.clone()
+								.rpc_response(
+									&message,
+									serialized_message.into(),
+									vec![],
+								)
+								.map_err(handle_fatal_error)
+								.map_err(|_| format_err!("Could not send RPC response to RabbitMQ"))
+								.map(|_| ConsumerResult::ACK)
+							)
+						}),
+					)
+					.map_err(Error::from)
+					.map(|_| ()),
 			);
 
 			enacted_receiver
