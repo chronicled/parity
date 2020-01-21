@@ -122,33 +122,26 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 		let mut send_chainfile = false;
 		// initialize buffer in which we will put all the data of chainfile into
 		let mut chainfile_buffer = Vec::new();
-		// if the spec was custom and file_path exists, open file and put data into buffer
-		if let Some(path) = chainfile_path {
-			// get chainfile as bytes of Vec<u8>
-			let mut chainfile = File::open(path)?;
-			// read the entire chainfile_aura.json to buffer
-			chainfile.read_to_end(&mut chainfile_buffer)?;
-			// upon successful reading, set send_chainfile to true to send data via RabbitConnection
-			send_chainfile = true;
+		// check if START_FROM_INDEX is at 0, if so, emit genesis block and chainfile
+		let mut start_from_index: u64 = db
+			.get(None, START_FROM_INDEX)
+			.expect("low-level database error")
+			.and_then(|val| Some(LittleEndian::read_u64(&val[..])))
+			.unwrap_or(0u64);
+		if start_from_index == 0 {
+			// if the spec was custom and file_path exists, open file and put data into buffer
+			if let Some(path) = chainfile_path {
+				// get chainfile as bytes of Vec<u8>
+				let mut chainfile = File::open(path)?;
+				// read the entire chainfile_aura.json to buffer
+				chainfile.read_to_end(&mut chainfile_buffer)?;
+				// upon successful reading, set send_chainfile to true to send data via RabbitConnection
+				send_chainfile = true;
+			}
 		}
 
 		executor.spawn(lazy(move || {
 			let rabbit = RabbitConnection::new(config_uri, None, DEFAULT_REPLY_QUEUE);
-
-			if send_chainfile {
-				try_spawn(
-					rabbit
-						.clone()
-						.publish(
-							NEW_BLOCK_EXCHANGE_NAME.to_string(),
-							CHAINFILE_ROUTING_KEY.to_string(),
-							chainfile_buffer,
-							vec![],
-						)
-						.map_err(Error::from)
-						.map(|_| ()),
-				);
-			}
 
 			// Consume to public transaction messages
 			try_spawn(
@@ -198,53 +191,70 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 					.map(|_| ()),
 			);
 
-			receiver
-				.map_err(|err| handle_fatal_error(err.into()))
-				.for_each(enclose!((db, client, rabbit) move |block_number| {
-					loop_fn((db.clone(), client.clone(), rabbit.clone()), move |(db, client, rabbit)| {
-						let mut start_from_index: u64 = db.get(None, START_FROM_INDEX)
-						.expect("low-level database error")
-						.and_then(|val| {
-							Some(LittleEndian::read_u64(&val[..]))
-						})
-						.unwrap_or(0u64);
-						let mut serialized_block = String::default();
-						let mut should_break = false;
-						let mut should_send = true;
-
-						if start_from_index < (block_number - 1) {
-							start_from_index += 1;
-						} else {
-							start_from_index = block_number;
-							should_break = true;
-						}
-						match construct_new_block(start_from_index, client.clone()) {
-							Some(serialized_data) => {
-								serialized_block = serialized_data;
-							},
-							None => {
-								should_break = true;
-								should_send = false;
-							}
-						};
-
-						should_send.ok_or(()).into_future()
-						.and_then(enclose!((db, rabbit) move |_| {
-							publish_new_block(db.clone(), rabbit.clone(), serialized_block.into(), start_from_index)
-						}))
-						.or_else(move |_| {
-							should_break = true;
-							ok(())
-						})
-						.and_then(move |_| {
-							if should_break {
-								Ok(Loop::Break(()))
-							} else {
-								Ok(Loop::Continue((db, client, rabbit)))
-							}
-						})
-					})
+			send_chainfile
+				.ok_or(())
+				.into_future()
+				.and_then(enclose!((rabbit) move |_| {
+					rabbit
+					.publish(
+						NEW_BLOCK_EXCHANGE_NAME.to_string(),
+						CHAINFILE_ROUTING_KEY.to_string(),
+						chainfile_buffer,
+						vec![],
+						)
+					.map_err(|err| handle_fatal_error(err.into()))
+					.map(|_| ())
 				}))
+				.or_else(|_| Ok(()))
+				.and_then(move |_| {
+					receiver
+						.map_err(|err| handle_fatal_error(err.into()))
+						.for_each(enclose!((db, client, rabbit) move |block_number| {
+							loop_fn((db.clone(), client.clone(), rabbit.clone()), move |(db, client, rabbit)| {
+								let mut start_from_index: u64 = db.get(None, START_FROM_INDEX)
+								.expect("low-level database error")
+								.and_then(|val| {
+									Some(LittleEndian::read_u64(&val[..]))
+								})
+								.unwrap_or(0u64);
+								let mut serialized_block = String::default();
+								let mut should_break = false;
+								let mut should_send = true;
+
+								if start_from_index < (block_number - 1) {
+									start_from_index += 1;
+								} else {
+									start_from_index = block_number;
+									should_break = true;
+								}
+								match construct_new_block(start_from_index, client.clone()) {
+									Some(serialized_data) => {
+										serialized_block = serialized_data;
+									},
+									None => {
+										should_break = true;
+										should_send = false;
+									}
+								};
+
+								should_send.ok_or(()).into_future()
+								.and_then(enclose!((db, rabbit) move |_| {
+									publish_new_block(db.clone(), rabbit.clone(), serialized_block.into(), start_from_index)
+								}))
+								.or_else(move |_| {
+									should_break = true;
+									ok(())
+								})
+								.and_then(move |_| {
+									if should_break {
+										Ok(Loop::Break(()))
+									} else {
+										Ok(Loop::Continue((db, client, rabbit)))
+									}
+								})
+							})
+						}))
+				})
 		}));
 		let pubsub_client = PubSubClient {
 			blockchain_client,
