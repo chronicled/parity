@@ -112,7 +112,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient + Nonce> PubSubClie
 		client_path: Option<&str>,
 		config: RabbitMqConfig,
 		prometheus_export_service_config: PrometheusExportServiceConfig,
-        chainfile_path: Option<&String>
+		chainfile_path: Option<&String>
 	) -> Result<Self, Error> {
 		let (sender, receiver) = channel::<BlockNumber>(DEFAULT_CHANNEL_SIZE);
 		let config_uri = ConfigUri::Uri(config.uri);
