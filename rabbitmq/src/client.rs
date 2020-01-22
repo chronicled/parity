@@ -257,29 +257,25 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient + Nonce> PubSubClie
 										Some(LittleEndian::read_u64(&val[..]))
 									})
 									.unwrap_or(0u64);
-								let mut serialized_block = String::default();
-								let mut should_break = false;
-								let mut should_send = true;
 
-								if start_from_index < (block_number - 1) {
-									start_from_index += 1;
-								} else {
+								let mut should_break = false;
+
+								if start_from_index >= block_number {
 									start_from_index = block_number;
 									should_break = true;
 								}
-								match construct_new_block(start_from_index, client.clone()) {
-									Some(serialized_data) => {
-										serialized_block = serialized_data;
-									},
+
+								let serialized_block = match construct_new_block(start_from_index, client.clone()) {
 									None => {
 										should_break = true;
-										should_send = false;
-									}
+										None
+									},
+									res => res,
 								};
 
-								should_send.ok_or(()).into_future()
-								.and_then(enclose!((db, rabbit) move |_| {
-									publish_new_block(db.clone(), rabbit.clone(), serialized_block.into(), start_from_index)
+								serialized_block.ok_or(()).into_future()
+								.and_then(enclose!((db, rabbit) move |block| {
+									publish_new_block(db.clone(), rabbit.clone(), block.into(), start_from_index)
 								}))
 								.or_else(move |_| {
 									should_break = true;
@@ -372,7 +368,7 @@ fn publish_new_block(
 			NEW_BLOCK_COUNTER.inc();
 			info!(target: LOG_TARGET, "Update block status in RocksDB: {:?}", block_number);
 			let mut transaction = DBTransaction::new();
-			transaction.put(None, START_FROM_INDEX, &(block_number).to_le_bytes());
+			transaction.put(None, START_FROM_INDEX, &(block_number + 1).to_le_bytes());
 			database.clone().write(transaction).map_err(|err| {
 				handle_fatal_error(err.into());
 			});
@@ -389,10 +385,9 @@ pub fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, clien
 
 	let hash = block.hash();
 	let header = block.decode_header();
-	let receipts = client
-		.localized_block_receipts(BlockId::Number(header.number()))?;
-	let extra_info = client
-		.block_extra_info(BlockId::Hash(hash))?;
+	let receipts = client.localized_block_receipts(BlockId::Number(header.number())).unwrap_or(Vec::new());
+
+	let extra_info = client.block_extra_info(BlockId::Hash(hash)).unwrap_or(std::collections::BTreeMap::new());
 
 	let rich_block = RichBlock {
 		inner: Block {
@@ -440,7 +435,7 @@ pub fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, clien
 			transactions_root: cast(header.transactions_root()),
 			extra_data: header.extra_data().clone().into(),
 		},
-		extra_info: extra_info.clone(),
+		extra_info,
 	};
 	let serialized_block = serde_json::to_string(&rich_block).unwrap();
 	info!(target: LOG_TARGET, "Serialized: {:?} ", serialized_block);
