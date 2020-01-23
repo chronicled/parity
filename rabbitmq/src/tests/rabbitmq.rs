@@ -147,7 +147,7 @@ fn should_receive_genesis_block() {
 	// Collect all values in stream as an iterator
 	let mut block_iter = receiver.map_err(|_| ()).wait();
 
-	// Get the START_FROM_INDEX value; it should be 0.
+	// Get the START_FROM_INDEX value before producing block; it should be 0.
 	let mut start_from_index: u64 = db.get(None, START_FROM_INDEX)
 				.expect("low-level database error")
 				.and_then(|val| {
@@ -165,7 +165,7 @@ fn should_receive_genesis_block() {
 	let block0 = receiver_logic(hash0).unwrap();
 	assert_eq!(block0, r#"{"author":"0x0000000000000000000000000000000000000000","difficulty":"0x20000","extraData":"0x","gasLimit":"0x2fefd8","gasUsed":"0x0","hash":"0x0cd786a2425d16f152c658316c423e6ce1181e15c3295826d7c9904cba9ce303","logs":[],"logsBloom":"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","miner":"0x0000000000000000000000000000000000000000","number":"0x0","parentHash":"0x0000000000000000000000000000000000000000000000000000000000000000","receiptsRoot":"0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421","sealFields":["0xa000000000000000000000000000000000000000647572616c65787365646c6578","0x8800006d6f7264656e"],"sha3Uncles":"0x1dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347","size":"0x1fb","stateRoot":"0xf3f4696bbf3b3b07775128eb7a3763279a394e382130f27c21e70233e04946a9","timestamp":"0x0","totalDifficulty":null,"transactions":[],"transactionsRoot":"0x56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421","uncles":[]}"#);
 
-	// Get the second START_FROM_INDEX.
+	// Get START_FROM_INDEX after producing genesis block to see that it incremented.
 	start_from_index = db.get(None, START_FROM_INDEX)
 				.expect("low-level database error")
 				.and_then(|val| {
