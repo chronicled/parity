@@ -139,7 +139,7 @@ fn should_receive_genesis_block() {
 
 		if let Some(serialized_block) = construct_new_block(start_from_index, client.clone()) {
 			produce_new_block(db.clone(), serialized_block, start_from_index)
-		}else {
+		} else {
 			Err(())
 		}
 	});
