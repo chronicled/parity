@@ -78,4 +78,6 @@ workflows:
             - test
           filters:
             branches:
-              only: blockchain-interface
+              only:
+                - blockchain-interface
+                - /epic.*/
