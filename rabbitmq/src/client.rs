@@ -265,15 +265,9 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient + Nonce> PubSubClie
 									should_break = true;
 								}
 
-								let serialized_block = match construct_new_block(start_from_index, client.clone()) {
-									None => {
-										should_break = true;
-										None
-									},
-									res => res,
-								};
-
-								serialized_block.ok_or(()).into_future()
+								construct_new_block(start_from_index, client.clone())
+								.ok_or(())
+								.into_future()
 								.and_then(enclose!((db, rabbit) move |block| {
 									publish_new_block(db.clone(), rabbit.clone(), block.into(), start_from_index)
 								}))
