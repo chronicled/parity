@@ -36,6 +36,7 @@ jobs:
     <<: *defaults
     environment:
       FINAL_IMAGE: registry.dev.infra.chronicled.com/blockchain-interface
+      QUAY_IMAGE: quay.io/chronicled/blockchain-interface
     steps:
       - add_ssh_keys:
           fingerprints:
@@ -58,7 +59,7 @@ jobs:
             export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             export PREV_IMAGE=`docker images "${FINAL_IMAGE}:latest" --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
             ssh-add -L
-            docker build -c 1024 --rm=false -f scripts/docker/debian/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" --tag "${FINAL_IMAGE}:${CIRCLE_BRANCH}" . --cache-from="${PREV_IMAGE}" --ssh default;
+            docker build -c 1024 --rm=false -f scripts/docker/debian/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" --tag "${FINAL_IMAGE}:${CIRCLE_BRANCH}" --tag "${QUAY_IMAGE}:${SHORT_COMMIT}" --tag "${QUAY_IMAGE}:${CIRCLE_BRANCH}" . --cache-from="${PREV_IMAGE}" --ssh default;
           no_output_timeout: 60m
       - run:
           name: Deploy to dockerhub
@@ -66,6 +67,8 @@ jobs:
             SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             docker push "${FINAL_IMAGE}:${SHORT_COMMIT}";
             docker push "${FINAL_IMAGE}:${CIRCLE_BRANCH}";
+            docker push "${QUAY_IMAGE}:${SHORT_COMMIT}";
+            docker push "${QUAY_IMAGE}:${CIRCLE_BRANCH}";
             docker logout;
 
   system_tests:
