@@ -79,7 +79,7 @@ jobs:
     environment:
       - FINAL_IMAGE: quay.io/chronicled/cbk-n-connector
     steps:
-      - run: mkdir -p ~/.docker ; echo -n "${REGISTRY_AUTH}" > ~/.docker/config.json
+      - run: mkdir -p ~/.docker ; echo -n "${QUAY_AUTH}" > ~/.docker/config.json
       - run: SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
           docker run quay.io/chronicled/c-rex
           run-patch
