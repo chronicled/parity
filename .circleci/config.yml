@@ -51,25 +51,27 @@ jobs:
           docker_layer_caching: false
           version: 18.09.3
       - run:
-          name: Setup Docker credentials
-          command: mkdir -p ~/.docker; echo -n "${REGISTRY_AUTH}" > ~/.docker/config.json;
-      - run:
           name: Build docker image
           command: |
             export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
-            export PREV_IMAGE=`docker images "${FINAL_IMAGE}:latest" --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
+            export PREV_IMAGE=`docker images "${FINAL_IMAGE}:${CIRCLE_BRANCH}" --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
             ssh-add -L
             docker build -c 1024 --rm=false -f scripts/docker/debian/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" --tag "${FINAL_IMAGE}:${CIRCLE_BRANCH}" --tag "${QUAY_IMAGE}:${SHORT_COMMIT}" --tag "${QUAY_IMAGE}:${CIRCLE_BRANCH}" . --cache-from="${PREV_IMAGE}" --ssh default;
           no_output_timeout: 60m
       - run:
-          name: Deploy to dockerhub
+          name: Deploy to dev registry
           command: |
+            mkdir -p ~/.docker; echo -n "${REGISTRY_AUTH}" > ~/.docker/config.json;
             SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             docker push "${FINAL_IMAGE}:${SHORT_COMMIT}";
-            docker push "${FINAL_IMAGE}:${CIRCLE_BRANCH}";
+            docker push "${FINAL_IMAGE}:${CIRCLE_BRANCH}"
+      - run:
+          name: Deploy to quay
+          command: |
+            mkdir -p ~/.docker; echo -n "${QUAY_AUTH}" > ~/.docker/config.json;
+            SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             docker push "${QUAY_IMAGE}:${SHORT_COMMIT}";
-            docker push "${QUAY_IMAGE}:${CIRCLE_BRANCH}";
-            docker logout;
+            docker push "${QUAY_IMAGE}:${CIRCLE_BRANCH}"
 
   system_tests:
     machine:
