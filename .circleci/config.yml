@@ -77,7 +77,7 @@ jobs:
     machine:
       image: ubuntu-1604:201903-01
     environment:
-      - FINAL_IMAGE: quay.io/chronicled/cbk-n-connector
+      - FINAL_IMAGE: quay.io/chronicled/blockchain-interface
     steps:
       - run: mkdir -p ~/.docker ; echo -n "${QUAY_AUTH}" > ~/.docker/config.json
       - run: SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
