@@ -3186,7 +3186,7 @@ dependencies = [
  "parity-runtime 0.1.0",
  "parking_lot 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "prometheus 0.8.0 (git+https://github.com/pingcap/rust-prometheus.git)",
- "rabbitmq_adaptor 0.4.4 (registry+https://dl.cloudsmith.io/ItqwH3F8rYFNB5vv/chronicled/platform-v2/cargo/index.git)",
+ "rabbitmq_adaptor 0.4.5 (registry+https://dl.cloudsmith.io/ItqwH3F8rYFNB5vv/chronicled/platform-v2/cargo/index.git)",
  "rlp 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc-hex 1.0.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.102 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -3815,7 +3815,7 @@ dependencies = [
 
 [[package]]
 name = "rabbitmq_adaptor"
-version = "0.4.4"
+version = "0.4.5"
 source = "registry+https://dl.cloudsmith.io/ItqwH3F8rYFNB5vv/chronicled/platform-v2/cargo/index.git"
 dependencies = [
  "amq-protocol 3.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -5730,7 +5730,7 @@ dependencies = [
 "checksum quick-error 1.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "9274b940887ce9addde99c4eee6b5c44cc494b182b97e73dc8ffdcb3397fd3f0"
 "checksum quote 0.6.13 (registry+https://github.com/rust-lang/crates.io-index)" = "6ce23b6b870e8f94f81fb0a363d65d86675884b34a09043c81e5562f11c1f8e1"
 "checksum quote 1.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "053a8c8bcc71fcce321828dc897a98ab9760bef03a4fc36693c231e5b3216cfe"
-"checksum rabbitmq_adaptor 0.4.4 (registry+https://dl.cloudsmith.io/ItqwH3F8rYFNB5vv/chronicled/platform-v2/cargo/index.git)" = "7d05ba52e3f2951ef2fae3c0219b9a942e4e45d9bf5fcdb3bf81585dd0cad1a5"
+"checksum rabbitmq_adaptor 0.4.5 (registry+https://dl.cloudsmith.io/ItqwH3F8rYFNB5vv/chronicled/platform-v2/cargo/index.git)" = "f9658323174e4660136cf716d2f75435563d9883a6ce9a74ecc4b0c3d4bbd571"
 "checksum rand 0.3.23 (registry+https://github.com/rust-lang/crates.io-index)" = "64ac302d8f83c0c1974bf758f6b041c6c8ada916fbb44a609158ca8b064cc76c"
 "checksum rand 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)" = "552840b97013b1a26992c11eac34bdd778e464601a4c2054b5f0bff7c6761293"
 "checksum rand 0.5.6 (registry+https://github.com/rust-lang/crates.io-index)" = "c618c47cd3ebd209790115ab837de41425723956ad3ce2e6a7f09890947cacb9"

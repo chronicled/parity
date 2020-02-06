@@ -290,7 +290,10 @@ fn publish_new_block(
 			handle_fatal_error(err);
 		})
 		.timeout(Duration::from_secs(10))
-		.map_err(|_| ())
+		.map_err(|_| {
+			debug!("Publisher confirm timeout reached");
+			()
+		})
 		.map(move |_| {
 			info!(target: LOG_TARGET, "Block message published: {:?}", block_number);
 			()
