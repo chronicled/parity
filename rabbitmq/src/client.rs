@@ -27,7 +27,7 @@ use tokio::prelude::*;
 use tokio::sync::mpsc::{
 	channel, Sender as ChannelSender
 };
-use types::{Block, BlockTransactions, Bytes, Log, RichBlock, Transaction};
+use types::{Block, BlockTransactions, Bytes, Log, RichBlock, Trace, Transaction};
 
 use DB_NAME;
 use START_FROM_INDEX;
@@ -307,7 +307,7 @@ fn publish_new_block(
 		}))
 }
 
-fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, client: Arc<C>) -> Option<String> {
+pub fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, client: Arc<C>) -> Option<String> {
 	fn cast<O, T: Copy + Into<O>>(t: &T) -> O {
 		(*t).into()
 	}
@@ -352,11 +352,15 @@ fn construct_new_block<C: BlockChainClient>(block_number: BlockNumber, client: A
 					.into_iter()
 					.map(|tx| {
 						let transaction_id = TransactionId::Location(BlockId::Number(tx.block_number), tx.transaction_index);
-						let outcome: Option<TransactionOutcome> = match client.transaction_receipt(transaction_id) {
+						let outcome: Option<TransactionOutcome> = match client.transaction_receipt(transaction_id.clone()) {
 							Some(receipt) => Some(receipt.outcome),
 							None => None
 						};
-						(tx, outcome)
+						let traces = match client.transaction_traces(transaction_id) {
+							Some(traces) => traces.into_iter().map(Trace::from).collect(),
+							None => vec![],
+						};
+						(tx, outcome, traces)
 					})
 					.map(Transaction::from_localized)
 					.collect(),
