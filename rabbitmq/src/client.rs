@@ -167,6 +167,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient> PubSubClient<C> {
 									).map(|_| ())
 								}))
 								.map(|_| ConsumerResult::ACK)
+								.or_else(|_| ok(ConsumerResult::NACK(true)))
 							)
 						}),
 					)
