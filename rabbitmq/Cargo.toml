@@ -10,7 +10,7 @@ failure = "0.1.6"
 futures = "0.1.6"
 hex = "0.3.2"
 hyper = "0.12"
-lapin-futures = "0.28.1"
+lapin-futures = { version = "0.28.3", registry = "chronicled-platform-v2" }
 lazy_static = "1.4"
 log = "0.4"
 parking_lot = "0.7"
@@ -30,7 +30,7 @@ common-types = { path = "../ethcore/types" }
 ethereum-types = "0.4"
 futures-executor = "0.2.1"
 parity-runtime = { path = "../util/runtime" }
-rabbitmq_adaptor = { version = "0.4.3", registry = "chronicled-platform-v2" }
+rabbitmq_adaptor = { version = "0.4.5", registry = "chronicled-platform-v2" }
 rlp = { version = "0.3.0", features = ["ethereum"] }
 vm = { path = "../ethcore/vm" }
 
