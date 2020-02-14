@@ -316,8 +316,6 @@ fn publish_new_block(
 			info!(target: LOG_TARGET, "Error publishing: {}", err);
 			handle_fatal_error(err);
 		})
-		.timeout(Duration::from_secs(10))
-		.map_err(|_| ())
 		.map(move |_| {
 			info!(target: LOG_TARGET, "Block message published: {:?}", block_number);
 			()
