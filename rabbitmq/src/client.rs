@@ -123,7 +123,7 @@ lazy_static! {
 impl<C: 'static + miner::BlockChainClient + BlockChainClient + Nonce> PubSubClient<C> {
 	pub fn new<S: ethcore::client::StateInfo + 'static, M: MinerService<State=S> + 'static>(
 		blockchain_client: Arc<C>,
-		miner: Arc<miner::Miner>,
+		miner: Arc<M>,
 		sync_provider: Arc<SyncProvider>,
 		executor: Executor,
 		client_path: Option<&str>,
@@ -285,7 +285,7 @@ impl<C: 'static + miner::BlockChainClient + BlockChainClient + Nonce> PubSubClie
 				}))
 				.or_else(|_| Ok(()))
 				.and_then(move |_| {
-					enacteed_receiver
+					enacted_receiver
 						.map_err(|err| handle_fatal_error(err.into()))
 						.for_each(enclose!((db, client, rabbit) move |block_number| {
 							loop_fn((db.clone(), client.clone(), rabbit.clone()), move |(db, client, rabbit)| {
