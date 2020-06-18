@@ -102,15 +102,22 @@ fn should_receive_genesis_block() {
 	let h0 = client.block_hash_delta_minus(5);
 
 	// wrap client in arc
-	let mut client = Arc::new(client);
-
-	// Create a sync_channel with buffer size 5
-	let (sender, receiver) = channel::<u64>(5);
+	let test_sync = TestSyncProvider::new(Config {
+		network_id: 3,
+		num_peers: 5,
+	});
+	let blockchain_client = Arc::new(client);
+	// Create a sync_channel with buffer size 3
+	let (enacted_sender, enacted_receiver) = channel::<u64>(5);
+	let (retracted_sender, retracted_receiver) = channel::<H256>(5);
 	let dummy_rabbitmq_client = PubSubClient {
-		blockchain_client: client.clone(),
-		sender: sender,
-		database: db.clone(),
+		blockchain_client: blockchain_client.clone(),
+		sync: Arc::new(test_sync),
+		enacted_sender: enacted_sender,
+		retracted_sender: retracted_sender,
+		database: Arc::new(kvdb_memorydb::create(0)),
 	};
+
 
 	// Check notifications
 	// Notify all 5 blocks including the genesis block
@@ -151,7 +158,7 @@ fn should_receive_genesis_block() {
 
 		start_from_index = if start_from_index >= block_number { block_number } else { start_from_index };
 
-		if let Some(serialized_block) = construct_new_block(start_from_index, client.clone()) {
+		if let Some(serialized_block) = construct_new_block(start_from_index, blockchain_client) {
 			produce_new_block(db.clone(), serialized_block, start_from_index)
 		} else {
 			Err(())
@@ -159,7 +166,7 @@ fn should_receive_genesis_block() {
 	});
 
 	// Collect all values in stream as an iterator
-	let mut block_iter = receiver.map_err(|_| ()).wait();
+	let mut block_iter = enacted_receiver.map_err(|_| ()).wait();
 
 	// Get the START_FROM_INDEX value before producing block; it should be 0.
 	let mut start_from_index: u64 = db.get(None, START_FROM_INDEX)
