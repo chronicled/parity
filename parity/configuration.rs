@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -17,7 +17,6 @@
 use std::time::Duration;
 use std::io::Read;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::collections::{HashSet, BTreeMap};
 use std::iter::FromIterator;
@@ -29,16 +28,13 @@ use parity_version::{version_data, version};
 use bytes::Bytes;
 use ansi_term::Colour;
 use sync::{NetworkConfiguration, validate_node_url, self};
-use ethkey::{Secret, Public};
-use ethcore::client::{VMType};
+use parity_crypto::publickey::{Secret, Public};
 use ethcore::miner::{stratum, MinerOptions};
-use ethcore::snapshot::SnapshotConfiguration;
-use ethcore::verification::queue::VerifierSettings;
+use snapshot::SnapshotConfiguration;
 use miner::pool;
-use num_cpus;
+use verification::queue::VerifierSettings;
 
 use rpc::{IpcConfiguration, HttpConfiguration, WsConfiguration};
-use parity_rabbitmq::client::{RabbitMqConfig, PrometheusExportServiceConfig};
 use parity_rpc::NetworkSettings;
 use cache::CacheConfig;
 use helpers::{to_duration, to_mode, to_block_id, to_u256, to_pending_set, to_price, geth_ipc_path, parity_ipc_path, to_bootnodes, to_addresses, to_address, to_queue_strategy, to_queue_penalization};
@@ -51,15 +47,17 @@ use ethcore_private_tx::{ProviderConfig, EncryptorConfig};
 use secretstore::{NodeSecretKey, Configuration as SecretStoreConfiguration, ContractAddress as SecretStoreContractAddress};
 use updater::{UpdatePolicy, UpdateFilter, ReleaseTrack};
 use run::RunCmd;
-use blockchain::{BlockchainCmd, ImportBlockchain, ExportBlockchain, KillBlockchain, ExportState, DataFormat, ResetBlockchain};
+use types::data_format::DataFormat;
+use blockchain::{BlockchainCmd, ImportBlockchain, ExportBlockchain, KillBlockchain, ExportState, ResetBlockchain};
 use export_hardcoded_sync::ExportHsyncCmd;
 use presale::ImportWallet;
 use account::{AccountCmd, NewAccount, ListAccounts, ImportAccounts, ImportFromGethAccounts};
-use snapshot::{self, SnapshotCommand};
-use network::{IpFilter};
+use snapshot_cmd::{self, SnapshotCommand};
+use network::{IpFilter, NatType};
 
 const DEFAULT_MAX_PEERS: u16 = 50;
 const DEFAULT_MIN_PEERS: u16 = 25;
+pub const ETHERSCAN_ETH_PRICE_ENDPOINT: &str = "https://api.etherscan.io/api?module=stats&action=ethprice";
 
 #[derive(Debug, PartialEq)]
 pub enum Cmd {
@@ -121,7 +119,6 @@ impl Configuration {
 		let dirs = self.directories();
 		let pruning = self.args.arg_pruning.parse()?;
 		let pruning_history = self.args.arg_pruning_history;
-		let vm_type = self.vm_type()?;
 		let spec = self.chain()?;
 		let mode = match self.args.arg_mode.as_ref() {
 			"last" => None,
@@ -134,8 +131,6 @@ impl Configuration {
 		let http_conf = self.http_config()?;
 		let ipc_conf = self.ipc_config()?;
 		let net_conf = self.net_config()?;
-		let rabbitmq_conf = self.rabbitmq_config();
-		let prometheus_export_service_config = self.prometheus_export_service_config();
 		let network_id = self.network_id();
 		let cache_config = self.cache_config();
 		let tracing = self.args.arg_tracing.parse()?;
@@ -147,8 +142,11 @@ impl Configuration {
 		let ipfs_conf = self.ipfs_config();
 		let secretstore_conf = self.secretstore_config()?;
 		let format = self.format()?;
-		let keys_iterations = NonZeroU32::new(self.args.arg_keys_iterations)
-			.ok_or_else(|| "--keys-iterations must be non-zero")?;
+
+		let key_iterations = self.args.arg_keys_iterations;
+		if key_iterations == 0 {
+			return Err("--key-iterations must be non-zero".into());
+		}
 
 		let cmd = if self.args.flag_version {
 			Cmd::Version
@@ -205,7 +203,7 @@ impl Configuration {
 		} else if self.args.cmd_account {
 			let account_cmd = if self.args.cmd_account_new {
 				let new_acc = NewAccount {
-					iterations: keys_iterations,
+					iterations: key_iterations,
 					path: dirs.keys,
 					spec: spec,
 					password_file: self.accounts_config()?.password_files.first().map(|x| x.to_owned()),
@@ -239,7 +237,7 @@ impl Configuration {
 			Cmd::Account(account_cmd)
 		} else if self.args.cmd_wallet {
 			let presale_cmd = ImportWallet {
-				iterations: keys_iterations,
+				iterations: key_iterations,
 				path: dirs.keys,
 				spec: spec,
 				wallet_path: self.args.arg_wallet_import_path.clone().unwrap(),
@@ -259,7 +257,6 @@ impl Configuration {
 				compaction: compaction,
 				tracing: tracing,
 				fat_db: fat_db,
-				vm_type: vm_type,
 				check_seal: !self.args.flag_no_seal_check,
 				with_color: logger_config.color,
 				verifier_settings: self.verifier_settings(),
@@ -323,7 +320,7 @@ impl Configuration {
 				fat_db: fat_db,
 				compaction: compaction,
 				file_path: self.args.arg_snapshot_file.clone(),
-				kind: snapshot::Kind::Take,
+				kind: snapshot_cmd::Kind::Take,
 				block_at: to_block_id(&self.args.arg_snapshot_at)?,
 				max_round_blocks_to_import: self.args.arg_max_round_blocks_to_import,
 				snapshot_conf: snapshot_conf,
@@ -341,7 +338,7 @@ impl Configuration {
 				fat_db: fat_db,
 				compaction: compaction,
 				file_path: self.args.arg_restore_file.clone(),
-				kind: snapshot::Kind::Restore,
+				kind: snapshot_cmd::Kind::Restore,
 				block_at: to_block_id("latest")?, // unimportant.
 				max_round_blocks_to_import: self.args.arg_max_round_blocks_to_import,
 				snapshot_conf: snapshot_conf,
@@ -364,59 +361,54 @@ impl Configuration {
 			};
 
 			let verifier_settings = self.verifier_settings();
-			let whisper_config = self.whisper_config();
 			let (private_provider_conf, private_enc_conf, private_tx_enabled) = self.private_provider_config()?;
 
 			let run_cmd = RunCmd {
-				cache_config: cache_config,
-				dirs: dirs,
-				spec: spec,
-				pruning: pruning,
-				pruning_history: pruning_history,
+				cache_config,
+				dirs,
+				spec,
+				pruning,
+				pruning_history,
 				pruning_memory: self.args.arg_pruning_memory,
-				daemon: daemon,
+				daemon,
 				logger_config: logger_config.clone(),
 				miner_options: self.miner_options()?,
 				gas_price_percentile: self.args.arg_gas_price_percentile,
 				poll_lifetime: self.args.arg_poll_lifetime,
-				ws_conf: ws_conf,
-				snapshot_conf: snapshot_conf,
-				http_conf: http_conf,
-				ipc_conf: ipc_conf,
-				net_conf: net_conf,
-				rabbitmq_conf: rabbitmq_conf,
-				prometheus_export_service_conf: prometheus_export_service_config,
-				network_id: network_id,
+				ws_conf,
+				snapshot_conf,
+				http_conf,
+				ipc_conf,
+				net_conf,
+				network_id,
 				acc_conf: self.accounts_config()?,
 				gas_pricer_conf: self.gas_pricer_config()?,
 				miner_extras: self.miner_extras()?,
 				stratum: self.stratum_options()?,
-				update_policy: update_policy,
+				update_policy,
 				allow_missing_blocks: self.args.flag_jsonrpc_allow_missing_blocks,
-				mode: mode,
-				tracing: tracing,
-				fat_db: fat_db,
-				compaction: compaction,
-				vm_type: vm_type,
-				warp_sync: warp_sync,
+				mode,
+				tracing,
+				fat_db,
+				compaction,
+				warp_sync,
 				warp_barrier: self.args.arg_warp_barrier,
-				geth_compatibility: geth_compatibility,
+				geth_compatibility,
 				experimental_rpcs,
 				net_settings: self.network_settings()?,
-				ipfs_conf: ipfs_conf,
-				secretstore_conf: secretstore_conf,
-				private_provider_conf: private_provider_conf,
+				ipfs_conf,
+				secretstore_conf,
+				private_provider_conf,
 				private_encryptor_conf: private_enc_conf,
 				private_tx_enabled,
 				name: self.args.arg_identity,
 				custom_bootnodes: self.args.arg_bootnodes.is_some(),
 				check_seal: !self.args.flag_no_seal_check,
 				download_old_blocks: !self.args.flag_no_ancient_blocks,
-				verifier_settings: verifier_settings,
+				verifier_settings,
 				serve_light: !self.args.flag_no_serve_light,
 				light: self.args.flag_light,
 				no_persistent_txqueue: self.args.flag_no_persistent_txqueue,
-				whisper: whisper_config,
 				no_hardcoded_sync: self.args.flag_no_hardcoded_sync,
 				max_round_blocks_to_import: self.args.arg_max_round_blocks_to_import,
 				on_demand_response_time_window: self.args.arg_on_demand_response_time_window,
@@ -430,12 +422,8 @@ impl Configuration {
 
 		Ok(Execute {
 			logger: logger_config,
-			cmd: cmd,
+			cmd,
 		})
-	}
-
-	fn vm_type(&self) -> Result<VMType, String> {
-		Ok(VMType::Interpreter)
 	}
 
 	fn miner_extras(&self) -> Result<MinerExtras, String> {
@@ -537,15 +525,12 @@ impl Configuration {
 	}
 
 	fn accounts_config(&self) -> Result<AccountsConfig, String> {
-		let keys_iterations = NonZeroU32::new(self.args.arg_keys_iterations)
-			.ok_or_else(|| "--keys-iterations must be non-zero")?;
 		let cfg = AccountsConfig {
-			iterations: keys_iterations,
+			iterations: self.args.arg_keys_iterations,
 			refresh_time: self.args.arg_accounts_refresh,
 			testnet: self.args.flag_testnet,
 			password_files: self.args.arg_password.iter().map(|s| replace_home(&self.directories().base, s)).collect(),
 			unlocked_accounts: to_addresses(&self.args.arg_unlock)?,
-			enable_hardware_wallets: !self.args.flag_no_hardware_wallets,
 			enable_fast_unlock: self.args.flag_fast_unlock,
 		};
 
@@ -643,6 +628,7 @@ impl Configuration {
 			http_port: self.args.arg_ports_shift + self.args.arg_secretstore_http_port,
 			data_path: self.directories().secretstore,
 			admin_public: self.secretstore_admin_public()?,
+			cors: self.secretstore_cors()
 		})
 	}
 
@@ -673,23 +659,30 @@ impl Configuration {
 		}
 
 		let usd_per_tx = to_price(&self.args.arg_usd_per_tx)?;
-		if "auto" == self.args.arg_usd_per_eth.as_str() {
-			return Ok(GasPricerConfig::Calibrated {
+
+		if "auto" == self.args.arg_usd_per_eth {
+			Ok(GasPricerConfig::Calibrated {
 				usd_per_tx: usd_per_tx,
 				recalibration_period: to_duration(self.args.arg_price_update_period.as_str())?,
-			});
+				api_endpoint: ETHERSCAN_ETH_PRICE_ENDPOINT.to_string(),
+			})
+		} else if let Ok(usd_per_eth_parsed) = to_price(&self.args.arg_usd_per_eth) {
+			let wei_per_gas = wei_per_gas(usd_per_tx, usd_per_eth_parsed);
+
+			info!(
+				"Using a fixed conversion rate of Ξ1 = {} ({} wei/gas)",
+				Colour::White.bold().paint(format!("US${:.2}", usd_per_eth_parsed)),
+				Colour::Yellow.bold().paint(format!("{}", wei_per_gas))
+			);
+
+			Ok(GasPricerConfig::Fixed(wei_per_gas))
+		} else {
+			Ok(GasPricerConfig::Calibrated {
+				usd_per_tx: usd_per_tx,
+				recalibration_period: to_duration(self.args.arg_price_update_period.as_str())?,
+				api_endpoint: self.args.arg_usd_per_eth.clone(),
+			})
 		}
-
-		let usd_per_eth = to_price(&self.args.arg_usd_per_eth)?;
-		let wei_per_gas = wei_per_gas(usd_per_tx, usd_per_eth);
-
-		info!(
-			"Using a fixed conversion rate of Ξ1 = {} ({} wei/gas)",
-			Colour::White.bold().paint(format!("US${:.2}", usd_per_eth)),
-			Colour::Yellow.bold().paint(format!("{}", wei_per_gas))
-		);
-
-		Ok(GasPricerConfig::Fixed(wei_per_gas))
 	}
 
 	fn extra_data(&self) -> Result<Bytes, String> {
@@ -715,7 +708,7 @@ impl Configuration {
 				for line in &lines {
 					match validate_node_url(line).map(Into::into) {
 						None => continue,
-						Some(sync::ErrorKind::AddressResolve(_)) => return Err(format!("Failed to resolve hostname of a boot node: {}", line)),
+						Some(sync::Error::AddressResolve(_)) => return Err(format!("Failed to resolve hostname of a boot node: {}", line)),
 						Some(_) => return Err(format!("Invalid node address format given for a boot node: {}", line)),
 					}
 				}
@@ -750,13 +743,19 @@ impl Configuration {
 
 	fn net_config(&self) -> Result<NetworkConfiguration, String> {
 		let mut ret = NetworkConfiguration::new();
-		ret.nat_enabled = self.args.arg_nat == "any" || self.args.arg_nat == "upnp";
+		ret.nat_enabled = self.args.arg_nat == "any" || self.args.arg_nat == "upnp" || self.args.arg_nat == "natpmp";
+		ret.nat_type = match &self.args.arg_nat[..] {
+			"any" => NatType::Any,
+			"upnp" => NatType::UPnP,
+			"natpmp" => NatType::NatPMP,
+			_ => NatType::Nothing,
+		};
 		ret.boot_nodes = to_bootnodes(&self.args.arg_bootnodes)?;
 		let (listen, public) = self.net_addresses()?;
 		ret.listen_address = Some(format!("{}", listen));
 		ret.public_address = public.map(|p| format!("{}", p));
 		ret.use_secret = match self.args.arg_node_key.as_ref()
-			.map(|s| s.parse::<Secret>().or_else(|_| Secret::from_unsafe_slice(&keccak(s))).map_err(|e| format!("Invalid key: {:?}", e))
+			.map(|s| s.parse::<Secret>().or_else(|_| Secret::import_key(keccak(s).as_bytes())).map_err(|e| format!("Invalid key: {:?}", e))
 			) {
 			None => None,
 			Some(Ok(key)) => Some(key),
@@ -784,20 +783,6 @@ impl Configuration {
 		};
 		Ok(ret)
 	}
-
-	fn rabbitmq_config(&self) -> RabbitMqConfig {
-		RabbitMqConfig {
-			uri: self.args.arg_rabbitmq_uri.clone()
-		}
-	}
-
-	fn prometheus_export_service_config(&self) -> PrometheusExportServiceConfig {
-		PrometheusExportServiceConfig {
-			prometheus_export_service: self.args.arg_prometheus_export_service.clone(),
-			prometheus_export_service_port: self.args.arg_prometheus_export_service_port.clone()
-		}
-	}
-
 
 	fn network_id(&self) -> Option<u64> {
 		self.args.arg_network_id.or(self.args.arg_networkid)
@@ -880,6 +865,7 @@ impl Configuration {
 
 	fn ipc_config(&self) -> Result<IpcConfiguration, String> {
 		let conf = IpcConfiguration {
+			chmod: self.args.arg_ipc_chmod.clone(),
 			enabled: !(self.args.flag_ipcdisable || self.args.flag_ipc_off || self.args.flag_no_ipc),
 			socket_addr: self.ipc_path(),
 			apis: {
@@ -898,24 +884,20 @@ impl Configuration {
 	}
 
 	fn http_config(&self) -> Result<HttpConfiguration, String> {
-		let conf = HttpConfiguration {
-			enabled: self.rpc_enabled(),
-			interface: self.rpc_interface(),
-			port: self.args.arg_ports_shift + self.args.arg_rpcport.unwrap_or(self.args.arg_jsonrpc_port),
-			apis: self.rpc_apis().parse()?,
-			hosts: self.rpc_hosts(),
-			cors: self.rpc_cors(),
-			server_threads: match self.args.arg_jsonrpc_server_threads {
-				Some(threads) if threads > 0 => threads,
-				_ => 1,
-			},
-			processing_threads: self.args.arg_jsonrpc_threads,
-			max_payload: match self.args.arg_jsonrpc_max_payload {
-				Some(max) if max > 0 => max as usize,
-				_ => 5usize,
-			},
-			keep_alive: !self.args.flag_jsonrpc_no_keep_alive,
-		};
+		let mut conf = HttpConfiguration::default();
+		conf.enabled = self.rpc_enabled();
+		conf.interface = self.rpc_interface();
+		conf.port = self.args.arg_ports_shift + self.args.arg_rpcport.unwrap_or(self.args.arg_jsonrpc_port);
+		conf.apis = self.rpc_apis().parse()?;
+		conf.hosts = self.rpc_hosts();
+		conf.cors = self.rpc_cors();
+		if let Some(threads) = self.args.arg_jsonrpc_server_threads {
+			conf.server_threads = std::cmp::max(1, threads);
+		}
+		if let Some(max_payload) = self.args.arg_jsonrpc_max_payload {
+			conf.max_payload = std::cmp::max(1, max_payload);
+		}
+		conf.keep_alive = !self.args.flag_jsonrpc_no_keep_alive;
 
 		Ok(conf)
 	}
@@ -923,7 +905,7 @@ impl Configuration {
 	fn ws_config(&self) -> Result<WsConfiguration, String> {
 		let support_token_api =
 			// enabled when not unlocking
-			self.args.arg_unlock.is_none();
+			self.args.arg_unlock.is_none() && self.args.arg_enable_signing_queue;
 
 		let conf = WsConfiguration {
 			enabled: self.ws_enabled(),
@@ -941,9 +923,15 @@ impl Configuration {
 	}
 
 	fn private_provider_config(&self) -> Result<(ProviderConfig, EncryptorConfig, bool), String> {
+		let dirs = self.directories();
 		let provider_conf = ProviderConfig {
 			validator_accounts: to_addresses(&self.args.arg_private_validators)?,
 			signer_account: self.args.arg_private_signer.clone().and_then(|account| to_address(Some(account)).ok()),
+			logs_path: match self.args.flag_private_enabled {
+				true => Some(dirs.base),
+				false => None,
+			},
+			use_offchain_storage: self.args.flag_private_state_offchain,
 		};
 
 		let encryptor_conf = EncryptorConfig {
@@ -956,13 +944,13 @@ impl Configuration {
 	}
 
 	fn snapshot_config(&self) -> Result<SnapshotConfiguration, String> {
-		let conf = SnapshotConfiguration {
-			no_periodic: self.args.flag_no_periodic_snapshot,
-			processing_threads: match self.args.arg_snapshot_threads {
-				Some(threads) if threads > 0 => threads,
-				_ => ::std::cmp::max(1, num_cpus::get_physical() / 2),
-			},
-		};
+		let mut conf = SnapshotConfiguration::default();
+		conf.no_periodic = self.args.flag_no_periodic_snapshot;
+		if let Some(threads) = self.args.arg_snapshot_threads {
+			if threads > 0 {
+				conf.processing_threads = threads;
+			}
+		}
 
 		Ok(conf)
 	}
@@ -993,9 +981,7 @@ impl Configuration {
 			},
 			track: match self.args.arg_release_track.as_ref() {
 				"stable" => ReleaseTrack::Stable,
-				"beta" => ReleaseTrack::Beta,
 				"nightly" => ReleaseTrack::Nightly,
-				"testing" => ReleaseTrack::Testing,
 				"current" => ReleaseTrack::Unknown,
 				_ => return Err("Invalid value for `--releases-track`. See `--help` for more information.".into()),
 			},
@@ -1084,6 +1070,10 @@ impl Configuration {
 
 	fn secretstore_http_interface(&self) -> String {
 		self.interface(&self.args.arg_secretstore_http_interface)
+	}
+
+	fn secretstore_cors(&self) -> Option<Vec<String>> {
+		Self::cors(self.args.arg_secretstore_http_cors.as_ref())
 	}
 
 	fn secretstore_self_secret(&self) -> Result<Option<NodeSecretKey>, String> {
@@ -1190,13 +1180,6 @@ impl Configuration {
 
 		settings
 	}
-
-	fn whisper_config(&self) -> ::whisper::Config {
-		::whisper::Config {
-			enabled: self.args.flag_whisper,
-			target_message_pool_size: self.args.arg_whisper_pool_size * 1024 * 1024,
-		}
-	}
 }
 
 fn into_secretstore_service_contract_address(s: Option<&String>) -> Result<Option<SecretStoreContractAddress>, String> {
@@ -1214,14 +1197,14 @@ mod tests {
 	use std::str::FromStr;
 
 	use tempdir::TempDir;
-	use ethcore::client::{VMType, BlockId};
 	use ethcore::miner::MinerOptions;
 	use miner::pool::PrioritizationStrategy;
 	use parity_rpc::NetworkSettings;
 	use updater::{UpdatePolicy, UpdateFilter, ReleaseTrack};
-
+	use types::ids::BlockId;
+	use types::data_format::DataFormat;
 	use account::{AccountCmd, NewAccount, ImportAccounts, ListAccounts};
-	use blockchain::{BlockchainCmd, ImportBlockchain, ExportBlockchain, DataFormat, ExportState};
+	use blockchain::{BlockchainCmd, ImportBlockchain, ExportBlockchain, ExportState};
 	use cli::Args;
 	use dir::{Directories, default_hypervisor_path};
 	use helpers::{default_network_config};
@@ -1237,10 +1220,6 @@ mod tests {
 	use self::ipnetwork::IpNetwork;
 
 	use super::*;
-
-	lazy_static! {
-		static ref ITERATIONS: NonZeroU32 = NonZeroU32::new(10240).expect("10240 > 0; qed");
-	}
 
 	#[derive(Debug, PartialEq)]
 	struct TestPasswordReader(&'static str);
@@ -1263,7 +1242,7 @@ mod tests {
 		let args = vec!["parity", "account", "new"];
 		let conf = parse(&args);
 		assert_eq!(conf.into_command().unwrap().cmd, Cmd::Account(AccountCmd::New(NewAccount {
-			iterations: *ITERATIONS,
+			iterations: 10240,
 			path: Directories::default().keys,
 			password_file: None,
 			spec: SpecType::default(),
@@ -1298,7 +1277,7 @@ mod tests {
 		let args = vec!["parity", "wallet", "import", "my_wallet.json", "--password", "pwd"];
 		let conf = parse(&args);
 		assert_eq!(conf.into_command().unwrap().cmd, Cmd::ImportPresaleWallet(ImportWallet {
-			iterations: *ITERATIONS,
+			iterations: 10240,
 			path: Directories::default().keys,
 			wallet_path: "my_wallet.json".into(),
 			password_file: Some("pwd".into()),
@@ -1322,7 +1301,6 @@ mod tests {
 			compaction: Default::default(),
 			tracing: Default::default(),
 			fat_db: Default::default(),
-			vm_type: VMType::Interpreter,
 			check_seal: true,
 			with_color: !cfg!(windows),
 			verifier_settings: Default::default(),
@@ -1415,7 +1393,7 @@ mod tests {
 			origins: Some(vec!["parity://*".into(),"chrome-extension://*".into(), "moz-extension://*".into()]),
 			hosts: Some(vec![]),
 			signer_path: expected.into(),
-			support_token_api: true,
+			support_token_api: false,
 			max_connections: 100,
 		}, LogConfig {
 			color: !cfg!(windows),
@@ -1456,13 +1434,6 @@ mod tests {
 			http_conf: Default::default(),
 			ipc_conf: Default::default(),
 			net_conf: default_network_config(),
-			rabbitmq_conf: RabbitMqConfig {
-				uri: "amqp://localhost:5672".into(),
-			},
-			prometheus_export_service_conf: PrometheusExportServiceConfig {
-				prometheus_export_service: false,
-				prometheus_export_service_port: 9898,
-			},
 			network_id: None,
 			warp_sync: true,
 			warp_barrier: None,
@@ -1482,7 +1453,6 @@ mod tests {
 			mode: Default::default(),
 			tracing: Default::default(),
 			compaction: Default::default(),
-			vm_type: Default::default(),
 			geth_compatibility: false,
 			experimental_rpcs: false,
 			net_settings: Default::default(),
@@ -1503,7 +1473,6 @@ mod tests {
 			light: false,
 			no_hardcoded_sync: false,
 			no_persistent_txqueue: false,
-			whisper: Default::default(),
 			max_round_blocks_to_import: 12,
 			on_demand_response_time_window: None,
 			on_demand_request_backoff_start: None,
@@ -1541,23 +1510,11 @@ mod tests {
 	#[test]
 	fn should_parse_updater_options() {
 		// when
-		let conf0 = parse(&["parity", "--release-track=testing"]);
-		let conf1 = parse(&["parity", "--auto-update", "all", "--no-consensus", "--auto-update-delay", "300"]);
-		let conf2 = parse(&["parity", "--no-download", "--auto-update=all", "--release-track=beta", "--auto-update-delay=300", "--auto-update-check-frequency=100"]);
-		let conf3 = parse(&["parity", "--auto-update=xxx"]);
+		let conf0 = parse(&["parity", "--auto-update", "all", "--no-consensus", "--auto-update-delay", "300"]);
+		let conf1 = parse(&["parity", "--auto-update=xxx"]);
 
 		// then
 		assert_eq!(conf0.update_policy().unwrap(), UpdatePolicy {
-			enable_downloading: true,
-			require_consensus: true,
-			filter: UpdateFilter::Critical,
-			track: ReleaseTrack::Testing,
-			path: default_hypervisor_path(),
-			max_size: 128 * 1024 * 1024,
-			max_delay: 100,
-			frequency: 20,
-		});
-		assert_eq!(conf1.update_policy().unwrap(), UpdatePolicy {
 			enable_downloading: true,
 			require_consensus: false,
 			filter: UpdateFilter::All,
@@ -1567,17 +1524,7 @@ mod tests {
 			max_delay: 300,
 			frequency: 20,
 		});
-		assert_eq!(conf2.update_policy().unwrap(), UpdatePolicy {
-			enable_downloading: false,
-			require_consensus: true,
-			filter: UpdateFilter::All,
-			track: ReleaseTrack::Beta,
-			path: default_hypervisor_path(),
-			max_size: 128 * 1024 * 1024,
-			max_delay: 300,
-			frequency: 100,
-		});
-		assert!(conf3.update_policy().is_err());
+		assert!(conf1.update_policy().is_err());
 	}
 
 	#[test]
@@ -1590,7 +1537,7 @@ mod tests {
 		// then
 		assert_eq!(conf.network_settings(), Ok(NetworkSettings {
 			name: "testname".to_owned(),
-			chain: "kovan".to_owned(),
+			chain: "goerli".to_owned(),
 			is_dev_chain: false,
 			network_port: 30303,
 			rpc_enabled: true,
@@ -1645,6 +1592,28 @@ mod tests {
 		assert_eq!(conf1.rpc_hosts(), Some(Vec::new()));
 		assert_eq!(conf2.rpc_hosts(), None);
 		assert_eq!(conf3.rpc_hosts(), Some(vec!["parity.io".into(), "something.io".into()]));
+	}
+
+	#[test]
+	fn ensures_sane_http_settings() {
+		// given incorrect settings
+		let conf = parse(&["parity",
+			"--jsonrpc-server-threads=0",
+			"--jsonrpc-max-payload=0",
+		]);
+
+		// then things are adjusted to Just Work.
+		let http_conf = conf.http_config().unwrap();
+		assert_eq!(http_conf.server_threads, 1);
+		assert_eq!(http_conf.max_payload, 1);
+	}
+
+	#[test]
+	fn jsonrpc_threading_defaults() {
+		let conf = parse(&["parity"]);
+		let http_conf = conf.http_config().unwrap();
+		assert_eq!(http_conf.server_threads, 4);
+		assert_eq!(http_conf.max_payload, 5);
 	}
 
 	#[test]
@@ -2030,5 +1999,20 @@ mod tests {
 			},
 			_ => panic!("Should be Cmd::Run"),
 		}
+	}
+
+	#[test]
+	fn should_parse_secretstore_cors() {
+		// given
+
+		// when
+		let conf0 = parse(&["parity"]);
+		let conf1 = parse(&["parity", "--secretstore-http-cors", "*"]);
+		let conf2 = parse(&["parity", "--secretstore-http-cors", "http://parity.io,http://something.io"]);
+
+		// then
+		assert_eq!(conf0.secretstore_cors(), Some(vec![]));
+		assert_eq!(conf1.secretstore_cors(), None);
+		assert_eq!(conf2.secretstore_cors(), Some(vec!["http://parity.io".into(),"http://something.io".into()]));
 	}
 }

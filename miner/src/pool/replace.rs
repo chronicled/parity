@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -119,7 +119,7 @@ mod tests {
 	use super::*;
 
 	use std::sync::Arc;
-	use ethkey::{Random, Generator, KeyPair};
+	use parity_crypto::publickey::{Random, Generator, KeyPair};
 	use pool::tests::tx::{Tx, TxExt};
 	use pool::tests::client::TestClient;
 	use pool::scoring::*;
@@ -133,7 +133,7 @@ mod tests {
 		verified_tx
 	}
 
-	fn should_replace(replace: &ShouldReplace<VerifiedTransaction>, old: VerifiedTransaction, new: VerifiedTransaction) -> Choice {
+	fn should_replace(replace: &dyn ShouldReplace<VerifiedTransaction>, old: VerifiedTransaction, new: VerifiedTransaction) -> Choice {
 		let old_tx = txpool::Transaction { insertion_id: 0, transaction: Arc::new(old) };
 		let new_tx = txpool::Transaction { insertion_id: 0, transaction: Arc::new(new) };
 		let old = ReplaceTransaction::new(&old_tx, Default::default());

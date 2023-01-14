@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -18,16 +18,19 @@
 
 use std::fmt;
 
-use ethcore::error::{Error as EthcoreError, ErrorKind, CallError};
-use ethcore::client::BlockId;
 use jsonrpc_core::{futures, Result as RpcResult, Error, ErrorCode, Value};
 use rlp::DecoderError;
 use types::transaction::Error as TransactionError;
 use ethcore_private_tx::Error as PrivateTransactionError;
 use vm::Error as VMError;
-use light::on_demand::error::{Error as OnDemandError, ErrorKind as OnDemandErrorKind};
-use ethcore::client::BlockChainClient;
-use types::blockchain_info::BlockChainInfo;
+use light::on_demand::error::{Error as OnDemandError};
+use client_traits::BlockChainClient;
+use types::{
+	ids::BlockId,
+	blockchain_info::BlockChainInfo,
+	errors::{EthcoreError},
+	transaction::CallError,
+};
 use v1::types::BlockNumber;
 use v1::impls::EthClientOptions;
 
@@ -39,6 +42,7 @@ mod codes {
 	pub const NO_NEW_WORK: i64 = -32003;
 	pub const NO_WORK_REQUIRED: i64 = -32004;
 	pub const CANNOT_SUBMIT_WORK: i64 = -32005;
+	pub const CANNOT_SUBMIT_BLOCK: i64 = -32006;
 	pub const UNKNOWN_ERROR: i64 = -32009;
 	pub const TRANSACTION_ERROR: i64 = -32010;
 	pub const EXECUTION_ERROR: i64 = -32015;
@@ -246,6 +250,14 @@ pub fn unavailable_block(no_ancient_block: bool, by_hash: bool) -> Error {
 	}
 }
 
+pub fn cannot_submit_block(err: EthcoreError) -> Error {
+	Error {
+		code: ErrorCode::ServerError(codes::CANNOT_SUBMIT_BLOCK),
+		message: "Cannot submit block.".into(),
+		data: Some(Value::String(err.to_string())),
+	}
+}
+
 pub fn check_block_number_existence<'a, T, C>(
 	client: &'a C,
 	num: BlockNumber,
@@ -368,6 +380,16 @@ pub fn invalid_call_data<T: fmt::Display>(error: T) -> Error {
 	}
 }
 
+pub fn signing_queue_disabled() -> Error {
+	Error {
+		code: ErrorCode::ServerError(-32020),
+		message: "Your account is locked and the signing queue is disabled. \
+		You can either Unlock the account via CLI, personal_unlockAccount or \
+		enable the signing queue to use Trusted Signer.".into(),
+		data: None,
+	}
+}
+
 #[cfg(any(test, feature = "accounts"))]
 pub fn signing(error: ::accounts::SignError) -> Error {
 	Error {
@@ -443,7 +465,7 @@ pub fn transaction_message(error: &TransactionError) -> String {
 
 pub fn transaction<T: Into<EthcoreError>>(error: T) -> Error {
 	let error = error.into();
-	if let ErrorKind::Transaction(ref e) = *error.kind() {
+	if let EthcoreError::Transaction(ref e) = error {
 		Error {
 			code: ErrorCode::ServerError(codes::TRANSACTION_ERROR),
 			message: transaction_message(e),
@@ -459,9 +481,8 @@ pub fn transaction<T: Into<EthcoreError>>(error: T) -> Error {
 }
 
 pub fn decode<T: Into<EthcoreError>>(error: T) -> Error {
-	let error = error.into();
-	match *error.kind() {
-		ErrorKind::Decoder(ref dec_err) => rlp(dec_err.clone()),
+	match error.into() {
+		EthcoreError::Decoder(ref dec_err) => rlp(dec_err.clone()),
 		_ => Error {
 			code: ErrorCode::InternalError,
 			message: "decoding error".into(),
@@ -550,10 +571,9 @@ pub fn filter_block_not_found(id: BlockId) -> Error {
 
 pub fn on_demand_error(err: OnDemandError) -> Error {
 	match err {
-		OnDemandError(OnDemandErrorKind::ChannelCanceled(e), _) => on_demand_cancel(e),
-		OnDemandError(OnDemandErrorKind::RequestLimit, _) => timeout_new_peer(&err),
-		OnDemandError(OnDemandErrorKind::BadResponse(_), _) => max_attempts_reached(&err),
-		_ => on_demand_others(&err),
+		OnDemandError::ChannelCanceled(e) => on_demand_cancel(e),
+		OnDemandError::RequestLimit => timeout_new_peer(&err),
+		OnDemandError::BadResponse(_) => max_attempts_reached(&err),
 	}
 }
 
@@ -573,14 +593,6 @@ pub fn max_attempts_reached(err: &OnDemandError) -> Error {
 pub fn timeout_new_peer(err: &OnDemandError) -> Error {
 	Error {
 		code: ErrorCode::ServerError(codes::NO_LIGHT_PEERS),
-		message: err.to_string(),
-		data: None,
-	}
-}
-
-pub fn on_demand_others(err: &OnDemandError) -> Error {
-	Error {
-		code: ErrorCode::ServerError(codes::UNKNOWN_ERROR),
 		message: err.to_string(),
 		data: None,
 	}
@@ -608,5 +620,15 @@ pub fn require_experimental(allow_experimental_rpcs: bool, eip: &str) -> Result<
 			message: format!("This method is not part of the official RPC API yet (EIP-{}). Run with `--jsonrpc-experimental` to enable it.", eip),
 			data: Some(Value::String(format!("See EIP: https://eips.ethereum.org/EIPS/eip-{}", eip))),
 		})
+	}
+}
+
+/// returns an error for when require_canonical was specified and
+pub fn invalid_input() -> Error {
+	Error {
+		// UNSUPPORTED_REQUEST shares the same error code for EIP-1898
+		code: ErrorCode::ServerError(codes::UNSUPPORTED_REQUEST),
+		message: "Invalid input".into(),
+		data: None
 	}
 }

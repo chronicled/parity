@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -21,8 +21,8 @@ use std::collections::{HashMap, HashSet};
 use bytes::Bytes;
 use ethcore_miner::pool;
 use ethereum_types::{H256, U256, Address};
-use heapsize::HeapSizeOf;
-use ethkey::Signature;
+use parity_util_mem::MallocSizeOfExt;
+use crypto::publickey::Signature;
 use messages::PrivateTransaction;
 use parking_lot::RwLock;
 use types::transaction::{UnverifiedTransaction, SignedTransaction};
@@ -59,7 +59,7 @@ impl txpool::VerifiedTransaction for VerifiedPrivateTransaction {
 	}
 
 	fn mem_usage(&self) -> usize {
-		self.transaction.heap_size_of_children()
+		self.transaction.malloc_size_of()
 	}
 
 	fn sender(&self) -> &Address {
@@ -224,7 +224,7 @@ impl SigningStore {
 		&mut self,
 		private_hash: H256,
 		transaction: SignedTransaction,
-		validators: Vec<Address>,
+		validators: &Vec<Address>,
 		state: Bytes,
 		contract_nonce: U256,
 	) -> Result<(), Error> {

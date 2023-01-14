@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,8 +16,9 @@
 
 //! Authority params deserialization.
 
-use uint::Uint;
+use crate::uint::Uint;
 use super::ValidatorSet;
+use serde::Deserialize;
 
 /// Authority params deserialization.
 #[derive(Debug, PartialEq, Deserialize)]
@@ -40,12 +41,10 @@ pub struct BasicAuthority {
 
 #[cfg(test)]
 mod tests {
-	use serde_json;
-	use uint::Uint;
+	use std::str::FromStr;
+	use super::{BasicAuthority, Uint};
 	use ethereum_types::{U256, H160};
-	use hash::Address;
-	use spec::basic_authority::BasicAuthority;
-	use spec::validator_set::ValidatorSet;
+	use crate::{hash::Address, spec::validator_set::ValidatorSet};
 
 	#[test]
 	fn basic_authority_deserialization() {
@@ -61,7 +60,7 @@ mod tests {
 		let deserialized: BasicAuthority = serde_json::from_str(s).unwrap();
 
 		assert_eq!(deserialized.params.duration_limit, Uint(U256::from(0x0d)));
-		let vs = ValidatorSet::List(vec![Address(H160::from("0xc6d9d2cd449a754c494264e1809c50e34d64562b"))]);
+		let vs = ValidatorSet::List(vec![Address(H160::from_str("c6d9d2cd449a754c494264e1809c50e34d64562b").unwrap())]);
 		assert_eq!(deserialized.params.validators, vs);
 	}
 }

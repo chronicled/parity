@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,9 +16,9 @@
 
 use std::collections::{BTreeSet, BTreeMap};
 use ethereum_types::H256;
-use ethkey::{Public, Secret};
+use crypto::publickey::{Public, Secret};
 use crypto::DEFAULT_MAC;
-use ethkey::crypto::ecies::encrypt;
+use crypto::publickey::ecies::encrypt;
 use key_server_cluster::{Error, NodeId, DocumentKeyShare, EncryptedDocumentKeyShadow};
 use key_server_cluster::math;
 use key_server_cluster::jobs::job_session::{JobPartialRequestAction, JobPartialResponseAction, JobExecutor};
@@ -150,7 +150,7 @@ impl JobExecutor for DecryptionJob {
 			shadow_point: shadow_point,
 			decrypt_shadow: match decrypt_shadow.clone() {
 				None => None,
-				Some(decrypt_shadow) => Some(encrypt(&self.requester, &DEFAULT_MAC, &**decrypt_shadow)?),
+				Some(decrypt_shadow) => Some(encrypt(&self.requester, &DEFAULT_MAC, decrypt_shadow.as_bytes())?),
 			},
 		}))
 	}

@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,12 +16,13 @@
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use parking_lot::{Mutex, Condvar};
-use ethkey::{Public, Secret};
+use futures::Oneshot;
+use parking_lot::Mutex;
+use crypto::publickey::{Public, Secret};
 use ethereum_types::H256;
 use key_server_cluster::{Error, NodeId, SessionId, Requester, SessionMeta, AclStorage, DocumentKeyShare};
 use key_server_cluster::cluster::{Cluster};
-use key_server_cluster::cluster_sessions::{SessionIdWithSubSession, ClusterSession};
+use key_server_cluster::cluster_sessions::{SessionIdWithSubSession, ClusterSession, CompletionSignal};
 use key_server_cluster::generation_session::{SessionImpl as GenerationSession, SessionParams as GenerationSessionParams,
 	SessionState as GenerationSessionState};
 use key_server_cluster::message::{Message, SchnorrSigningMessage, SchnorrSigningConsensusMessage, SchnorrSigningGenerationMessage,
@@ -56,11 +57,11 @@ struct SessionCore {
 	/// Key share.
 	pub key_share: Option<DocumentKeyShare>,
 	/// Cluster which allows this node to send messages to other nodes in the cluster.
-	pub cluster: Arc<Cluster>,
+	pub cluster: Arc<dyn Cluster>,
 	/// Session-level nonce.
 	pub nonce: u64,
-	/// SessionImpl completion condvar.
-	pub completed: Condvar,
+	/// SessionImpl completion signal.
+	pub completed: CompletionSignal<(Secret, Secret)>,
 }
 
 /// Signing consensus session type.
@@ -105,9 +106,9 @@ pub struct SessionParams {
 	/// Key share.
 	pub key_share: Option<DocumentKeyShare>,
 	/// ACL storage.
-	pub acl_storage: Arc<AclStorage>,
+	pub acl_storage: Arc<dyn AclStorage>,
 	/// Cluster
-	pub cluster: Arc<Cluster>,
+	pub cluster: Arc<dyn Cluster>,
 	/// Session nonce.
 	pub nonce: u64,
 }
@@ -123,7 +124,7 @@ struct SigningConsensusTransport {
 	/// Selected key version (on master node).
 	version: Option<H256>,
 	/// Cluster.
-	cluster: Arc<Cluster>,
+	cluster: Arc<dyn Cluster>,
 }
 
 /// Signing key generation transport.
@@ -131,7 +132,7 @@ struct SessionKeyGenerationTransport {
 	/// Session access key.
 	access_key: Secret,
 	/// Cluster.
-	cluster: Arc<Cluster>,
+	cluster: Arc<dyn Cluster>,
 	/// Session-level nonce.
 	nonce: u64,
 	/// Other nodes ids.
@@ -147,7 +148,7 @@ struct SigningJobTransport {
 	/// Session-level nonce.
 	nonce: u64,
 	/// Cluster.
-	cluster: Arc<Cluster>,
+	cluster: Arc<dyn Cluster>,
 }
 
 /// Session delegation status.
@@ -160,7 +161,10 @@ enum DelegationStatus {
 
 impl SessionImpl {
 	/// Create new signing session.
-	pub fn new(params: SessionParams, requester: Option<Requester>) -> Result<Self, Error> {
+	pub fn new(
+		params: SessionParams,
+		requester: Option<Requester>,
+	) -> Result<(Self, Oneshot<Result<(Secret, Secret), Error>>), Error> {
 		debug_assert_eq!(params.meta.threshold, params.key_share.as_ref().map(|ks| ks.threshold).unwrap_or_default());
 
 		let consensus_transport = SigningConsensusTransport {
@@ -179,14 +183,15 @@ impl SessionImpl {
 			consensus_transport: consensus_transport,
 		})?;
 
-		Ok(SessionImpl {
+		let (completed, oneshot) = CompletionSignal::new();
+		Ok((SessionImpl {
 			core: SessionCore {
 				meta: params.meta,
 				access_key: params.access_key,
 				key_share: params.key_share,
 				cluster: params.cluster,
 				nonce: params.nonce,
-				completed: Condvar::new(),
+				completed,
 			},
 			data: Mutex::new(SessionData {
 				state: SessionState::ConsensusEstablishing,
@@ -197,19 +202,20 @@ impl SessionImpl {
 				delegation_status: None,
 				result: None,
 			}),
-		})
-	}
-
-	/// Get session state.
-	#[cfg(test)]
-	pub fn state(&self) -> SessionState {
-		self.data.lock().state
+		}, oneshot))
 	}
 
 	/// Wait for session completion.
+	#[cfg(test)]
 	pub fn wait(&self) -> Result<(Secret, Secret), Error> {
 		Self::wait_session(&self.core.completed, &self.data, None, |data| data.result.clone())
 			.expect("wait_session returns Some if called without timeout; qed")
+	}
+
+	/// Get session state (tests only).
+	#[cfg(test)]
+	pub fn state(&self) -> SessionState {
+		self.data.lock().state
 	}
 
 	/// Delegate session to other node.
@@ -277,7 +283,7 @@ impl SessionImpl {
 					other_nodes_ids: BTreeSet::new()
 				}),
 				nonce: None,
-			});
+			}).0;
 			generation_session.initialize(Default::default(), Default::default(), false, 0, vec![self.core.meta.self_node_id.clone()].into_iter().collect::<BTreeSet<_>>().into())?;
 
 			debug_assert_eq!(generation_session.state(), GenerationSessionState::Finished);
@@ -405,7 +411,7 @@ impl SessionImpl {
 				other_nodes_ids: other_consensus_group_nodes,
 			}),
 			nonce: None,
-		});
+		}).0;
 
 		generation_session.initialize(Default::default(), Default::default(), false, key_share.threshold, consensus_group.into())?;
 		data.generation_session = Some(generation_session);
@@ -445,7 +451,7 @@ impl SessionImpl {
 					other_nodes_ids: other_consensus_group_nodes
 				}),
 				nonce: None,
-			});
+			}).0;
 			data.generation_session = Some(generation_session);
 			data.state = SessionState::SessionKeyGeneration;
 		}
@@ -617,13 +623,15 @@ impl SessionImpl {
 			};
 		}
 
-		data.result = Some(result);
-		core.completed.notify_all();
+		data.result = Some(result.clone());
+		core.completed.send(result);
 	}
 }
 
 impl ClusterSession for SessionImpl {
 	type Id = SessionIdWithSubSession;
+	type CreationData = Requester;
+	type SuccessfulResult = (Secret, Secret);
 
 	fn type_name() -> &'static str {
 		"signing"
@@ -811,7 +819,7 @@ mod tests {
 	use std::str::FromStr;
 	use std::collections::BTreeMap;
 	use ethereum_types::{Address, H256};
-	use ethkey::{self, Random, Generator, Public, Secret, public_to_address};
+	use crypto::publickey::{Random, Generator, Public, Secret, public_to_address};
 	use acl_storage::DummyAclStorage;
 	use key_server_cluster::{SessionId, Requester, SessionMeta, Error, KeyStorage};
 	use key_server_cluster::cluster::tests::MessageLoop as ClusterMessageLoop;
@@ -834,7 +842,7 @@ mod tests {
 		}
 
 		pub fn into_session(&self, at_node: usize) -> SessionImpl {
-			let requester = Some(Requester::Signature(ethkey::sign(Random.generate().unwrap().secret(),
+			let requester = Some(Requester::Signature(crypto::publickey::sign(Random.generate().unwrap().secret(),
 				&SessionId::default()).unwrap()));
 			SessionImpl::new(SessionParams {
 				meta: SessionMeta {
@@ -850,13 +858,13 @@ mod tests {
 				acl_storage: Arc::new(DummyAclStorage::default()),
 				cluster: self.0.cluster(0).view().unwrap(),
 				nonce: 0,
-			}, requester).unwrap()
+			}, requester).unwrap().0
 		}
 
 		pub fn init_with_version(self, key_version: Option<H256>) -> Result<(Self, Public, H256), Error> {
 			let message_hash = H256::random();
 			let requester = Random.generate().unwrap();
-			let signature = ethkey::sign(requester.secret(), &SessionId::default()).unwrap();
+			let signature = crypto::publickey::sign(requester.secret(), &SessionId::default()).unwrap();
 			self.0.cluster(0).client().new_schnorr_signing_session(
 				Default::default(),
 				signature.into(),
@@ -933,7 +941,7 @@ mod tests {
 	#[test]
 	fn schnorr_fails_to_initialize_when_already_initialized() {
 		let (ml, _, _) = MessageLoop::new(1, 0).unwrap().init().unwrap();
-		assert_eq!(ml.session_at(0).initialize(ml.key_version(), 777.into()),
+		assert_eq!(ml.session_at(0).initialize(ml.key_version(), H256::from_low_u64_be(777)),
 			Err(Error::InvalidStateForRequest));
 	}
 
@@ -1005,7 +1013,7 @@ mod tests {
 				session: SessionId::default().into(),
 				session_nonce: 0,
 				origin: None,
-				author: Address::default().into(),
+				author: Address::zero().into(),
 				nodes: BTreeMap::new(),
 				is_zero: false,
 				threshold: 1,
@@ -1023,7 +1031,7 @@ mod tests {
 			sub_session: session.core.access_key.clone().into(),
 			session_nonce: 0,
 			request_id: Secret::from_str("0000000000000000000000000000000000000000000000000000000000000001").unwrap().into(),
-			message_hash: H256::default().into(),
+			message_hash: H256::zero().into(),
 			nodes: Default::default(),
 		}), Err(Error::InvalidStateForRequest));
 	}
@@ -1037,7 +1045,7 @@ mod tests {
 			sub_session: session.core.access_key.clone().into(),
 			session_nonce: 0,
 			request_id: Secret::from_str("0000000000000000000000000000000000000000000000000000000000000001").unwrap().into(),
-			message_hash: H256::default().into(),
+			message_hash: H256::zero().into(),
 			nodes: Default::default(),
 		}), Err(Error::InvalidMessage));
 	}

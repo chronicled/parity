@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -17,22 +17,26 @@
 //! Spec account deserialization.
 
 use std::collections::BTreeMap;
-use uint::Uint;
-use bytes::Bytes;
-use spec::builtin::Builtin;
+
+use crate::{bytes::Bytes, spec::builtin::BuiltinCompat, uint::Uint};
+use serde::Deserialize;
 
 /// Spec account.
+#[cfg_attr(any(test, feature = "test-helpers"), derive(Clone))]
 #[derive(Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct Account {
 	/// Builtin contract.
-	pub builtin: Option<Builtin>,
+	pub builtin: Option<BuiltinCompat>,
 	/// Balance.
 	pub balance: Option<Uint>,
 	/// Nonce.
 	pub nonce: Option<Uint>,
 	/// Code.
 	pub code: Option<Bytes>,
+	/// Version.
+	pub version: Option<Uint>,
 	/// Storage.
 	pub storage: Option<BTreeMap<Uint, Uint>>,
 	/// Constructor.
@@ -48,12 +52,8 @@ impl Account {
 
 #[cfg(test)]
 mod tests {
-	use std::collections::BTreeMap;
-	use serde_json;
-	use spec::account::Account;
+	use super::{Account, Bytes, BTreeMap, Uint};
 	use ethereum_types::U256;
-	use uint::Uint;
-	use bytes::Bytes;
 
 	#[test]
 	fn account_balance_missing_not_empty() {
@@ -102,7 +102,15 @@ mod tests {
 	#[test]
 	fn account_empty() {
 		let s = r#"{
-			"builtin": { "name": "ecrecover", "pricing": { "linear": { "base": 3000, "word": 0 } } }
+			"builtin": {
+				"name": "ecrecover",
+				"pricing": {
+					"linear": {
+						"base": 3000,
+						"word": 0
+					}
+				}
+			}
 		}"#;
 		let deserialized: Account = serde_json::from_str(s).unwrap();
 		assert!(deserialized.is_empty());
@@ -113,8 +121,16 @@ mod tests {
 		let s = r#"{
 			"balance": "1",
 			"nonce": "0",
-			"builtin": { "name": "ecrecover", "pricing": { "linear": { "base": 3000, "word": 0 } } },
-			"code": "1234"
+			"code": "1234",
+			"builtin": {
+				"name": "ecrecover",
+				"pricing": {
+					"linear": {
+						"base": 3000,
+						"word": 0
+					}
+				}
+			}
 		}"#;
 		let deserialized: Account = serde_json::from_str(s).unwrap();
 		assert!(!deserialized.is_empty());

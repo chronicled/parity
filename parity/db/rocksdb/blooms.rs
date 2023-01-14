@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -18,7 +18,7 @@
 
 use std::path::Path;
 use ethereum_types::Bloom;
-use ethcore::error::Error;
+use types::errors::EthcoreError as Error;
 use rlp;
 use super::kvdb_rocksdb::DatabaseConfig;
 use super::open_database;
@@ -37,7 +37,7 @@ pub fn migrate_blooms<P: AsRef<Path>>(path: P, config: &DatabaseConfig) -> Resul
 	// 3u8 -> ExtrasIndex::BlocksBlooms
 	// 0u8 -> level 0
 	let blooms_iterator = db.key_value()
-		.iter_from_prefix(Some(3), &[3u8, 0u8])
+		.iter_from_prefix(3, &[3u8, 0u8])
 		.filter(|(key, _)| key.len() == 6)
 		.take_while(|(key, _)| {
 			key[0] == 3u8 && key[1] == 0u8
@@ -63,7 +63,7 @@ pub fn migrate_blooms<P: AsRef<Path>>(path: P, config: &DatabaseConfig) -> Resul
 	// 1u8 -> TraceDBIndex::BloomGroups
 	// 0u8 -> level 0
 	let trace_blooms_iterator = db.key_value()
-		.iter_from_prefix(Some(4), &[1u8, 0u8])
+		.iter_from_prefix(4, &[1u8, 0u8])
 		.filter(|(key, _)| key.len() == 6)
 		.take_while(|(key, _)| {
 			key[0] == 1u8 && key[1] == 0u8

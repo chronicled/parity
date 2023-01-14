@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -21,12 +21,14 @@ use std::cmp;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use types::basic_account::BasicAccount;
-use types::encoded;
-use types::filter::Filter as EthcoreFilter;
-use types::ids::BlockId;
-use types::receipt::Receipt;
-use ethcore::executed::ExecutionError;
+use types::{
+	basic_account::BasicAccount,
+	encoded,
+	errors::ExecutionError,
+	filter::Filter as EthcoreFilter,
+	ids::BlockId,
+	receipt::Receipt,
+};
 
 use jsonrpc_core::{Result, Error};
 use jsonrpc_core::futures::{future, Future};
@@ -37,11 +39,12 @@ use light::client::LightChainClient;
 use light::{cht, MAX_HEADERS_PER_REQUEST};
 use light::on_demand::{
 	request, OnDemandRequester, HeaderRef, Request as OnDemandRequest,
-	Response as OnDemandResponse, ExecutionResult,
+	Response as OnDemandResponse,
 };
 use light::on_demand::error::Error as OnDemandError;
 use light::request::Field;
 use light::TransactionQueue;
+use machine::executed::ExecutionResult;
 
 use sync::{LightNetworkDispatcher, ManageNetwork, LightSyncProvider};
 
@@ -79,7 +82,7 @@ where
 	OD: OnDemandRequester + 'static
 {
 	/// The light client.
-	pub client: Arc<LightChainClient>,
+	pub client: Arc<dyn LightChainClient>,
 	/// The on-demand request service.
 	pub on_demand: Arc<OD>,
 	/// Handle to the network.
@@ -105,7 +108,6 @@ where
 		}
 	}
 }
-
 
 /// Extract a transaction at given index.
 pub fn extract_transaction_at_index(block: encoded::Block, index: usize) -> Option<Transaction> {
@@ -262,6 +264,7 @@ where
 		//       (they don't have state) we can safely fallback to `Latest`.
 		let id = match num.unwrap_or_default() {
 			BlockNumber::Num(n) => BlockId::Number(n),
+			BlockNumber::Hash { hash, .. } => BlockId::Hash(hash),
 			BlockNumber::Earliest => BlockId::Earliest,
 			BlockNumber::Latest => BlockId::Latest,
 			BlockNumber::Pending => {
@@ -582,7 +585,7 @@ where
 
 		match maybe_future {
 			Some(recv) => recv,
-			None => Box::new(future::err(errors::network_disabled())) as Box<Future<Item = _, Error = _> + Send>
+			None => Box::new(future::err(errors::network_disabled())) as Box<dyn Future<Item = _, Error = _> + Send>
 		}
 	}
 
@@ -738,7 +741,7 @@ where
 	tx: EthTransaction,
 	hdr: encoded::Header,
 	env_info: ::vm::EnvInfo,
-	engine: Arc<::ethcore::engines::EthEngine>,
+	engine: Arc<dyn engine::Engine>,
 	on_demand: Arc<OD>,
 	sync: Arc<S>,
 }
@@ -803,7 +806,7 @@ where
 					failed => Ok(future::Loop::Break(failed)),
 				}
 			})
-		})) as Box<Future<Item = _, Error = _> + Send>
+		})) as Box<dyn Future<Item = _, Error = _> + Send>
 	} else {
 		trace!(target: "light_fetch", "Placing execution request for {} gas in on_demand",
 			params.tx.gas);
@@ -824,8 +827,8 @@ where
 		});
 
 		match proved_future {
-			Some(fut) => Box::new(fut) as Box<Future<Item = _, Error = _> + Send>,
-			None => Box::new(future::err(errors::network_disabled())) as Box<Future<Item = _, Error = _> + Send>,
+			Some(fut) => Box::new(fut) as Box<dyn Future<Item = _, Error = _> + Send>,
+			None => Box::new(future::err(errors::network_disabled())) as Box<dyn Future<Item = _, Error = _> + Send>,
 		}
 	}
 }

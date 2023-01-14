@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -51,7 +51,7 @@ impl Default for EnvInfo {
 	fn default() -> Self {
 		EnvInfo {
 			number: 0,
-			author: Address::default(),
+			author: Address::zero(),
 			timestamp: 0,
 			difficulty: 0.into(),
 			gas_limit: 0.into(),

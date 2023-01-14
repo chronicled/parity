@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -22,7 +22,7 @@ use jsonrpc_derive::rpc;
 use v1::types::Bytes;
 
 /// Web3 rpc interface.
-#[rpc]
+#[rpc(server)]
 pub trait Web3 {
 	/// Returns current client version.
 	#[rpc(name = "web3_clientVersion")]
@@ -30,5 +30,5 @@ pub trait Web3 {
 
 	/// Returns sha3 of the given data
 	#[rpc(name = "web3_sha3")]
-	fn sha3(&self, Bytes) -> Result<H256>;
+	fn sha3(&self, _: Bytes) -> Result<H256>;
 }

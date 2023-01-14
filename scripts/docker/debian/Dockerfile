@@ -1,4 +1,4 @@
-FROM rust:1.39 AS builder
+FROM rust:1.44 AS builder
 # show backtraces
 ENV RUST_BACKTRACE 1
 
@@ -19,7 +19,7 @@ ENV RUST_BACKTRACE 1
 RUN addgroup --gid 1000 parity && \
 	adduser --uid 1000 --ingroup parity --shell /bin/sh parity
 RUN apt-get update -y && \
-  apt-get install -y libssl1.1
+	apt-get install -y libssl1.1
 
 USER parity
 

@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -136,7 +136,7 @@ mod tests {
 	#[test]
 	fn test_memory_read_and_write() {
 		// given
-		let mem: &mut Memory = &mut vec![];
+		let mem: &mut dyn Memory = &mut vec![];
 		mem.resize(0x80 + 32);
 
 		// when
@@ -149,7 +149,7 @@ mod tests {
 	#[test]
 	fn test_memory_read_and_write_byte() {
 		// given
-		let mem: &mut Memory = &mut vec![];
+		let mem: &mut dyn Memory = &mut vec![];
 		mem.resize(32);
 
 		// when
@@ -163,7 +163,7 @@ mod tests {
 
 	#[test]
 	fn test_memory_read_slice_and_write_slice() {
-		let mem: &mut Memory = &mut vec![];
+		let mem: &mut dyn Memory = &mut vec![];
 		mem.resize(32);
 
 		{

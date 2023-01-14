@@ -28,6 +28,7 @@
 		"maxCodeSize": 24576,
 		"maxCodeSizeTransition": "0",
 		"eip150Transition": "0",
+		"eip155Transition": "0",
 		"eip160Transition": "0",
 		"eip161abcTransition": "0",
 		"eip161dTransition": "0",
@@ -35,7 +36,6 @@
 		"eip140Transition": "5",
 		"eip211Transition": "5",
 		"eip214Transition": "5",
-		"eip155Transition": "5",
 		"eip658Transition": "5"
 	},
 	"genesis": {
@@ -57,15 +57,17 @@
 		"0000000000000000000000000000000000000002": { "balance": "1", "builtin": { "name": "sha256", "pricing": { "linear": { "base": 60, "word": 12 } } } },
 		"0000000000000000000000000000000000000003": { "balance": "1", "builtin": { "name": "ripemd160", "pricing": { "linear": { "base": 600, "word": 120 } } } },
 		"0000000000000000000000000000000000000004": { "balance": "1", "builtin": { "name": "identity", "pricing": { "linear": { "base": 15, "word": 3 } } } },
+		"0000000000000000000000000000000000000005": { "builtin": { "name": "modexp", "activate_at": "0x5", "pricing": { "modexp": { "divisor": 20 } } } },
 		"0000000000000000000000000000000000000006": {
 			"builtin": {
 				"name": "alt_bn128_add",
-				"activate_at": "5",
-				"eip1108_transition": "0x7fffffffffffff",
 				"pricing": {
-					"alt_bn128_const_operations": {
-						"price": 500,
-						"eip1108_transition_price": 150
+					"5": {
+						"price": { "alt_bn128_const_operations": { "price": 500 }}
+					},
+					"0x7fffffffffffff": {
+						"info": "EIP 1108 transition",
+						"price": { "alt_bn128_const_operations": { "price": 150 }}
 					}
 				}
 			}
@@ -73,12 +75,13 @@
 		"0000000000000000000000000000000000000007": {
 			"builtin": {
 				"name": "alt_bn128_mul",
-				"activate_at": "5",
-				"eip1108_transition": "0x7fffffffffffff",
 				"pricing": {
-					"alt_bn128_const_operations": {
-						"price": 40000,
-						"eip1108_transition_price": 6000
+					"5": {
+						"price": { "alt_bn128_const_operations": { "price": 40000 }}
+					},
+					"0x7fffffffffffff": {
+						"info": "EIP 1108 transition",
+						"price": { "alt_bn128_const_operations": { "price": 6000 }}
 					}
 				}
 			}
@@ -86,14 +89,13 @@
 		"0000000000000000000000000000000000000008": {
 			"builtin": {
 				"name": "alt_bn128_pairing",
-				"activate_at": "5",
-				"eip1108_transition": "0x7fffffffffffff",
 				"pricing": {
-					"alt_bn128_pairing": {
-						"base": 100000,
-						"pair": 80000,
-						"eip1108_transition_base": 45000,
-						"eip1108_transition_pair": 34000
+					"5": {
+						"price": { "alt_bn128_pairing": { "base": 100000, "pair": 80000 }}
+					},
+					"0x7fffffffffffff": {
+						"info": "EIP 1108 transition",
+						"price": { "alt_bn128_pairing": { "base": 45000, "pair": 34000 }}
 					}
 				}
 			}

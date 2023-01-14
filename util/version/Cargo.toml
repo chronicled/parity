@@ -3,12 +3,12 @@
 [package]
 name = "parity-version"
 # NOTE: this value is used for Parity Ethereum version string (via env CARGO_PKG_VERSION)
-version = "2.5.9"
+version = "2.7.2"
 authors = ["Parity Technologies <admin@parity.io>"]
 build = "build.rs"
 
 [package.metadata]
-# This versions track. Should be changed to `stable` or `beta` when on respective branches.
+# This versions track. Should be changed to `stable` when on respective branches.
 # Used by auto-updater and for Parity version string.
 track = "stable"
 
@@ -16,18 +16,18 @@ track = "stable"
 # Latest supported fork blocks.
 # Indicates a critical release in this track (i.e. consensus issue).
 [package.metadata.networks]
-foundation = { forkBlock = 7280000, critical = false }
-ropsten = { forkBlock = 4939394, critical = false }
-kovan = { forkBlock = 10255201, critical = false }
-goerli = { forkBlock = 0, critical = false }
+foundation = { forkBlock = 9069000, critical = false }
+ropsten = { forkBlock = 6485846, critical = false }
+kovan = { forkBlock = 14111141, critical = false }
+goerli = { forkBlock = 1561651, critical = false }
 
 [dependencies]
 parity-bytes = "0.1"
-rlp = { version = "0.3.0", features = ["ethereum"] }
+rlp = "0.4.0"
 target_info = "0.1"
 
 [build-dependencies]
-vergen = "0.1"
+vergen = "3.0.4"
 rustc_version = "0.2"
 toml = "0.4"
 

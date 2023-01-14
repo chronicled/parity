@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -53,6 +53,8 @@ pub struct Schedule {
 	pub sha3_word_gas: usize,
 	/// Gas price for loading from storage
 	pub sload_gas: usize,
+	/// Special gas price for dirty gas of SSTORE, after net gas metering.
+	pub sstore_dirty_gas: Option<usize>,
 	/// Gas price for setting new value to storage (`storage==0`, `new!=0`)
 	pub sstore_set_gas: usize,
 	/// Gas price for altering value in storage
@@ -136,6 +138,10 @@ pub struct Schedule {
 	pub eip1706: bool,
 	/// VM execution does not increase null signed address nonce if this field is true.
 	pub keep_unsigned_nonce: bool,
+	/// Latest VM version for contract creation transaction.
+	pub latest_version: U256,
+	/// All supported non-legacy VM versions.
+	pub versions: HashMap<U256, VersionedSchedule>,
 	/// Wasm extra schedule settings, if wasm activated
 	pub wasm: Option<WasmCosts>,
 }
@@ -236,6 +242,7 @@ impl Schedule {
 			sha3_gas: 30,
 			sha3_word_gas: 6,
 			sload_gas: 200,
+			sstore_dirty_gas: None,
 			sstore_set_gas: 20000,
 			sstore_reset_gas: 5000,
 			sstore_refund_gas: 15000,
@@ -273,6 +280,8 @@ impl Schedule {
 			eip1283: false,
 			eip1706: false,
 			keep_unsigned_nonce: false,
+			latest_version: U256::zero(),
+			versions: HashMap::new(),
 			wasm: None,
 		}
 	}
@@ -325,6 +334,7 @@ impl Schedule {
 			sha3_gas: 30,
 			sha3_word_gas: 6,
 			sload_gas: 50,
+			sstore_dirty_gas: None,
 			sstore_set_gas: 20000,
 			sstore_reset_gas: 5000,
 			sstore_refund_gas: 15000,
@@ -362,6 +372,8 @@ impl Schedule {
 			eip1283: false,
 			eip1706: false,
 			keep_unsigned_nonce: false,
+			latest_version: U256::zero(),
+			versions: HashMap::new(),
 			wasm: None,
 		}
 	}

@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -32,7 +32,7 @@ macro_rules! extract_chain {
 	(iter $file:expr) => {{
 		const RAW_DATA: &'static [u8] =
 			include_bytes!(concat!("../../../../ethcore/res/ethereum/tests/", $file, ".json"));
-		::ethjson::blockchain::Test::load(RAW_DATA).unwrap().into_iter()
+		ethjson::test_helpers::blockchain::Test::load(RAW_DATA).unwrap().into_iter()
 	}};
 
 	($file:expr) => {{

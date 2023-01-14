@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -15,10 +15,10 @@
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::fs;
-use std::num::NonZeroU32;
 use std::path::Path;
 use json;
-use ethkey::{Address, Secret, KeyPair, Password};
+use crypto::publickey::{Address, Secret, KeyPair};
+use ethkey::Password;
 use crypto::{Keccak256, pbkdf2};
 use {crypto, Error};
 
@@ -59,15 +59,14 @@ impl PresaleWallet {
 		let mut derived_key = [0u8; 32];
 		let salt = pbkdf2::Salt(password.as_bytes());
 		let sec = pbkdf2::Secret(password.as_bytes());
-		let iter = NonZeroU32::new(2000).expect("2000 > 0; qed");
-		pbkdf2::sha256(iter, salt, sec, &mut derived_key);
+		pbkdf2::sha256(2000, salt, sec, &mut derived_key);
 
 		let mut key = vec![0; self.ciphertext.len()];
 		let len = crypto::aes::decrypt_128_cbc(&derived_key[0..16], &self.iv, &self.ciphertext, &mut key)
 			.map_err(|_| Error::InvalidPassword)?;
 		let unpadded = &key[..len];
 
-		let secret = Secret::from_unsafe_slice(&unpadded.keccak256())?;
+		let secret = Secret::import_key(&unpadded.keccak256())?;
 		if let Ok(kp) = KeyPair::from_secret(secret) {
 			if kp.address() == self.address {
 				return Ok(kp)

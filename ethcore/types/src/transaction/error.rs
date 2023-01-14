@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -17,9 +17,11 @@
 use std::{fmt, error};
 
 use ethereum_types::U256;
-use ethkey;
+use parity_crypto::publickey::{Error as EthPublicKeyCryptoError};
 use rlp;
 use unexpected::OutOfBounds;
+
+use errors::ExecutionError;
 
 #[derive(Debug, PartialEq, Clone)]
 /// Errors concerning transaction processing.
@@ -86,8 +88,8 @@ pub enum Error {
 	InvalidRlp(String),
 }
 
-impl From<ethkey::Error> for Error {
-	fn from(err: ethkey::Error) -> Self {
+impl From<EthPublicKeyCryptoError> for Error {
+	fn from(err: EthPublicKeyCryptoError) -> Self {
 		Error::InvalidSignature(format!("{}", err))
 	}
 }
@@ -124,7 +126,7 @@ impl fmt::Display for Error {
 			CodeBanned => "Contract code is temporarily banned.".into(),
 			InvalidChainId => "Transaction of this chain ID is not allowed on this chain.".into(),
 			InvalidSignature(ref err) => format!("Transaction has invalid signature: {}.", err),
-			NotAllowed => "Sender does not have permissions to execute this type of transction".into(),
+			NotAllowed => "Sender does not have permissions to execute this type of transaction".into(),
 			TooBig => "Transaction too big".into(),
 			InvalidRlp(ref err) => format!("Transaction has invalid RLP structure: {}.", err),
 		};
@@ -138,3 +140,40 @@ impl error::Error for Error {
 		"Transaction error"
 	}
 }
+
+/// Result of executing the transaction.
+#[derive(PartialEq, Debug, Clone)]
+pub enum CallError {
+	/// Couldn't find the transaction in the chain.
+	TransactionNotFound,
+	/// Couldn't find requested block's state in the chain.
+	StatePruned,
+	/// Couldn't find an amount of gas that didn't result in an exception.
+	Exceptional(vm::Error),
+	/// Corrupt state.
+	StateCorrupt,
+	/// Error executing.
+	Execution(ExecutionError),
+}
+
+impl From<ExecutionError> for CallError {
+	fn from(error: ExecutionError) -> Self {
+		CallError::Execution(error)
+	}
+}
+
+impl fmt::Display for CallError {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		use self::CallError::*;
+		let msg = match *self {
+			TransactionNotFound => "Transaction couldn't be found in the chain".into(),
+			StatePruned => "Couldn't find the transaction block's state in the chain".into(),
+			Exceptional(ref e) => format!("An exception ({}) happened in the execution", e),
+			StateCorrupt => "Stored state found to be corrupted.".into(),
+			Execution(ref e) => format!("{}", e),
+		};
+
+		f.write_fmt(format_args!("Transaction execution error ({}).", msg))
+	}
+}
+

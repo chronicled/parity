@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use ethcore::client::BlockChainClient;
+use client_traits::BlockChainClient;
 use ethcore::miner::{self, MinerService};
 use ethereum_types::{H256, U256, Address};
 use types::transaction::{SignedTransaction, PendingTransaction};
@@ -118,7 +118,7 @@ impl<C: miner::BlockChainClient + BlockChainClient, M: MinerService> Dispatcher 
 	fn sign<P>(
 		&self,
 		filled: FilledTransactionRequest,
-		signer: &Arc<Accounts>,
+		signer: &Arc<dyn Accounts>,
 		password: SignWith,
 		post_sign: P,
 	) -> BoxFuture<P::Item>

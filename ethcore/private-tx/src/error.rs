@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -19,12 +19,14 @@ use derive_more::Display;
 use ethereum_types::Address;
 use rlp::DecoderError;
 use ethtrie::TrieError;
-use ethcore::error::{Error as EthcoreError, ExecutionError};
-use types::transaction::Error as TransactionError;
-use ethkey::Error as KeyError;
-use ethkey::crypto::Error as CryptoError;
+use types::{
+	errors::{EthcoreError, ExecutionError},
+	transaction::Error as TransactionError,
+};
+use crypto::publickey::Error as CryptoError;
 use txpool::VerifiedTransaction;
 use private_transactions::VerifiedPrivateTransaction;
+use serde_json::{Error as SerdeError};
 
 type TxPoolError = txpool::Error<<VerifiedPrivateTransaction as VerifiedTransaction>::Hash>;
 
@@ -45,6 +47,9 @@ pub enum Error {
 	/// Crypto error.
 	#[display(fmt = "Crypto Error {}", _0)]
 	Crypto(CryptoError),
+	/// Serialization error.
+	#[display(fmt = "Serialization Error {}", _0)]
+	Json(SerdeError),
 	/// Encryption error.
 	#[display(fmt = "Encryption error. ({})", _0)]
 	Encrypt(String),
@@ -93,18 +98,30 @@ pub enum Error {
 	/// Account for signing requests to key server not set.
 	#[display(fmt = "Account for signing requests to key server not set.")]
 	KeyServerAccountNotSet,
+	/// Private state for the contract was not found in the local storage.
+	#[display(fmt = "Private state for the contract was not found in the local storage.")]
+	PrivateStateNotFound,
+	/// Cannot write state to the local database.
+	#[display(fmt = "Cannot write state to the local database.")]
+	DatabaseWriteError,
 	/// Encryption key is not found on key server.
 	#[display(fmt = "Encryption key is not found on key server for {}", _0)]
 	EncryptionKeyNotFound(Address),
 	/// Key server URL is not set.
 	#[display(fmt = "Key server URL is not set.")]
 	KeyServerNotSet,
+	/// Transaction not found in logs.
+	#[display(fmt = "Private transaction not found in logs.")]
+	TxNotFoundInLog,
+	/// Path for logging not set.
+	#[display(fmt = "Path for logging not set.")]
+	LoggingPathNotSet,
+	/// Timestamp overflow error.
+	#[display(fmt = "Timestamp overflow error.")]
+	TimestampOverflow,
 	/// VM execution error.
 	#[display(fmt = "VM execution error {}", _0)]
 	Execution(ExecutionError),
-	/// General signing error.
-	#[display(fmt = "General signing error {}", _0)]
-	Key(KeyError),
 	/// Error of transactions processing.
 	#[display(fmt = "Error of transactions processing {}", _0)]
 	Transaction(TransactionError),
@@ -117,15 +134,15 @@ pub enum Error {
 }
 
 impl error::Error for Error {
-	fn source(&self) -> Option<&(error::Error + 'static)> {
+	fn source(&self) -> Option<&(dyn error::Error + 'static)> {
 		match self {
 			Error::Io(e) => Some(e),
 			Error::Decoder(e) => Some(e),
 			Error::Trie(e) => Some(e),
 			Error::TxPool(e) => Some(e),
+			Error::Json(e) => Some(e),
 			Error::Crypto(e) => Some(e),
 			Error::Execution(e) => Some(e),
-			Error::Key(e) => Some(e),
 			Error::Transaction(e) => Some(e),
 			Error::Ethcore(e) => Some(e),
 			_ => None,
@@ -142,12 +159,6 @@ impl From<String> for Error {
 impl From<std::io::Error> for Error {
 	fn from(err: std::io::Error) -> Self {
 		Error::Io(err).into()
-	}
-}
-
-impl From<KeyError> for Error {
-	fn from(err: KeyError) -> Self {
-		Error::Key(err).into()
 	}
 }
 
@@ -184,6 +195,12 @@ impl From<TrieError> for Error {
 impl From<TxPoolError> for Error {
 	fn from(err: TxPoolError) -> Self {
 		Error::TxPool(err).into()
+	}
+}
+
+impl From<SerdeError> for Error {
+	fn from(err: SerdeError) -> Self {
+		Error::Json(err).into()
 	}
 }
 

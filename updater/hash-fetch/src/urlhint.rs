@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,15 +16,14 @@
 
 //! URLHint Contract
 
-use std::sync::Arc;
+use std::sync::Weak;
 use rustc_hex::ToHex;
 use mime::{self, Mime};
 use mime_guess;
 
-use futures::{future, Future};
-use futures::future::Either;
 use ethereum_types::{H256, Address};
-use registrar::{Registrar, RegistrarClient, Asynchronous};
+use registrar::RegistrarClient;
+use types::ids::BlockId;
 
 use_contract!(urlhint, "res/urlhint.json");
 
@@ -95,20 +94,18 @@ pub enum URLHintResult {
 /// URLHint Contract interface
 pub trait URLHint: Send + Sync {
 	/// Resolves given id to registrar entry.
-	fn resolve(&self, id: H256) -> Box<Future<Item = Option<URLHintResult>, Error = String> + Send>;
+	fn resolve(&self, id: H256) -> Result<Option<URLHintResult>, String>;
 }
 
 /// `URLHintContract` API
 pub struct URLHintContract {
-	registrar: Registrar,
-	client: Arc<RegistrarClient<Call=Asynchronous>>,
+	client: Weak<dyn RegistrarClient>,
 }
 
 impl URLHintContract {
 	/// Creates new `URLHintContract`
-	pub fn new(client: Arc<RegistrarClient<Call=Asynchronous>>) -> Self {
+	pub fn new(client: Weak<dyn RegistrarClient>) -> Self {
 		URLHintContract {
-			registrar: Registrar::new(client.clone()),
 			client: client,
 		}
 	}
@@ -123,10 +120,12 @@ fn get_urlhint_content(account_slash_repo: String, owner: Address) -> Content {
 	}
 }
 
-fn decode_urlhint_output(output: (String, [u8; 20], Address)) -> Option<URLHintResult> {
-	let (account_slash_repo, commit, owner) = output;
-
-	if owner == Address::default() {
+fn decode_urlhint_output(
+	account_slash_repo: String,
+	commit: [u8; 20],
+	owner: Address
+) -> Option<URLHintResult> {
+	if owner == Address::zero() {
 		return None;
 	}
 
@@ -159,20 +158,26 @@ fn decode_urlhint_output(output: (String, [u8; 20], Address)) -> Option<URLHintR
 }
 
 impl URLHint for URLHintContract {
-	fn resolve(&self, id: H256) -> Box<Future<Item = Option<URLHintResult>, Error = String> + Send> {
-		let client = self.client.clone();
+	fn resolve(&self, id: H256) -> Result<Option<URLHintResult>, String>  {
+		use urlhint::urlhint::functions::entries::{encode_input, decode_output};
 
-		let future = self.registrar.get_address(GITHUB_HINT)
-			.and_then(move |addr| if !addr.is_zero() {
-				let data = urlhint::functions::entries::encode_input(id);
-				let result = client.call_contract(addr, data)
-					.and_then(move |output| urlhint::functions::entries::decode_output(&output).map_err(|e| e.to_string()))
-					.map(decode_urlhint_output);
-				Either::B(result)
-			} else {
-				Either::A(future::ok(None))
-		});
-		Box::new(future)
+		let client = self.client.clone().upgrade()
+			.ok_or_else(|| "Registrar/contract client unavailable".to_owned())?;
+
+		let returned_address = client.get_address(GITHUB_HINT, BlockId::Latest)?;
+
+		if let Some(address) = returned_address {
+			let data = encode_input(id);
+			let output_bytes = client.call_contract(BlockId::Latest, address, data)?;
+			let (account_slash_repo, commit, owner) = decode_output(&output_bytes)
+				.map_err(|e| e.to_string())?;
+
+			let url_hint = decode_urlhint_output(account_slash_repo, commit, owner);
+
+			Ok(url_hint)
+		} else {
+			Ok(None)
+		}
 	}
 }
 
@@ -205,13 +210,12 @@ pub mod tests {
 	use std::str::FromStr;
 	use rustc_hex::FromHex;
 
-	use futures::{Future, IntoFuture};
-
 	use super::*;
 	use super::guess_mime_type;
 	use parking_lot::Mutex;
 	use ethereum_types::Address;
 	use bytes::{Bytes, ToPretty};
+	use call_contract::CallContract;
 
 	pub struct FakeRegistrar {
 		pub calls: Arc<Mutex<Vec<(String, String)>>>,
@@ -235,18 +239,30 @@ pub mod tests {
 		}
 	}
 
-	impl RegistrarClient for FakeRegistrar {
-		type Call = Asynchronous;
-
-		fn registrar_address(&self) -> Result<Address, String> {
-			Ok(REGISTRAR.parse().unwrap())
-		}
-
-		fn call_contract(&self, address: Address, data: Bytes) -> Self::Call {
+	impl CallContract for FakeRegistrar {
+		fn call_contract(
+			&self,
+			_block: BlockId,
+			address: Address,
+			data: Bytes
+		) -> Result<Bytes, String> {
 			self.calls.lock().push((address.to_hex(), data.to_hex()));
 			let res = self.responses.lock().remove(0);
-			Box::new(res.into_future())
+
+			res
 		}
+	}
+
+	impl RegistrarClient for FakeRegistrar {
+		fn registrar_address(&self) -> Option<Address> {
+			Some(REGISTRAR.parse().unwrap())
+		}
+	}
+
+	fn h256_from_short_str(s: &str) -> H256 {
+		let mut bytes = s.as_bytes().to_vec();
+		bytes.resize(32usize, 0u8);
+		H256::from_slice(bytes.as_ref())
 	}
 
 	#[test]
@@ -260,10 +276,12 @@ pub mod tests {
 		registrar.responses.lock()[1] = Ok(resolve_result);
 
 		let calls = registrar.calls.clone();
-		let urlhint = URLHintContract::new(Arc::new(registrar));
+
+		let registrar = Arc::new(registrar) as Arc<dyn RegistrarClient>;
+		let urlhint = URLHintContract::new(Arc::downgrade(&registrar));
 
 		// when
-		let res = urlhint.resolve("test".as_bytes().into()).wait().unwrap();
+		let res = urlhint.resolve(h256_from_short_str("test")).unwrap();
 		let calls = calls.lock();
 		let call0 = calls.get(0).expect("Registrar resolve called");
 		let call1 = calls.get(1).expect("URLHint Resolve called");
@@ -288,10 +306,12 @@ pub mod tests {
 			Ok(format!("000000000000000000000000{}", URLHINT).from_hex().unwrap()),
 			Ok("0000000000000000000000000000000000000000000000000000000000000060ec4c1fe06c808fe3739858c347109b1f5f1ed4b5000000000000000000000000000000000000000000000000deadcafebeefbeefcafedeaddeedfeedffffffff0000000000000000000000000000000000000000000000000000000000000011657468636f72652f64616f2e636c61696d000000000000000000000000000000".from_hex().unwrap()),
 		]);
-		let urlhint = URLHintContract::new(Arc::new(registrar));
+
+		let registrar = Arc::new(registrar) as Arc<dyn RegistrarClient>;
+		let urlhint = URLHintContract::new(Arc::downgrade(&registrar));
 
 		// when
-		let res = urlhint.resolve("test".as_bytes().into()).wait().unwrap();
+		let res = urlhint.resolve(h256_from_short_str("test")).unwrap();
 
 		// then
 		assert_eq!(res, Some(URLHintResult::Dapp(GithubApp {
@@ -310,10 +330,12 @@ pub mod tests {
 			Ok(format!("000000000000000000000000{}", URLHINT).from_hex().unwrap()),
 			Ok("00000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000deadcafebeefbeefcafedeaddeedfeedffffffff000000000000000000000000000000000000000000000000000000000000003c68747470733a2f2f7061726974792e696f2f6173736574732f696d616765732f657468636f72652d626c61636b2d686f72697a6f6e74616c2e706e6700000000".from_hex().unwrap()),
 		]);
-		let urlhint = URLHintContract::new(Arc::new(registrar));
+
+		let registrar = Arc::new(registrar) as Arc<dyn RegistrarClient>;
+		let urlhint = URLHintContract::new(Arc::downgrade(&registrar));
 
 		// when
-		let res = urlhint.resolve("test".as_bytes().into()).wait().unwrap();
+		let res = urlhint.resolve(h256_from_short_str("test")).unwrap();
 
 		// then
 		assert_eq!(res, Some(URLHintResult::Content(Content {
@@ -330,7 +352,7 @@ pub mod tests {
 			account: "test".into(),
 			repo: "xyz".into(),
 			commit: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
-			owner: Address::default(),
+			owner: Address::zero(),
 		};
 
 		// when

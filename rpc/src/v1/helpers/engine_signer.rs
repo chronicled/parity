@@ -1,4 +1,4 @@
-// Copyright 2015-2018 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -17,7 +17,8 @@
 use std::sync::Arc;
 
 use accounts::AccountProvider;
-use ethkey::{self, Address, Password};
+use ethkey::Password;
+use crypto::publickey::{Address, Message, Public, Signature, Error};
 
 /// An implementation of EngineSigner using internal account management.
 pub struct EngineSigner {
@@ -33,16 +34,27 @@ impl EngineSigner {
 	}
 }
 
-impl ethcore::engines::EngineSigner for EngineSigner {
-	fn sign(&self, message: ethkey::Message) -> Result<ethkey::Signature, ethkey::Error> {
+impl engine::signer::EngineSigner for EngineSigner {
+	fn sign(&self, message: Message) -> Result<Signature, Error> {
 		match self.accounts.sign(self.address, Some(self.password.clone()), message) {
 			Ok(ok) => Ok(ok),
-			Err(e) => Err(ethkey::Error::InvalidSecret),
+			Err(_) => Err(Error::InvalidSecretKey),
 		}
+	}
+
+	fn decrypt(&self, auth_data: &[u8], cipher: &[u8]) -> Result<Vec<u8>, Error> {
+		self.accounts.decrypt(self.address, None, auth_data, cipher).map_err(|e| {
+			warn!("Unable to decrypt message: {:?}", e);
+			Error::InvalidMessage
+		})
 	}
 
 	fn address(&self) -> Address {
 		self.address
+	}
+
+	fn public(&self) -> Option<Public> {
+		self.accounts.account_public(self.address, &self.password).ok()
 	}
 }
 

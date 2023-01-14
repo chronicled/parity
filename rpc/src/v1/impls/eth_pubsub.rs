@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -20,16 +20,18 @@ use std::sync::{Arc, Weak};
 use std::collections::BTreeMap;
 
 use jsonrpc_core::{BoxFuture, Result, Error};
-use jsonrpc_core::futures::{self, Future, IntoFuture};
-use jsonrpc_pubsub::{SubscriptionId, typed::{Sink, Subscriber}};
+use jsonrpc_core::futures::{self, Future, IntoFuture, Stream, sync::mpsc};
+use jsonrpc_pubsub::typed::{Sink, Subscriber};
+use jsonrpc_pubsub::SubscriptionId;
 
-use v1::helpers::{errors, limit_logs, Subscribers};
+use v1::helpers::{errors, limit_logs, Subscribers, };
 use v1::helpers::light_fetch::LightFetch;
 use v1::metadata::Metadata;
 use v1::traits::EthPubSub;
 use v1::types::{pubsub, RichHeader, Log};
 
-use ethcore::client::{BlockChainClient, ChainNotify, NewBlocks, ChainRouteType, BlockId};
+use sync::{SyncState, Notification};
+use client_traits::{BlockChainClient, ChainNotify};
 use ethereum_types::H256;
 use light::cache::Cache;
 use light::client::{LightChainClient, LightChainNotify};
@@ -39,8 +41,12 @@ use parking_lot::{RwLock, Mutex};
 
 use sync::{LightSyncProvider, LightNetworkDispatcher, ManageNetwork};
 
-use types::encoded;
-use types::filter::Filter as EthFilter;
+use types::{
+	chain_notify::{NewBlocks, ChainRouteType},
+	ids::BlockId,
+	encoded,
+	filter::Filter as EthFilter,
+};
 
 type Client = Sink<pubsub::Result>;
 
@@ -50,37 +56,72 @@ pub struct EthPubSubClient<C> {
 	heads_subscribers: Arc<RwLock<Subscribers<Client>>>,
 	logs_subscribers: Arc<RwLock<Subscribers<(Client, EthFilter)>>>,
 	transactions_subscribers: Arc<RwLock<Subscribers<Client>>>,
+	sync_subscribers: Arc<RwLock<Subscribers<Client>>>,
 }
 
-impl<C> EthPubSubClient<C> {
+impl<C> EthPubSubClient<C>
+	where
+		C: 'static + Send + Sync
+{
+	/// adds a sync notification channel to the pubsub client
+	pub fn add_sync_notifier<F>(&mut self, receiver: Notification<SyncState>, f: F)
+		where
+			F: 'static + Fn(SyncState) -> Option<pubsub::PubSubSyncStatus> + Send
+	{
+		let weak_handler = Arc::downgrade(&self.handler);
+
+		self.handler.executor.spawn(
+			receiver.for_each(move |state| {
+				if let Some(status) = f(state) {
+					if let Some(handler) = weak_handler.upgrade() {
+						handler.notify_syncing(status);
+						return Ok(())
+					}
+				}
+				Err(())
+			})
+		)
+	}
+}
+
+impl<C> EthPubSubClient<C>
+	where
+		C: 'static + Send + Sync {
+
 	/// Creates new `EthPubSubClient`.
-	pub fn new(client: Arc<C>, executor: Executor) -> Self {
+	pub fn new(client: Arc<C>, executor: Executor, pool_receiver: mpsc::UnboundedReceiver<Arc<Vec<H256>>>) -> Self {
 		let heads_subscribers = Arc::new(RwLock::new(Subscribers::default()));
 		let logs_subscribers = Arc::new(RwLock::new(Subscribers::default()));
 		let transactions_subscribers = Arc::new(RwLock::new(Subscribers::default()));
+		let sync_subscribers = Arc::new(RwLock::new(Subscribers::default()));
+
+		let handler = Arc::new(ChainNotificationHandler {
+			client,
+			executor,
+			heads_subscribers: heads_subscribers.clone(),
+			logs_subscribers: logs_subscribers.clone(),
+			transactions_subscribers: transactions_subscribers.clone(),
+			sync_subscribers: sync_subscribers.clone(),
+		});
+		let handler2 = Arc::downgrade(&handler);
+
+		handler.executor.spawn(pool_receiver
+			.for_each(move |hashes| {
+				if let Some(handler2) = handler2.upgrade() {
+					handler2.notify_new_transactions(&hashes.to_vec());
+					return Ok(())
+				}
+				Err(())
+			})
+		);
 
 		EthPubSubClient {
-			handler: Arc::new(ChainNotificationHandler {
-				client,
-				executor,
-				heads_subscribers: heads_subscribers.clone(),
-				logs_subscribers: logs_subscribers.clone(),
-				transactions_subscribers: transactions_subscribers.clone(),
-			}),
+			handler,
+			sync_subscribers,
 			heads_subscribers,
 			logs_subscribers,
 			transactions_subscribers,
 		}
-	}
-
-	/// Creates new `EthPubSubCient` with deterministic subscription ids.
-	#[cfg(test)]
-	pub fn new_test(client: Arc<C>, executor: Executor) -> Self {
-		let client = Self::new(client, executor);
-		*client.heads_subscribers.write() = Subscribers::new_test();
-		*client.logs_subscribers.write() = Subscribers::new_test();
-		*client.transactions_subscribers.write() = Subscribers::new_test();
-		client
 	}
 
 	/// Returns a chain notification handler.
@@ -96,12 +137,13 @@ where
 {
 	/// Creates a new `EthPubSubClient` for `LightClient`.
 	pub fn light(
-		client: Arc<LightChainClient>,
+		client: Arc<dyn LightChainClient>,
 		on_demand: Arc<OD>,
 		sync: Arc<S>,
 		cache: Arc<Mutex<Cache>>,
 		executor: Executor,
 		gas_price_percentile: usize,
+		pool_receiver: mpsc::UnboundedReceiver<Arc<Vec<H256>>>
 	) -> Self {
 		let fetch = LightFetch {
 			client,
@@ -110,7 +152,7 @@ where
 			cache,
 			gas_price_percentile,
 		};
-		EthPubSubClient::new(Arc::new(fetch), executor)
+		EthPubSubClient::new(Arc::new(fetch), executor, pool_receiver)
 	}
 }
 
@@ -121,6 +163,7 @@ pub struct ChainNotificationHandler<C> {
 	heads_subscribers: Arc<RwLock<Subscribers<Client>>>,
 	logs_subscribers: Arc<RwLock<Subscribers<(Client, EthFilter)>>>,
 	transactions_subscribers: Arc<RwLock<Subscribers<Client>>>,
+	sync_subscribers: Arc<RwLock<Subscribers<Client>>>,
 }
 
 impl<C> ChainNotificationHandler<C> {
@@ -140,6 +183,12 @@ impl<C> ChainNotificationHandler<C> {
 					extra_info: extra_info.clone(),
 				})));
 			}
+		}
+	}
+
+	fn notify_syncing(&self, sync_status: pubsub::PubSubSyncStatus) {
+		for subscriber in self.sync_subscribers.read().values() {
+			Self::notify(&self.executor, subscriber, pubsub::Result::SyncState(sync_status.clone()));
 		}
 	}
 
@@ -177,7 +226,7 @@ impl<C> ChainNotificationHandler<C> {
 	}
 
 	/// Notify all subscribers about new transaction hashes.
-	pub fn notify_new_transactions(&self, hashes: &[H256]) {
+	fn notify_new_transactions(&self, hashes: &[H256]) {
 		for subscriber in self.transactions_subscribers.read().values() {
 			for hash in hashes {
 				Self::notify(&self.executor, subscriber, pubsub::Result::TransactionHash(*hash));
@@ -274,6 +323,10 @@ impl<C: Send + Sync + 'static> EthPubSub for EthPubSubClient<C> {
 				self.heads_subscribers.write().push(subscriber);
 				return;
 			},
+			(pubsub::Kind::Syncing, None) => {
+				self.sync_subscribers.write().push(subscriber);
+				return;
+			},
 			(pubsub::Kind::NewHeads, _) => {
 				errors::invalid_params("newHeads", "Expected no parameters.")
 			},
@@ -308,7 +361,8 @@ impl<C: Send + Sync + 'static> EthPubSub for EthPubSubClient<C> {
 		let res = self.heads_subscribers.write().remove(&id).is_some();
 		let res2 = self.logs_subscribers.write().remove(&id).is_some();
 		let res3 = self.transactions_subscribers.write().remove(&id).is_some();
+		let res4 = self.sync_subscribers.write().remove(&id).is_some();
 
-		Ok(res || res2 || res3)
+		Ok(res || res2 || res3 || res4)
 	}
 }

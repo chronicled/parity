@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -14,22 +14,25 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
-use parity_bytes::Bytes;
-use std::net::SocketAddr;
-use std::collections::{HashSet, HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::collections::hash_map::Entry;
 use std::default::Default;
+use std::net::SocketAddr;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use lru_cache::LruCache;
-use hash::keccak;
+
 use ethereum_types::{H256, H520};
+use keccak_hash::keccak;
+use log::{debug, trace, warn};
+use lru_cache::LruCache;
+use parity_bytes::Bytes;
 use rlp::{Rlp, RlpStream};
-use node_table::*;
-use network::{Error, ErrorKind};
-use ethkey::{Secret, KeyPair, sign, recover};
+
+use parity_crypto::publickey::{KeyPair, recover, Secret, sign};
+use network::Error;
 use network::IpFilter;
 
-use PROTOCOL_VERSION;
+use crate::node_table::*;
+use crate::PROTOCOL_VERSION;
 
 const ADDRESS_BYTES_SIZE: usize = 32;						// Size of address type in bytes.
 const ADDRESS_BITS: usize = 8 * ADDRESS_BYTES_SIZE;			// Denoted by n in [Kademlia].
@@ -196,7 +199,7 @@ impl<'a> Discovery<'a> {
 			public_endpoint: public,
 			discovery_initiated: false,
 			discovery_round: None,
-			discovery_id: NodeId::new(),
+			discovery_id: NodeId::default(),
 			discovery_nodes: HashSet::new(),
 			node_buckets: (0..ADDRESS_BITS).map(|_| NodeBucket::new()).collect(),
 			other_observed_nodes: LruCache::new(OBSERVED_NODES_MAX_SIZE),
@@ -418,7 +421,7 @@ impl<'a> Discovery<'a> {
 
 	fn send_packet(&mut self, packet_id: u8, address: &SocketAddr, payload: &[u8]) -> Result<H256, Error> {
 		let packet = assemble_packet(packet_id, payload, &self.secret)?;
-		let hash = H256::from(&packet[0..32]);
+		let hash = H256::from_slice(&packet[0..32]);
 		self.send_to(packet, address.clone());
 		Ok(hash)
 	}
@@ -481,12 +484,12 @@ impl<'a> Discovery<'a> {
 	pub fn on_packet(&mut self, packet: &[u8], from: SocketAddr) -> Result<Option<TableUpdates>, Error> {
 		// validate packet
 		if packet.len() < 32 + 65 + 4 + 1 {
-			return Err(ErrorKind::BadProtocol.into());
+			return Err(Error::BadProtocol);
 		}
 
 		let hash_signed = keccak(&packet[32..]);
 		if hash_signed[..] != packet[0..32] {
-			return Err(ErrorKind::BadProtocol.into());
+			return Err(Error::BadProtocol);
 		}
 
 		let signed = &packet[(32 + 65)..];
@@ -495,7 +498,7 @@ impl<'a> Discovery<'a> {
 		let packet_id = signed[0];
 		let rlp = Rlp::new(&signed[1..]);
 		match packet_id {
-			PACKET_PING => self.on_ping(&rlp, &node_id, &from, &hash_signed),
+			PACKET_PING => self.on_ping(&rlp, &node_id, &from, hash_signed.as_bytes()),
 			PACKET_PONG => self.on_pong(&rlp, &node_id, &from),
 			PACKET_FIND_NODE => self.on_find_node(&rlp, &node_id, &from),
 			PACKET_NEIGHBOURS => self.on_neighbours(&rlp, &node_id, &from),
@@ -511,7 +514,7 @@ impl<'a> Discovery<'a> {
 		let secs_since_epoch = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
 		if self.check_timestamps && timestamp < secs_since_epoch {
 			debug!(target: "discovery", "Expired packet");
-			return Err(ErrorKind::Expired.into());
+			return Err(Error::Expired);
 		}
 		Ok(())
 	}
@@ -875,7 +878,7 @@ fn assemble_packet(packet_id: u8, bytes: &[u8], secret: &Secret) -> Result<Bytes
 	};
 	packet[32..(32 + 65)].copy_from_slice(&signature[..]);
 	let signed_hash = keccak(&packet[32..]);
-	packet[0..32].copy_from_slice(&signed_hash);
+	packet[0..32].copy_from_slice(signed_hash.as_bytes());
 	Ok(packet)
 }
 
@@ -893,13 +896,16 @@ where
 
 #[cfg(test)]
 mod tests {
-	use super::*;
-	use std::net::{IpAddr,Ipv4Addr};
-	use node_table::{Node, NodeId, NodeEndpoint};
-
+	use std::net::{IpAddr, Ipv4Addr};
 	use std::str::FromStr;
+
 	use rustc_hex::FromHex;
-	use ethkey::{Random, Generator};
+
+	use parity_crypto::publickey::{Generator, Random};
+
+	use crate::node_table::{Node, NodeEndpoint, NodeId};
+
+	use super::*;
 
 	#[test]
 	fn find_node() {
@@ -985,7 +991,7 @@ mod tests {
 			}
 		}
 
-		let results = discovery_handlers[0].nearest_node_entries(&NodeId::new());
+		let results = discovery_handlers[0].nearest_node_entries(&NodeId::zero());
 		assert_eq!(results.len(), 4);
 	}
 
@@ -1088,10 +1094,10 @@ mod tests {
 		let mut discovery = Discovery::new(&key, ep.clone(), IpFilter::default());
 
 		for _ in 0..(16 + 10) {
-			let entry = BucketEntry::new(NodeEntry { id: NodeId::new(), endpoint: ep.clone() });
+			let entry = BucketEntry::new(NodeEntry { id: NodeId::zero(), endpoint: ep.clone() });
 			discovery.node_buckets[0].nodes.push_back(entry);
 		}
-		let nearest = discovery.nearest_node_entries(&NodeId::new());
+		let nearest = discovery.nearest_node_entries(&NodeId::zero());
 		assert_eq!(nearest.len(), 16)
 	}
 
@@ -1282,7 +1288,7 @@ mod tests {
 		// Create a pong packet with incorrect echo hash and assert that it is rejected.
 		let mut incorrect_pong_rlp = RlpStream::new_list(3);
 		ep1.to_rlp_list(&mut incorrect_pong_rlp);
-		incorrect_pong_rlp.append(&H256::default());
+		incorrect_pong_rlp.append(&H256::zero());
 		append_expiration(&mut incorrect_pong_rlp);
 		let incorrect_pong_data = assemble_packet(
 			PACKET_PONG, &incorrect_pong_rlp.drain(), &discovery2.secret
@@ -1311,7 +1317,7 @@ mod tests {
 		// Deliver an unexpected PONG message to discover1.
 		let mut unexpected_pong_rlp = RlpStream::new_list(3);
 		ep3.to_rlp_list(&mut unexpected_pong_rlp);
-		unexpected_pong_rlp.append(&H256::default());
+		unexpected_pong_rlp.append(&H256::zero());
 		append_expiration(&mut unexpected_pong_rlp);
 		let unexpected_pong = assemble_packet(
 			PACKET_PONG, &unexpected_pong_rlp.drain(), key3.secret()

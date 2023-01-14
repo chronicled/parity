@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -36,6 +36,6 @@ mod tests {
     #[test]
     fn test_works() {
         let mut h = H256FastMap::default();
-        h.insert(H256::from(123), "abc");
+        h.insert(H256::from_low_u64_be(123), "abc");
     }
 }

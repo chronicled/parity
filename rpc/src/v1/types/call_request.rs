@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -75,8 +75,8 @@ mod tests {
 		let deserialized: CallRequest = serde_json::from_str(s).unwrap();
 
 		assert_eq!(deserialized, CallRequest {
-			from: Some(H160::from(1)),
-			to: Some(H160::from(2)),
+			from: Some(H160::from_low_u64_be(1)),
+			to: Some(H160::from_low_u64_be(2)),
 			gas_price: Some(U256::from(1)),
 			gas: Some(U256::from(2)),
 			value: Some(U256::from(3)),
@@ -114,7 +114,7 @@ mod tests {
 		let deserialized: CallRequest = serde_json::from_str(s).unwrap();
 
 		assert_eq!(deserialized, CallRequest {
-			from: Some(H160::from(1)),
+			from: Some(H160::from_low_u64_be(1)),
 			to: None,
 			gas_price: None,
 			gas: None,

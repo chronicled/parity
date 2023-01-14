@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -15,7 +15,6 @@
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 use json;
-use std::num::NonZeroU32;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Prf {
@@ -24,7 +23,7 @@ pub enum Prf {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Pbkdf2 {
-	pub c: NonZeroU32,
+	pub c: u32,
 	pub dklen: u32,
 	pub prf: Prf,
 	pub salt: Vec<u8>,

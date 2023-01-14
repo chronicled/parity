@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -14,8 +14,6 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
-use std;
-use std::error::Error as StdError;
 use ethereum_types::H256;
 use jsonrpc_tcp_server::PushMessageError;
 
@@ -30,7 +28,7 @@ pub enum Error {
 
 impl From<std::io::Error> for Error {
 	fn from(err: std::io::Error) -> Self {
-		Error::Io(err.description().to_owned())
+		Error::Io(err.to_string())
 	}
 }
 
@@ -55,10 +53,7 @@ pub trait JobDispatcher: Send + Sync {
 /// Interface that can handle requests to push job for workers
 pub trait PushWorkHandler: Send + Sync {
 	/// push the same work package for all workers (`payload`: json of pow-specific set of work specification)
-	fn push_work_all(&self, payload: String) -> Result<(), Error>;
-
-	/// push the work packages worker-wise (`payload`: json of pow-specific set of work specification)
-	fn push_work(&self, payloads: Vec<String>) -> Result<(), Error>;
+	fn push_work_all(&self, payload: String);
 }
 
 pub struct ServiceConfiguration {

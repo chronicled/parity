@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -15,20 +15,17 @@
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 extern crate byteorder;
-extern crate common_types;
 extern crate ethabi;
-extern crate ethcore;
-extern crate ethcore_call_contract as call_contract;
-extern crate ethcore_sync as sync;
 extern crate ethereum_types;
-extern crate ethkey;
 extern crate hyper;
 extern crate keccak_hash as hash;
 extern crate kvdb;
+extern crate kvdb_rocksdb;
 extern crate parity_bytes as bytes;
 extern crate parity_crypto as crypto;
 extern crate parity_runtime;
 extern crate parking_lot;
+extern crate percent_encoding;
 extern crate rustc_hex;
 extern crate serde;
 extern crate serde_json;
@@ -37,8 +34,8 @@ extern crate tokio;
 extern crate tokio_io;
 extern crate tokio_service;
 extern crate url;
+extern crate jsonrpc_server_utils;
 
-#[macro_use]
 extern crate ethabi_derive;
 #[macro_use]
 extern crate ethabi_contract;
@@ -54,14 +51,10 @@ extern crate log;
 #[cfg(test)]
 extern crate env_logger;
 #[cfg(test)]
-extern crate kvdb_rocksdb;
-
-#[cfg(feature = "accounts")]
-extern crate ethcore_accounts as accounts;
+extern crate tempdir;
 
 mod key_server_cluster;
 mod types;
-mod helpers;
 
 mod traits;
 mod acl_storage;
@@ -71,28 +64,39 @@ mod serialization;
 mod key_server_set;
 mod node_key_pair;
 mod listener;
-mod trusted_client;
+mod blockchain;
+mod migration;
 
 use std::sync::Arc;
 use kvdb::KeyValueDB;
-use ethcore::client::Client;
-use ethcore::miner::Miner;
-use sync::SyncProvider;
+use kvdb_rocksdb::{Database, DatabaseConfig};
 use parity_runtime::Executor;
 
 pub use types::{ServerKeyId, EncryptedDocumentKey, RequestSignature, Public,
-	Error, NodeAddress, ContractAddress, ServiceConfiguration, ClusterConfiguration};
-pub use traits::{NodeKeyPair, KeyServer};
+	Error, NodeAddress, ServiceConfiguration, ClusterConfiguration};
+pub use traits::KeyServer;
+pub use blockchain::{SecretStoreChain, SigningKeyPair, ContractAddress, BlockId, BlockNumber, NewBlocksNotify, Filter};
 pub use self::node_key_pair::PlainNodeKeyPair;
-#[cfg(feature = "accounts")]
-pub use self::node_key_pair::KeyStoreNodeKeyPair;
+
+/// Open a secret store DB using the given secret store data path. The DB path is one level beneath the data path.
+pub fn open_secretstore_db(data_path: &str) -> Result<Arc<dyn KeyValueDB>, String> {
+	use std::path::PathBuf;
+
+	migration::upgrade_db(data_path).map_err(|e| e.to_string())?;
+
+	let mut db_path = PathBuf::from(data_path);
+	db_path.push("db");
+	let db_path = db_path.to_str().ok_or_else(|| "Invalid secretstore path".to_string())?;
+
+	let config = DatabaseConfig::with_columns(1);
+	Ok(Arc::new(Database::open(&config, &db_path).map_err(|e| format!("Error opening database: {:?}", e))?))
+}
 
 /// Start new key server instance
-pub fn start(client: Arc<Client>, sync: Arc<SyncProvider>, miner: Arc<Miner>, self_key_pair: Arc<NodeKeyPair>, mut config: ServiceConfiguration,
-	db: Arc<KeyValueDB>, executor: Executor) -> Result<Box<KeyServer>, Error>
+pub fn start(trusted_client: Arc<dyn SecretStoreChain>, self_key_pair: Arc<dyn SigningKeyPair>, mut config: ServiceConfiguration,
+	db: Arc<dyn KeyValueDB>, executor: Executor) -> Result<Box<dyn KeyServer>, Error>
 {
-	let trusted_client = trusted_client::TrustedClient::new(self_key_pair.clone(), client.clone(), sync, miner);
-	let acl_storage: Arc<acl_storage::AclStorage> = match config.acl_check_contract_address.take() {
+	let acl_storage: Arc<dyn acl_storage::AclStorage> = match config.acl_check_contract_address.take() {
 		Some(acl_check_contract_address) => acl_storage::OnChainAclStorage::new(trusted_client.clone(), acl_check_contract_address)?,
 		None => Arc::new(acl_storage::DummyAclStorage::default()),
 	};
@@ -103,11 +107,11 @@ pub fn start(client: Arc<Client>, sync: Arc<SyncProvider>, miner: Arc<Miner>, se
 	let key_server = Arc::new(key_server::KeyServerImpl::new(&config.cluster_config, key_server_set.clone(), self_key_pair.clone(),
 		acl_storage.clone(), key_storage.clone(), executor.clone())?);
 	let cluster = key_server.cluster();
-	let key_server: Arc<KeyServer> = key_server;
+	let key_server: Arc<dyn KeyServer> = key_server;
 
 	// prepare HTTP listener
 	let http_listener = match config.listener_address {
-		Some(listener_address) => Some(listener::http_listener::KeyServerHttpListener::start(listener_address, Arc::downgrade(&key_server), executor)?),
+		Some(listener_address) => Some(listener::http_listener::KeyServerHttpListener::start(listener_address, config.cors, Arc::downgrade(&key_server), executor)?),
 		None => None,
 	};
 
@@ -120,7 +124,7 @@ pub fn start(client: Arc<Client>, sync: Arc<SyncProvider>, miner: Arc<Miner>, se
 			address,
 			self_key_pair.clone()));
 
-	let mut contracts: Vec<Arc<listener::service_contract::ServiceContract>> = Vec::new();
+	let mut contracts: Vec<Arc<dyn listener::service_contract::ServiceContract>> = Vec::new();
 	config.service_contract_address.map(|address|
 		create_service_contract(address,
 			listener::service_contract::SERVICE_CONTRACT_REGISTRY_NAME.to_owned(),
@@ -147,7 +151,7 @@ pub fn start(client: Arc<Client>, sync: Arc<SyncProvider>, miner: Arc<Miner>, se
 			listener::ApiMask { document_key_shadow_retrieval_requests: true, ..Default::default() }))
 		.map(|l| contracts.push(l));
 
-	let contract: Option<Arc<listener::service_contract::ServiceContract>> = match contracts.len() {
+	let contract: Option<Arc<dyn listener::service_contract::ServiceContract>> = match contracts.len() {
 		0 => None,
 		1 => Some(contracts.pop().expect("contract.len() is 1; qed")),
 		_ => Some(Arc::new(listener::service_contract_aggregate::OnChainServiceContractAggregate::new(contracts))),
@@ -165,7 +169,7 @@ pub fn start(client: Arc<Client>, sync: Arc<SyncProvider>, miner: Arc<Miner>, se
 					key_storage: key_storage,
 				}
 			)?;
-			client.add_notify(listener.clone());
+			trusted_client.add_listener(listener.clone());
 			listener
 		}),
 		None => None,

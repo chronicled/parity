@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -19,11 +19,14 @@
 use std::sync::Arc;
 use std::collections::{BTreeSet, VecDeque};
 
-use ethcore::client::{BlockChainClient, BlockId};
+use client_traits::BlockChainClient;
 use ethcore::miner::{self, MinerService};
 use ethereum_types::{H256, U256};
 use parking_lot::Mutex;
-use types::filter::Filter as EthcoreFilter;
+use types::{
+	ids::BlockId,
+	filter::Filter as EthcoreFilter
+};
 
 use jsonrpc_core::{BoxFuture, Result};
 use jsonrpc_core::futures::{future, Future};

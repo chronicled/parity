@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -14,27 +14,26 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::str::{FromStr, from_utf8};
+use std::str::from_utf8;
 use std::{io, fs};
 use std::io::{BufReader, BufRead};
 use std::time::{Instant, Duration};
 use std::thread::sleep;
 use std::sync::Arc;
+
 use rustc_hex::FromHex;
 use hash::{keccak, KECCAK_NULL_RLP};
 use ethereum_types::{U256, H256, Address};
 use bytes::ToPretty;
 use rlp::PayloadInfo;
-use ethcore::client::{
-	Mode, DatabaseCompactionProfile, VMType, Nonce, Balance, BlockChainClient, BlockId, BlockInfo, ImportBlock, BlockChainReset
+use client_traits::{BlockChainReset, Nonce, Balance, BlockChainClient, ImportExportBlocks};
+use ethcore::{
+	client::{DatabaseCompactionProfile},
+	miner::Miner,
 };
-use ethcore::error::{ImportErrorKind, ErrorKind as EthcoreErrorKind, Error as EthcoreError};
-use ethcore::miner::Miner;
-use ethcore::verification::queue::VerifierSettings;
-use ethcore::verification::queue::kind::blocks::Unverified;
 use ethcore_service::ClientService;
 use cache::CacheConfig;
-use informant::{Informant, FullNodeInformantData, MillisecondDuration};
+use informant::{Informant, FullNodeInformantData};
 use params::{SpecType, Pruning, Switch, tracing_switch_to_bool, fatdb_switch_to_bool};
 use helpers::{to_client_config, execute_upgrades};
 use dir::Directories;
@@ -42,30 +41,13 @@ use user_defaults::UserDefaults;
 use ethcore_private_tx;
 use db;
 use ansi_term::Colour;
-
-#[derive(Debug, PartialEq)]
-pub enum DataFormat {
-	Hex,
-	Binary,
-}
-
-impl Default for DataFormat {
-	fn default() -> Self {
-		DataFormat::Binary
-	}
-}
-
-impl FromStr for DataFormat {
-	type Err = String;
-
-	fn from_str(s: &str) -> Result<Self, Self::Err> {
-		match s {
-			"binary" | "bin" => Ok(DataFormat::Binary),
-			"hex" => Ok(DataFormat::Hex),
-			x => Err(format!("Invalid format: {}", x))
-		}
-	}
-}
+use types::{
+	ids::BlockId,
+	errors::{ImportError, EthcoreError},
+	client_types::{Mode, StateResult},
+};
+use types::data_format::DataFormat;
+use verification::queue::VerifierSettings;
 
 #[derive(Debug, PartialEq)]
 pub enum BlockchainCmd {
@@ -110,7 +92,6 @@ pub struct ImportBlockchain {
 	pub compaction: DatabaseCompactionProfile,
 	pub tracing: Switch,
 	pub fat_db: Switch,
-	pub vm_type: VMType,
 	pub check_seal: bool,
 	pub with_color: bool,
 	pub verifier_settings: VerifierSettings,
@@ -224,11 +205,13 @@ fn execute_import_light(cmd: ImportBlockchain) -> Result<(), String> {
 	config.queue.verifier_settings = cmd.verifier_settings;
 
 	// initialize database.
-	let db = db::open_db(&client_path.to_str().expect("DB path could not be converted to string."),
-						 &cmd.cache_config,
-						 &cmd.compaction).map_err(|e| format!("Failed to open database: {:?}", e))?;
+	let db = db::open_db_light(
+		&client_path.to_str().expect("DB path could not be converted to string."),
+		&cmd.cache_config,
+		&cmd.compaction,
+	).map_err(|e| format!("Failed to open database: {:?}", e))?;
 
-	// TODO: could epoch signals be avilable at the end of the file?
+	// TODO: could epoch signals be available at the end of the file?
 	let fetch = ::light::client::fetch::unavailable();
 	let service = LightClientService::start(config, &spec, fetch, db, cache)
 		.map_err(|e| format!("Failed to start client: {}", e))?;
@@ -238,7 +221,7 @@ fn execute_import_light(cmd: ImportBlockchain) -> Result<(), String> {
 
 	let client = service.client();
 
-	let mut instream: Box<io::Read> = match cmd.file_path {
+	let mut instream: Box<dyn io::Read> = match cmd.file_path {
 		Some(f) => Box::new(fs::File::open(&f).map_err(|_| format!("Cannot open given file: {}", f))?),
 		None => Box::new(io::stdin()),
 	};
@@ -272,7 +255,7 @@ fn execute_import_light(cmd: ImportBlockchain) -> Result<(), String> {
 		}
 
 		match client.import_header(header) {
-			Err(EthcoreError(EthcoreErrorKind::Import(ImportErrorKind::AlreadyInChain), _)) => {
+			Err(EthcoreError::Import(ImportError::AlreadyInChain)) => {
 				trace!("Skipping block already in chain.");
 			}
 			Err(e) => {
@@ -312,13 +295,13 @@ fn execute_import_light(cmd: ImportBlockchain) -> Result<(), String> {
 	}
 	client.flush_queue();
 
-	let ms = timer.elapsed().as_milliseconds();
+	let elapsed = timer.elapsed();
 	let report = client.report();
 
 	info!("Import completed in {} seconds, {} headers, {} hdr/s",
-		ms / 1000,
+		elapsed.as_secs(),
 		report.blocks_imported,
-		(report.blocks_imported * 1000) as u64 / ms,
+		(report.blocks_imported as u128 * 1000) / elapsed.as_millis(),
 	);
 
 	Ok(())
@@ -369,7 +352,6 @@ fn execute_import(cmd: ImportBlockchain) -> Result<(), String> {
 		tracing,
 		fat_db,
 		cmd.compaction,
-		cmd.vm_type,
 		"".into(),
 		algorithm,
 		cmd.pruning_history,
@@ -406,25 +388,9 @@ fn execute_import(cmd: ImportBlockchain) -> Result<(), String> {
 
 	let client = service.client();
 
-	let mut instream: Box<io::Read> = match cmd.file_path {
+	let instream: Box<dyn io::Read> = match cmd.file_path {
 		Some(f) => Box::new(fs::File::open(&f).map_err(|_| format!("Cannot open given file: {}", f))?),
 		None => Box::new(io::stdin()),
-	};
-
-	const READAHEAD_BYTES: usize = 8;
-
-	let mut first_bytes: Vec<u8> = vec![0; READAHEAD_BYTES];
-	let mut first_read = 0;
-
-	let format = match cmd.format {
-		Some(format) => format,
-		None => {
-			first_read = instream.read(&mut first_bytes).map_err(|_| "Error reading from the file/stream.")?;
-			match first_bytes[0] {
-				0xf9 => DataFormat::Binary,
-				_ => DataFormat::Hex,
-			}
-		}
 	};
 
 	let informant = Arc::new(Informant::new(
@@ -440,49 +406,7 @@ fn execute_import(cmd: ImportBlockchain) -> Result<(), String> {
 
 	service.register_io_handler(informant).map_err(|_| "Unable to register informant handler".to_owned())?;
 
-	let do_import = |bytes| {
-		let block = Unverified::from_rlp(bytes).map_err(|_| "Invalid block rlp")?;
-		while client.queue_info().is_full() { sleep(Duration::from_secs(1)); }
-		match client.import_block(block) {
-			Err(EthcoreError(EthcoreErrorKind::Import(ImportErrorKind::AlreadyInChain), _)) => {
-				trace!("Skipping block already in chain.");
-			}
-			Err(e) => {
-				return Err(format!("Cannot import block: {:?}", e));
-			},
-			Ok(_) => {},
-		}
-		Ok(())
-	};
-
-	match format {
-		DataFormat::Binary => {
-			loop {
-				let mut bytes = if first_read > 0 {first_bytes.clone()} else {vec![0; READAHEAD_BYTES]};
-				let n = if first_read > 0 {
-					first_read
-				} else {
-					instream.read(&mut bytes).map_err(|_| "Error reading from the file/stream.")?
-				};
-				if n == 0 { break; }
-				first_read = 0;
-				let s = PayloadInfo::from(&bytes).map_err(|e| format!("Invalid RLP in the file/stream: {:?}", e))?.total();
-				bytes.resize(s, 0);
-				instream.read_exact(&mut bytes[n..]).map_err(|_| "Error reading from the file/stream.")?;
-				do_import(bytes)?;
-			}
-		}
-		DataFormat::Hex => {
-			for line in BufReader::new(instream).lines() {
-				let s = line.map_err(|_| "Error reading from the file/stream.")?;
-				let s = if first_read > 0 {from_utf8(&first_bytes).unwrap().to_owned() + &(s[..])} else {s};
-				first_read = 0;
-				let bytes = s.from_hex().map_err(|_| "Invalid hex in file/stream.")?;
-				do_import(bytes)?;
-			}
-		}
-	}
-	client.flush_queue();
+	client.import_blocks(instream, cmd.format)?;
 
 	// save user defaults
 	user_defaults.pruning = algorithm;
@@ -491,16 +415,16 @@ fn execute_import(cmd: ImportBlockchain) -> Result<(), String> {
 	user_defaults.save(&user_defaults_path)?;
 
 	let report = client.report();
-
-	let ms = timer.elapsed().as_milliseconds();
+	let elapsed = timer.elapsed();
+	let ms = timer.elapsed().as_millis();
 	info!("Import completed in {} seconds, {} blocks, {} blk/s, {} transactions, {} tx/s, {} Mgas, {} Mgas/s",
-		ms / 1000,
+		elapsed.as_secs(),
 		report.blocks_imported,
-		(report.blocks_imported * 1000) as u64 / ms,
+		(report.blocks_imported as u128 * 1000) / ms,
 		report.transactions_applied,
-		(report.transactions_applied * 1000) as u64 / ms,
+		(report.transactions_applied as u128 * 1000) / ms,
 		report.gas_processed / 1_000_000,
-		(report.gas_processed / (ms * 1000)).low_u64(),
+		report.gas_processed / (ms * 1000),
 	);
 	Ok(())
 }
@@ -564,7 +488,6 @@ fn start_client(
 		tracing,
 		fat_db,
 		compaction,
-		VMType::default(),
 		"".into(),
 		algorithm,
 		pruning_history,
@@ -611,32 +534,14 @@ fn execute_export(cmd: ExportBlockchain) -> Result<(), String> {
 		false,
 		cmd.max_round_blocks_to_import,
 	)?;
-	let format = cmd.format.unwrap_or_default();
-
 	let client = service.client();
 
-	let mut out: Box<io::Write> = match cmd.file_path {
+	let out: Box<dyn io::Write> = match cmd.file_path {
 		Some(f) => Box::new(fs::File::create(&f).map_err(|_| format!("Cannot write to file given: {}", f))?),
 		None => Box::new(io::stdout()),
 	};
 
-	let from = client.block_number(cmd.from_block).ok_or("From block could not be found")?;
-	let to = client.block_number(cmd.to_block).ok_or("To block could not be found")?;
-
-	for i in from..(to + 1) {
-		if i % 10000 == 0 {
-			info!("#{}", i);
-		}
-		let b = client.block(BlockId::Number(i)).ok_or("Error exporting incomplete chain")?.into_inner();
-		match format {
-			DataFormat::Binary => {
-				out.write(&b).map_err(|e| format!("Couldn't write to stream. Cause: {}", e))?;
-			}
-			DataFormat::Hex => {
-				out.write_fmt(format_args!("{}", b.pretty())).map_err(|e| format!("Couldn't write to stream. Cause: {}", e))?;
-			}
-		}
-	}
+	client.export_blocks(out, cmd.from_block, cmd.to_block, cmd.format)?;
 
 	info!("Export completed.");
 	Ok(())
@@ -659,7 +564,7 @@ fn execute_export_state(cmd: ExportState) -> Result<(), String> {
 
 	let client = service.client();
 
-	let mut out: Box<io::Write> = match cmd.file_path {
+	let mut out: Box<dyn io::Write> = match cmd.file_path {
 		Some(f) => Box::new(fs::File::create(&f).map_err(|_| format!("Cannot write to file given: {}", f))?),
 		None => Box::new(io::stdout()),
 	};
@@ -686,7 +591,10 @@ fn execute_export_state(cmd: ExportState) -> Result<(), String> {
 				out.write(b",").expect("Write error");
 			}
 			out.write_fmt(format_args!("\n\"0x{:x}\": {{\"balance\": \"{:x}\", \"nonce\": \"{:x}\"", account, balance, client.nonce(&account, at).unwrap_or_else(U256::zero))).expect("Write error");
-			let code = client.code(&account, at.into()).unwrap_or(None).unwrap_or_else(Vec::new);
+			let code = match client.code(&account, at.into()) {
+				StateResult::Missing => Vec::new(),
+				StateResult::Some(t) => t.unwrap_or_else(Vec::new),
+			};
 			if !code.is_empty() {
 				out.write_fmt(format_args!(", \"code_hash\": \"0x{:x}\"", keccak(&code))).expect("Write error");
 				if cmd.code {
@@ -700,7 +608,7 @@ fn execute_export_state(cmd: ExportState) -> Result<(), String> {
 					out.write_fmt(format_args!(", \"storage\": {{")).expect("Write error");
 					let mut last_storage: Option<H256> = None;
 					loop {
-						let keys = client.list_storage(at, &account, last_storage.as_ref(), 1000).ok_or("Specified block not found")?;
+						let keys = client.list_storage(at, &account, last_storage.as_ref(), Some(1000)).ok_or("Specified block not found")?;
 						if keys.is_empty() {
 							break;
 						}

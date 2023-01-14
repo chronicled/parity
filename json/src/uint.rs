@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -34,21 +34,16 @@ impl Into<U256> for Uint {
 
 impl Into<u64> for Uint {
 	fn into(self) -> u64 {
-		u64::from(self.0)
+		self.0.low_u64()
 	}
 }
 
 impl Into<usize> for Uint {
 	fn into(self) -> usize {
-		// TODO: clean it after util conversions refactored.
-		u64::from(self.0) as usize
+		self.0.low_u64() as usize
 	}
 }
-impl Into<u8> for Uint {
-	fn into(self) -> u8 {
-		u64::from(self.0) as u8
-	}
-}
+
 
 impl Serialize for Uint {
 	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -81,9 +76,14 @@ impl<'a> Visitor<'a> for UintVisitor {
 		let value = match value.len() {
 			0 => U256::from(0),
 			2 if value.starts_with("0x") => U256::from(0),
-			_ if value.starts_with("0x") => U256::from_str(&value[2..]).map_err(|e| {
-				Error::custom(format!("Invalid hex value {}: {}", value, e).as_str())
-			})?,
+			_ if value.starts_with("0x") => {
+				if value.len() > 66 {
+					return Err(Error::custom(format!("Invalid hex value {}: value too big", value).as_str()));
+				}
+				U256::from_str(&value[2..]).map_err(|e| {
+					Error::custom(format!("Invalid hex value {}: {}", value, e).as_str())
+				})?
+			},
 			_ => U256::from_dec_str(value).map_err(|e| {
 				Error::custom(format!("Invalid decimal value {}: {:?}", value, e).as_str())
 			})?
@@ -97,22 +97,24 @@ impl<'a> Visitor<'a> for UintVisitor {
 	}
 }
 
+/// Deserialize and validate that the value is non-zero
 pub fn validate_non_zero<'de, D>(d: D) -> Result<Uint, D::Error> where D: Deserializer<'de> {
 	let value = Uint::deserialize(d)?;
 
 	if value == Uint(U256::from(0)) {
-		return Err(Error::invalid_value(Unexpected::Unsigned(value.into()), &"a non-zero value"))
+		return Err(Error::invalid_value(Unexpected::Unsigned(0), &"a non-zero value"))
 	}
 
 	Ok(value)
 }
 
+/// Deserialize and validate that the value is non-zero
 pub fn validate_optional_non_zero<'de, D>(d: D) -> Result<Option<Uint>, D::Error> where D: Deserializer<'de> {
 	let value: Option<Uint> = Option::deserialize(d)?;
 
 	if let Some(value) = value {
 		if value == Uint(U256::from(0)) {
-			return Err(Error::invalid_value(Unexpected::Unsigned(value.into()), &"a non-zero value"))
+			return Err(Error::invalid_value(Unexpected::Unsigned(0), &"a non-zero value"))
 		}
 	}
 
@@ -121,9 +123,8 @@ pub fn validate_optional_non_zero<'de, D>(d: D) -> Result<Option<Uint>, D::Error
 
 #[cfg(test)]
 mod test {
-	use serde_json;
+	use super::Uint;
 	use ethereum_types::U256;
-	use uint::Uint;
 
 	#[test]
 	fn uint_deserialization() {
@@ -136,6 +137,18 @@ mod test {
 				   Uint(U256::from(0)),
 				   Uint(U256::from(0))
 		]);
+	}
+
+	#[test]
+	fn uint_deserialization_error_for_hex_too_large() {
+		let hex = format!("0x{}", "1".repeat(65));
+		let result: Result<Uint, _> = serde_json::from_str(&format!(r#""{}""#, hex));
+		let err = result.unwrap_err();
+		assert!(err.is_data());
+		assert_eq!(
+			err.to_string(),
+			format!("Invalid hex value {}: value too big at line 1 column 69", hex)
+		);
 	}
 
 	#[test]

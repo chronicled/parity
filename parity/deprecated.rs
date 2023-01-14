@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -229,6 +229,20 @@ pub fn find_deprecated(args: &Args) -> Vec<Deprecated> {
 		result.push(Deprecated::Removed("--ntp-servers"));
 	}
 
+	// Removed in 2.7.
+
+	if args.flag_whisper {
+		result.push(Deprecated::Removed("--whisper"));
+	}
+
+	if args.arg_whisper_pool_size.is_some() {
+		result.push(Deprecated::Removed("--whisper-pool-size"));
+	}
+
+	if args.arg_jsonrpc_threads.is_some() {
+		result.push(Deprecated::Removed("--jsonrpc--threads (aka processing_threads)"));
+	}
+
 	result
 }
 
@@ -261,6 +275,8 @@ mod tests {
 			args.flag_dapps_apis_all = true;
 			args.flag_fast_and_loose = true;
 			args.arg_ntp_servers = Some(Default::default());
+			args.flag_whisper = true;
+			args.arg_whisper_pool_size = Some(Default::default());
 			args
 		}), vec![
 			Deprecated::DoesNothing("--warp"),
@@ -282,6 +298,8 @@ mod tests {
 			Deprecated::Replaced("--dapps-apis-all", "--jsonrpc-apis"),
 			Deprecated::Removed("--fast-and-loose"),
 			Deprecated::Removed("--ntp-servers"),
+			Deprecated::Removed("--whisper"),
+			Deprecated::Removed("--whisper-pool-size"),
 		]);
 	}
 }

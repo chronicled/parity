@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -19,7 +19,7 @@ use std::sync::Arc;
 use crypto::DEFAULT_MAC;
 use accounts::AccountProvider;
 use ethereum_types::H256;
-use ethkey::{KeyPair, Signature, verify_public};
+use crypto::publickey::{KeyPair, Signature, verify_public};
 
 use serde_json;
 use jsonrpc_core::{IoHandler, Success};

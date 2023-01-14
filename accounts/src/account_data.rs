@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -21,7 +21,8 @@ use std::{
 	time::Instant,
 };
 
-use ethkey::{Address, Password};
+use parity_crypto::publickey::Address;
+use ethkey::Password;
 use serde_derive::{Serialize, Deserialize};
 use serde_json;
 

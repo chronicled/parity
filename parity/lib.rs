@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -41,9 +41,11 @@ extern crate toml;
 
 extern crate blooms_db;
 extern crate cli_signer;
+
+extern crate client_traits;
 extern crate common_types as types;
+extern crate engine;
 extern crate ethcore;
-extern crate ethcore_call_contract as call_contract;
 extern crate ethcore_db;
 extern crate ethcore_io as io;
 extern crate ethcore_light as light;
@@ -61,17 +63,19 @@ extern crate keccak_hash as hash;
 extern crate kvdb;
 extern crate node_filter;
 extern crate parity_bytes as bytes;
+extern crate parity_crypto;
 extern crate parity_hash_fetch as hash_fetch;
 extern crate parity_ipfs_api;
 extern crate parity_local_store as local_store;
 extern crate parity_path as path;
-extern crate parity_rabbitmq;
 extern crate parity_rpc;
 extern crate parity_runtime;
 extern crate parity_updater as updater;
 extern crate parity_version;
-extern crate parity_whisper;
 extern crate registrar;
+extern crate snapshot;
+extern crate spec;
+extern crate verification;
 
 #[macro_use]
 extern crate log as rlog;
@@ -82,16 +86,18 @@ extern crate ethcore_accounts as accounts;
 #[cfg(feature = "secretstore")]
 extern crate ethcore_secretstore;
 
+#[cfg(feature = "secretstore")]
+extern crate ethabi;
+
+#[cfg(feature = "secretstore")]
+extern crate ethcore_call_contract as call_contract;
+
 #[cfg(test)]
 #[macro_use]
 extern crate pretty_assertions;
 
 #[cfg(test)]
 extern crate tempdir;
-
-#[cfg(test)]
-#[macro_use]
-extern crate lazy_static;
 
 mod account;
 mod account_utils;
@@ -113,10 +119,9 @@ mod rpc_apis;
 mod run;
 mod secretstore;
 mod signer;
-mod snapshot;
+mod snapshot_cmd;
 mod upgrade;
 mod user_defaults;
-mod whisper;
 mod db;
 
 use std::fs::File;
@@ -194,9 +199,12 @@ pub enum ExecutionAction {
 fn execute<Cr, Rr>(
 	command: Execute,
 	logger: Arc<RotatingLogger>,
-	on_client_rq: Cr, on_updater_rq: Rr) -> Result<ExecutionAction, String>
-	where Cr: Fn(String) + 'static + Send,
-		  Rr: Fn() + 'static + Send
+	on_client_rq: Cr,
+	on_updater_rq: Rr
+) -> Result<ExecutionAction, String>
+	where
+		Cr: Fn(String) + 'static + Send,
+		Rr: Fn() + 'static + Send
 {
 	#[cfg(feature = "deadlock_detection")]
 	run_deadlock_detection_thread();
@@ -215,7 +223,7 @@ fn execute<Cr, Rr>(
 		Cmd::SignerSign { id, pwfile, port, authfile } => cli_signer::signer_sign(id, pwfile, port, authfile).map(|s| ExecutionAction::Instant(Some(s))),
 		Cmd::SignerList { port, authfile } => cli_signer::signer_list(port, authfile).map(|s| ExecutionAction::Instant(Some(s))),
 		Cmd::SignerReject { id, port, authfile } => cli_signer::signer_reject(id, port, authfile).map(|s| ExecutionAction::Instant(Some(s))),
-		Cmd::Snapshot(snapshot_cmd) => snapshot::execute(snapshot_cmd).map(|s| ExecutionAction::Instant(Some(s))),
+		Cmd::Snapshot(snapshot_cmd) => snapshot_cmd::execute(snapshot_cmd).map(|s| ExecutionAction::Instant(Some(s))),
 		Cmd::ExportHardcodedSync(export_hs_cmd) => export_hardcoded_sync::execute(export_hs_cmd).map(|s| ExecutionAction::Instant(Some(s))),
 	}
 }

@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -67,7 +67,7 @@ pub(crate) fn serde_error(expected: &str, field: Option<&str>) -> ErrorKind {
 }
 
 impl Fail for Error {
-	fn cause(&self) -> Option<&Fail> {
+	fn cause(&self) -> Option<&dyn Fail> {
 		self.inner.cause()
 	}
 

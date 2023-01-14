@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -14,13 +14,15 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
-//! Simple VM output.
+//! Log EVM instruction output data traces from a simple formatting informant.
 
-use ethcore::trace;
-use bytes::ToPretty;
+use trace;
+use parity_bytes::ToPretty;
 
-use display;
-use info as vm;
+use crate::{
+	display,
+	info as vm,
+};
 
 /// Simple formatting informant.
 #[derive(Default)]

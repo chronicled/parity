@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
-use super::{Random, Generator, KeyPair, Error};
+use parity_crypto::publickey::{Random, Generator, KeyPair, Error};
 
 /// Tries to find keypair with address starting with given prefix.
 pub struct Prefix {
@@ -37,7 +37,7 @@ impl Generator for Prefix {
 	fn generate(&mut self) -> Result<KeyPair, Error> {
 		for _ in 0..self.iterations {
 			let keypair = Random.generate()?;
-			if keypair.address().starts_with(&self.prefix) {
+			if keypair.address().as_ref().starts_with(&self.prefix) {
 				return Ok(keypair)
 			}
 		}
@@ -48,12 +48,13 @@ impl Generator for Prefix {
 
 #[cfg(test)]
 mod tests {
-	use {Generator, Prefix};
+	use Prefix;
+	use parity_crypto::publickey::Generator;
 
 	#[test]
 	fn prefix_generator() {
 		let prefix = vec![0xffu8];
 		let keypair = Prefix::new(prefix.clone(), usize::max_value()).generate().unwrap();
-		assert!(keypair.address().starts_with(&prefix));
+		assert!(keypair.address().as_bytes().starts_with(&prefix));
 	}
 }

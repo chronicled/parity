@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -18,7 +18,7 @@
 
 use std::{io, fs};
 use std::io::Write;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::path::PathBuf;
 
 use hash::keccak_buffer;
@@ -26,7 +26,7 @@ use fetch::{self, Fetch};
 use futures::{Future, IntoFuture};
 use parity_runtime::Executor;
 use urlhint::{URLHintContract, URLHint, URLHintResult};
-use registrar::{RegistrarClient, Asynchronous};
+use registrar::RegistrarClient;
 use ethereum_types::H256;
 
 /// API for fetching by hash.
@@ -37,7 +37,7 @@ pub trait HashFetch: Send + Sync + 'static {
 	/// 2. `on_done` - callback function invoked when the content is ready (or there was error during fetch)
 	///
 	/// This function may fail immediately when fetch cannot be initialized or content cannot be resolved.
-	fn fetch(&self, hash: H256, abort: fetch::Abort, on_done: Box<Fn(Result<PathBuf, Error>) + Send>);
+	fn fetch(&self, hash: H256, abort: fetch::Abort, on_done: Box<dyn Fn(Result<PathBuf, Error>) + Send>);
 }
 
 /// Hash-fetching error.
@@ -111,12 +111,12 @@ pub struct Client<F: Fetch + 'static = fetch::Client> {
 	contract: URLHintContract,
 	fetch: F,
 	executor: Executor,
-	random_path: Arc<Fn() -> PathBuf + Sync + Send>,
+	random_path: Arc<dyn Fn() -> PathBuf + Sync + Send>,
 }
 
 impl<F: Fetch + 'static> Client<F> {
 	/// Creates new instance of the `Client` given on-chain contract client, fetch service and task runner.
-	pub fn with_fetch(contract: Arc<RegistrarClient<Call=Asynchronous>>, fetch: F, executor: Executor) -> Self {
+	pub fn with_fetch(contract: Weak<dyn RegistrarClient>, fetch: F, executor: Executor) -> Self {
 		Client {
 			contract: URLHintContract::new(contract),
 			fetch: fetch,
@@ -127,12 +127,13 @@ impl<F: Fetch + 'static> Client<F> {
 }
 
 impl<F: Fetch + 'static> HashFetch for Client<F> {
-	fn fetch(&self, hash: H256, abort: fetch::Abort, on_done: Box<Fn(Result<PathBuf, Error>) + Send>) {
+	fn fetch(&self, hash: H256, abort: fetch::Abort, on_done: Box<dyn Fn(Result<PathBuf, Error>) + Send>) {
 		debug!(target: "fetch", "Fetching: {:?}", hash);
 
 		let random_path = self.random_path.clone();
 		let remote_fetch = self.fetch.clone();
 		let future = self.contract.resolve(hash)
+			.into_future()
 			.map_err(|e| { warn!("Error resolving URL: {}", e); Error::NoResolution })
 			.and_then(|maybe_url| maybe_url.ok_or(Error::NoResolution))
 			.map(|content| match content {
@@ -176,11 +177,11 @@ impl<F: Fetch + 'static> HashFetch for Client<F> {
 }
 
 fn random_temp_path() -> PathBuf {
-	use ::rand::Rng;
-	use ::std::env;
+	use rand::{Rng, rngs::OsRng, distributions::Alphanumeric};
+	use std::env;
 
-	let mut rng = ::rand::OsRng::new().expect("Reliable random source is required to work.");
-	let file: String = rng.gen_ascii_chars().take(12).collect();
+	let rng = OsRng;
+	let file: String = rng.sample_iter(&Alphanumeric).take(12).collect();
 
 	let mut path = env::temp_dir();
 	path.push(file);
@@ -195,7 +196,9 @@ mod tests {
 	use parking_lot::Mutex;
 	use parity_runtime::Executor;
 	use urlhint::tests::{FakeRegistrar, URLHINT};
-	use super::{Error, Client, HashFetch, random_temp_path};
+	use super::{Error, Client, HashFetch, random_temp_path, H256};
+	use std::str::FromStr;
+	use registrar::RegistrarClient;
 
 	fn registrar() -> FakeRegistrar {
 		let mut registrar = FakeRegistrar::new();
@@ -209,13 +212,13 @@ mod tests {
 	#[test]
 	fn should_return_error_if_hash_not_found() {
 		// given
-		let contract = Arc::new(FakeRegistrar::new());
+		let contract = Arc::new(FakeRegistrar::new()) as Arc<dyn RegistrarClient>;
 		let fetch = FakeFetch::new(None::<usize>);
-		let client = Client::with_fetch(contract.clone(), fetch, Executor::new_sync());
+		let client = Client::with_fetch(Arc::downgrade(&contract), fetch, Executor::new_sync());
 
 		// when
 		let (tx, rx) = mpsc::channel();
-		client.fetch(2.into(), Default::default(), Box::new(move |result| {
+		client.fetch(H256::from_low_u64_be(2), Default::default(), Box::new(move |result| {
 			tx.send(result).unwrap();
 		}));
 
@@ -227,13 +230,13 @@ mod tests {
 	#[test]
 	fn should_return_error_if_response_is_not_successful() {
 		// given
-		let registrar = Arc::new(registrar());
+		let registrar = Arc::new(registrar()) as Arc<dyn RegistrarClient>;
 		let fetch = FakeFetch::new(None::<usize>);
-		let client = Client::with_fetch(registrar.clone(), fetch, Executor::new_sync());
+		let client = Client::with_fetch(Arc::downgrade(&registrar), fetch, Executor::new_sync());
 
 		// when
 		let (tx, rx) = mpsc::channel();
-		client.fetch(2.into(), Default::default(), Box::new(move |result| {
+		client.fetch(H256::from_low_u64_be(2), Default::default(), Box::new(move |result| {
 			tx.send(result).unwrap();
 		}));
 
@@ -245,36 +248,36 @@ mod tests {
 	#[test]
 	fn should_return_hash_mismatch() {
 		// given
-		let registrar = Arc::new(registrar());
+		let registrar = Arc::new(registrar()) as Arc<dyn RegistrarClient>;
 		let fetch = FakeFetch::new(Some(1));
-		let mut client = Client::with_fetch(registrar.clone(), fetch, Executor::new_sync());
+		let mut client = Client::with_fetch(Arc::downgrade(&registrar), fetch, Executor::new_sync());
 		let path = random_temp_path();
 		let path2 = path.clone();
 		client.random_path = Arc::new(move || path2.clone());
 
 		// when
 		let (tx, rx) = mpsc::channel();
-		client.fetch(2.into(), Default::default(), Box::new(move |result| {
+		client.fetch(H256::from_low_u64_be(2), Default::default(), Box::new(move |result| {
 			tx.send(result).unwrap();
 		}));
 
 		// then
 		let result = rx.recv().unwrap();
-		let hash = "0x2be00befcf008bc0e7d9cdefc194db9c75352e8632f48498b5a6bfce9f02c88e".into();
-		assert_eq!(result.unwrap_err(), Error::HashMismatch { expected: 2.into(), got: hash });
+		let hash = H256::from_str("2be00befcf008bc0e7d9cdefc194db9c75352e8632f48498b5a6bfce9f02c88e").unwrap();
+		assert_eq!(result.unwrap_err(), Error::HashMismatch { expected: H256::from_low_u64_be(2), got: hash });
 		assert!(!path.exists(), "Temporary file should be removed.");
 	}
 
 	#[test]
 	fn should_return_path_if_hash_matches() {
 		// given
-		let registrar = Arc::new(registrar());
+		let registrar = Arc::new(registrar()) as Arc<dyn RegistrarClient>;
 		let fetch = FakeFetch::new(Some(1));
-		let client = Client::with_fetch(registrar.clone(), fetch, Executor::new_sync());
+		let client = Client::with_fetch(Arc::downgrade(&registrar), fetch, Executor::new_sync());
 
 		// when
 		let (tx, rx) = mpsc::channel();
-		client.fetch("0x2be00befcf008bc0e7d9cdefc194db9c75352e8632f48498b5a6bfce9f02c88e".into(),
+		client.fetch(H256::from_str("2be00befcf008bc0e7d9cdefc194db9c75352e8632f48498b5a6bfce9f02c88e").unwrap(),
 			Default::default(),
 			Box::new(move |result| { tx.send(result).unwrap(); }));
 

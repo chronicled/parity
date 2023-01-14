@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -15,8 +15,8 @@
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::str;
-use std::num::NonZeroU32;
-use ethkey::{Password, Secret};
+use crypto::publickey::Secret;
+use ethkey::Password;
 use {json, Error, crypto};
 use crypto::Keccak256;
 use random::Random;
@@ -74,12 +74,12 @@ impl From<Crypto> for String {
 
 impl Crypto {
 	/// Encrypt account secret
-	pub fn with_secret(secret: &Secret, password: &Password, iterations: NonZeroU32) -> Result<Self, crypto::Error> {
-		Crypto::with_plain(&*secret, password, iterations)
+	pub fn with_secret(secret: &Secret, password: &Password, iterations: u32) -> Result<Self, crypto::Error> {
+		Crypto::with_plain(secret.as_ref(), password, iterations)
 	}
 
 	/// Encrypt custom plain data
-	pub fn with_plain(plain: &[u8], password: &Password, iterations: NonZeroU32) -> Result<Self, crypto::Error> {
+	pub fn with_plain(plain: &[u8], password: &Password, iterations: u32) -> Result<Self, crypto::Error> {
 		let salt: [u8; 32] = Random::random();
 		let iv: [u8; 16] = Random::random();
 
@@ -121,7 +121,7 @@ impl Crypto {
 		}
 
 		let secret = self.do_decrypt(password, 32)?;
-		Ok(Secret::from_unsafe_slice(&secret)?)
+		Ok(Secret::import_key(&secret)?)
 	}
 
 	/// Try to decrypt and return result as is
@@ -159,18 +159,14 @@ impl Crypto {
 
 #[cfg(test)]
 mod tests {
-	use ethkey::{Generator, Random};
-	use super::{Crypto, Error, NonZeroU32};
-
-	lazy_static! {
-		static ref ITERATIONS: NonZeroU32 = NonZeroU32::new(10240).expect("10240 > 0; qed");
-	}
+	use crypto::publickey::{Generator, Random};
+	use super::{Crypto, Error};
 
 	#[test]
 	fn crypto_with_secret_create() {
 		let keypair = Random.generate().unwrap();
 		let passwd = "this is sparta".into();
-		let crypto = Crypto::with_secret(keypair.secret(), &passwd, *ITERATIONS).unwrap();
+		let crypto = Crypto::with_secret(keypair.secret(), &passwd, 10240).unwrap();
 		let secret = crypto.secret(&passwd).unwrap();
 		assert_eq!(keypair.secret(), &secret);
 	}
@@ -178,7 +174,7 @@ mod tests {
 	#[test]
 	fn crypto_with_secret_invalid_password() {
 		let keypair = Random.generate().unwrap();
-		let crypto = Crypto::with_secret(keypair.secret(), &"this is sparta".into(), *ITERATIONS).unwrap();
+		let crypto = Crypto::with_secret(keypair.secret(), &"this is sparta".into(), 10240).unwrap();
 		assert_matches!(crypto.secret(&"this is sparta!".into()), Err(Error::InvalidPassword))
 	}
 
@@ -186,7 +182,7 @@ mod tests {
 	fn crypto_with_null_plain_data() {
 		let original_data = b"";
 		let passwd = "this is sparta".into();
-		let crypto = Crypto::with_plain(&original_data[..], &passwd, *ITERATIONS).unwrap();
+		let crypto = Crypto::with_plain(&original_data[..], &passwd, 10240).unwrap();
 		let decrypted_data = crypto.decrypt(&passwd).unwrap();
 		assert_eq!(original_data[..], *decrypted_data);
 	}
@@ -195,7 +191,7 @@ mod tests {
 	fn crypto_with_tiny_plain_data() {
 		let original_data = b"{}";
 		let passwd = "this is sparta".into();
-		let crypto = Crypto::with_plain(&original_data[..], &passwd, *ITERATIONS).unwrap();
+		let crypto = Crypto::with_plain(&original_data[..], &passwd, 10240).unwrap();
 		let decrypted_data = crypto.decrypt(&passwd).unwrap();
 		assert_eq!(original_data[..], *decrypted_data);
 	}
@@ -204,7 +200,7 @@ mod tests {
 	fn crypto_with_huge_plain_data() {
 		let original_data: Vec<_> = (1..65536).map(|i| (i % 256) as u8).collect();
 		let passwd = "this is sparta".into();
-		let crypto = Crypto::with_plain(&original_data, &passwd, *ITERATIONS).unwrap();
+		let crypto = Crypto::with_plain(&original_data, &passwd, 10240).unwrap();
 		let decrypted_data = crypto.decrypt(&passwd).unwrap();
 		assert_eq!(&original_data, &decrypted_data);
 	}

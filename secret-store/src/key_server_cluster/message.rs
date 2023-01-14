@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,7 +16,7 @@
 
 use std::fmt;
 use std::collections::{BTreeSet, BTreeMap};
-use ethkey::Secret;
+use crypto::publickey::Secret;
 use key_server_cluster::SessionId;
 use super::{Error, SerializableH256, SerializablePublic, SerializableSecret,
 	SerializableSignature, SerializableMessageHash, SerializableRequester, SerializableAddress};
@@ -240,7 +240,7 @@ pub enum KeyVersionNegotiationMessage {
 pub struct NodePublicKey {
 	/// Node identifier (aka node public key).
 	pub node_id: MessageNodeId,
-	/// Random data, which must be signed by peer to prove that he owns the corresponding private key. 
+	/// Random data, which must be signed by peer to prove that he owns the corresponding private key.
 	pub confirmation_plain: SerializableH256,
 	/// The same random `confirmation_plain`, signed with one-time session key.
 	pub confirmation_signed_session: SerializableSignature,
@@ -633,7 +633,7 @@ pub struct EcdsaRequestPartialSignature {
 	pub session_nonce: u64,
 	/// Request id.
 	pub request_id: SerializableSecret,
-	///
+	/// ECDSA reversed-nonce coefficient
 	pub inversed_nonce_coeff: SerializableSecret,
 	/// Message hash.
 	pub message_hash: SerializableMessageHash,
@@ -970,12 +970,8 @@ pub struct KeyShareCommon {
 	pub session: MessageSessionId,
 	/// Session-level nonce.
 	pub session_nonce: u64,
-	/// Key threshold.
-	pub threshold: usize,
-	/// Author of key share entry.
-	pub author: SerializableAddress,
-	/// Joint public.
-	pub joint_public: SerializablePublic,
+	/// Common key data.
+	pub key_common: CommonKeyData,
 	/// Common (shared) encryption point.
 	pub common_point: Option<SerializablePublic>,
 	/// Encrypted point.
@@ -1026,10 +1022,21 @@ pub struct KeyVersions {
 	pub sub_session: SerializableSecret,
 	/// Session-level nonce.
 	pub session_nonce: u64,
-	/// Key threshold.
-	pub threshold: Option<usize>,
+	/// Common key data, shared by all versions.
+	pub key_common: Option<CommonKeyData>,
 	/// Key versions.
 	pub versions: Vec<SerializableH256>,
+}
+
+/// Common key data.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommonKeyData {
+	/// Key threshold.
+	pub threshold: usize,
+	/// Author of the key entry.
+	pub author: SerializableAddress,
+	/// Joint public.
+	pub public: SerializablePublic,
 }
 
 /// When key versions error has occured.

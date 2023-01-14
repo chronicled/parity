@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -18,10 +18,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ethcore::client::DatabaseCompactionProfile;
-use ethcore::spec::{SpecParams, OptimizeFor};
+use spec::SpecParams;
 use light::client::fetch::Unavailable as UnavailableDataFetcher;
 use light::Cache as LightDataCache;
-
+use types::engines::OptimizeFor;
 use params::{SpecType, Pruning};
 use helpers::execute_upgrades;
 use dir::Directories;
@@ -86,9 +86,11 @@ pub fn execute(cmd: ExportHsyncCmd) -> Result<String, String> {
 	config.queue.max_mem_use = cmd.cache_config.queue() as usize * 1024 * 1024;
 
 	// initialize database.
-	let db = db::open_db(&db_dirs.client_path(algorithm).to_str().expect("DB path could not be converted to string."),
-						 &cmd.cache_config,
-						 &cmd.compaction).map_err(|e| format!("Failed to open database {:?}", e))?;
+	let db = db::open_db_light(
+		&db_dirs.client_path(algorithm).to_str().expect("DB path could not be converted to string."),
+		&cmd.cache_config,
+		&cmd.compaction,
+	).map_err(|e| format!("Failed to open database {:?}", e))?;
 
 	let service = light_client::Service::start(config, &spec, UnavailableDataFetcher, db, cache)
 		.map_err(|e| format!("Error starting light client: {}", e))?;
@@ -96,7 +98,7 @@ pub fn execute(cmd: ExportHsyncCmd) -> Result<String, String> {
 	let hs = service.client().read_hardcoded_sync()
 		.map_err(|e| format!("Error reading hardcoded sync: {}", e))?;
 	if let Some(hs) = hs {
-		Ok(::serde_json::to_string_pretty(&hs.to_json()).expect("generated JSON is always valid"))
+		Ok(hs.to_string())
 	} else {
 		Err("Error: cannot generate hardcoded sync because the database is empty.".into())
 	}

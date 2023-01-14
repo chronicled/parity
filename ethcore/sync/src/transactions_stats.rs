@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -14,16 +14,18 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
-use api::TransactionStats;
 use std::hash::BuildHasher;
 use std::collections::{HashSet, HashMap};
+
+use crate::api::TransactionStats;
+
 use ethereum_types::{H256, H512};
 use fastmap::H256FastMap;
-use types::BlockNumber;
+use common_types::BlockNumber;
 
 type NodeId = H512;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, MallocSizeOf)]
 pub struct Stats {
 	first_seen: BlockNumber,
 	propagated_to: HashMap<NodeId, usize>,
@@ -50,7 +52,7 @@ impl<'a> From<&'a Stats> for TransactionStats {
 	}
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, MallocSizeOf)]
 pub struct TransactionsStats {
 	pending_transactions: H256FastMap<Stats>,
 }
@@ -89,17 +91,17 @@ impl TransactionsStats {
 
 #[cfg(test)]
 mod tests {
-
 	use std::collections::{HashMap, HashSet};
-	use super::{Stats, TransactionsStats};
+	use super::{Stats, TransactionsStats, NodeId, H256};
+	use macros::hash_map;
 
 	#[test]
 	fn should_keep_track_of_propagations() {
 		// given
 		let mut stats = TransactionsStats::default();
-		let hash = 5.into();
-		let enodeid1 = 2.into();
-		let enodeid2 = 5.into();
+		let hash = H256::from_low_u64_be(5);
+		let enodeid1 = NodeId::from_low_u64_be(2);
+		let enodeid2 = NodeId::from_low_u64_be(5);
 
 		// when
 		stats.propagated(&hash, Some(enodeid1), 5);
@@ -121,8 +123,8 @@ mod tests {
 	fn should_remove_hash_from_tracking() {
 		// given
 		let mut stats = TransactionsStats::default();
-		let hash = 5.into();
-		let enodeid1 = 5.into();
+		let hash = H256::from_low_u64_be(5);
+		let enodeid1 = NodeId::from_low_u64_be(5);
 		stats.propagated(&hash, Some(enodeid1), 10);
 
 		// when

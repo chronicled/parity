@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -128,6 +128,7 @@ impl<'a, 'view> Iterator for ViewRlpIterator<'a, 'view> {
 }
 
 #[macro_export]
+/// Create a view into RLP-data
 macro_rules! view {
 	($view: ident, $bytes: expr) => {
 		$view::new($crate::views::ViewRlp::new($bytes, file!(), line!()))

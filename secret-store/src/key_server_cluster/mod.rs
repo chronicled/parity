@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,7 +16,7 @@
 
 use super::types::ServerKeyId;
 
-pub use super::traits::NodeKeyPair;
+pub use super::blockchain::SigningKeyPair;
 pub use super::types::{Error, NodeId, Requester, EncryptedDocumentKeyShadow};
 pub use super::acl_storage::AclStorage;
 pub use super::key_storage::{KeyStorage, DocumentKeyShare, DocumentKeyShareVersion};
@@ -25,7 +25,7 @@ pub use super::serialization::{SerializableSignature, SerializableH256, Serializ
 	SerializableRequester, SerializableMessageHash, SerializableAddress};
 pub use self::cluster::{new_network_cluster, ClusterCore, ClusterConfiguration, ClusterClient};
 pub use self::cluster_connections_net::NetConnectionsManagerConfig;
-pub use self::cluster_sessions::{ClusterSession, ClusterSessionsListener};
+pub use self::cluster_sessions::{ClusterSession, ClusterSessionsListener, WaitableSession};
 #[cfg(test)]
 pub use self::cluster::tests::DummyClusterClient;
 

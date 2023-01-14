@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -20,7 +20,7 @@ use bytes::Bytes;
 use hash::{keccak, KECCAK_EMPTY};
 use ethjson;
 
-use call_type::CallType;
+use action_type::ActionType;
 
 use std::sync::Arc;
 
@@ -84,10 +84,12 @@ pub struct ActionParams {
 	pub value: ActionValue,
 	/// Code being executed.
 	pub code: Option<Arc<Bytes>>,
+	/// Code version being executed.
+	pub code_version: U256,
 	/// Input data.
 	pub data: Option<Bytes>,
-	/// Type of call
-	pub call_type: CallType,
+	/// Type of action (e.g. CALL, DELEGATECALL, CREATE, etc.)
+	pub action_type: ActionType,
 	/// Param types encoding
 	pub params_type: ParamsType,
 }
@@ -96,17 +98,18 @@ impl Default for ActionParams {
 	/// Returns default ActionParams initialized with zeros
 	fn default() -> ActionParams {
 		ActionParams {
-			code_address: Address::new(),
+			code_address: Address::zero(),
 			code_hash: Some(KECCAK_EMPTY),
-			address: Address::new(),
-			sender: Address::new(),
-			origin: Address::new(),
+			address: Address::zero(),
+			sender: Address::zero(),
+			origin: Address::zero(),
 			gas: U256::zero(),
 			gas_price: U256::zero(),
 			value: ActionValue::Transfer(U256::zero()),
 			code: None,
+			code_version: U256::zero(),
 			data: None,
-			call_type: CallType::None,
+			action_type: ActionType::Create,
 			params_type: ParamsType::Separate,
 		}
 	}
@@ -116,17 +119,18 @@ impl From<ethjson::vm::Transaction> for ActionParams {
 	fn from(t: ethjson::vm::Transaction) -> Self {
 		let address: Address = t.address.into();
 		ActionParams {
-			code_address: Address::new(),
+			code_address: Address::zero(),
 			code_hash: Some(keccak(&*t.code)),
 			address: address,
 			sender: t.sender.into(),
 			origin: t.origin.into(),
 			code: Some(Arc::new(t.code.into())),
+			code_version: t.code_version.into(),
 			data: Some(t.data.into()),
 			gas: t.gas.into(),
 			gas_price: t.gas_price.into(),
 			value: ActionValue::Transfer(t.value.into()),
-			call_type: match address.is_zero() { true => CallType::None, false => CallType::Call },	// TODO @debris is this correct?
+			action_type: ActionType::Call,
 			params_type: ParamsType::Separate,
 		}
 	}

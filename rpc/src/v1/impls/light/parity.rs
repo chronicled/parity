@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -21,11 +21,13 @@ use std::collections::BTreeMap;
 use version::version_data;
 
 use crypto::DEFAULT_MAC;
-use ethkey::{crypto::ecies, Brain, Generator};
+use ethkey::Brain;
+use crypto::publickey::{Generator, ecies};
 use ethstore::random_phrase;
 use sync::{LightSyncInfo, LightSyncProvider, LightNetworkDispatcher, ManageNetwork};
 use updater::VersionInfo as UpdaterVersionInfo;
 use ethereum_types::{H64, H160, H256, H512, U64, U256};
+use ethcore::miner::FilterOptions;
 use ethcore_logger::RotatingLogger;
 
 use jsonrpc_core::{Result, BoxFuture};
@@ -47,6 +49,8 @@ use v1::types::{
 	Log, Filter,
 };
 use Host;
+use v1::helpers::errors::light_unimplemented;
+use v1::types::block_number_to_id;
 
 /// Parity implementation for light client.
 pub struct ParityClient<S, OD>
@@ -160,12 +164,7 @@ where
 	}
 
 	fn registry_address(&self) -> Result<Option<H160>> {
-		let reg = self.light_dispatch.client.engine().params().registrar;
-		if reg == Default::default() {
-			Ok(None)
-		} else {
-			Ok(Some(reg))
-		}
+		Ok(self.light_dispatch.client.engine().params().registrar)
 	}
 
 	fn rpc_settings(&self) -> Result<RpcSettings> {
@@ -205,7 +204,7 @@ where
 		Err(errors::light_unimplemented(None))
 	}
 
-	fn list_storage_keys(&self, _: H160, _: u64, _: Option<H256>, _: Option<BlockNumber>) -> Result<Option<Vec<H256>>> {
+	fn list_storage_keys(&self, _: H160, _: Option<u64>, _: Option<H256>, _: Option<BlockNumber>) -> Result<Option<Vec<H256>>> {
 		Err(errors::light_unimplemented(None))
 	}
 
@@ -215,7 +214,7 @@ where
 			.map(Into::into)
 	}
 
-	fn pending_transactions(&self, limit: Option<usize>) -> Result<Vec<Transaction>> {
+	fn pending_transactions(&self, limit: Option<usize>, _filter: Option<FilterOptions>) -> Result<Vec<Transaction>> {
 		let txq = self.light_dispatch.transaction_queue.read();
 		let chain_info = self.light_dispatch.client.chain_info();
 		Ok(
@@ -406,5 +405,17 @@ where
 
 	fn verify_signature(&self, is_prefixed: bool, message: Bytes, r: H256, s: H256, v: U64) -> Result<RecoveredAccount> {
 		verify_signature(is_prefixed, message, r, s, v, self.light_dispatch.client.signing_chain_id())
+	}
+
+	fn get_raw_block_by_number(&self, block: BlockNumber) -> BoxFuture<Option<Bytes>> {
+		Box::new(
+			self.fetcher()
+				.block(block_number_to_id(block))
+				.map(|block| Some(Bytes::from(block.raw().to_vec())))
+		)
+	}
+
+	fn submit_raw_block(&self, _block: Bytes) -> Result<H256> {
+		Err(light_unimplemented(None))
 	}
 }

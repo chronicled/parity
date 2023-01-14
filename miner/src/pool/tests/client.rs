@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -101,6 +101,12 @@ impl TestClient {
 impl pool::client::Client for TestClient {
 	fn transaction_already_included(&self, _hash: &H256) -> bool {
 		false
+	}
+
+	fn verify_transaction_basic(&self, _tx: &UnverifiedTransaction)
+		-> Result<(), transaction::Error>
+	{
+		Ok(())
 	}
 
 	fn verify_transaction(&self, tx: UnverifiedTransaction)

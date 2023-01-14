@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -1507,9 +1507,7 @@ pub mod execution {
 		fn decode(rlp: &Rlp) -> Result<Self, DecoderError> {
 			let mut items = Vec::new();
 			for raw_item in rlp.iter() {
-				let mut item = DBValue::new();
-				item.append_slice(raw_item.data()?);
-				items.push(item);
+				items.push(raw_item.data()?.to_vec());
 			}
 
 			Ok(Response { items })
@@ -1648,7 +1646,7 @@ mod tests {
 
 	#[test]
 	fn hash_or_number_roundtrip() {
-		let hash = HashOrNumber::Hash(H256::default());
+		let hash = HashOrNumber::Hash(H256::zero());
 		let number = HashOrNumber::Number(5);
 
 		check_roundtrip(hash);
@@ -1808,7 +1806,7 @@ mod tests {
 		let full_req = Request::Storage(req.clone());
 		let res = StorageResponse {
 			proof: vec![vec![1, 2, 3], vec![4, 5, 6]],
-			value: H256::default(),
+			value: H256::zero(),
 		};
 		let full_res = Response::Storage(res.clone());
 
@@ -1839,8 +1837,6 @@ mod tests {
 
 	#[test]
 	fn execution_roundtrip() {
-		use kvdb::DBValue;
-
 		let req = IncompleteExecutionRequest {
 			block_hash: Field::Scalar(Default::default()),
 			from: Default::default(),
@@ -1852,13 +1848,7 @@ mod tests {
 		};
 
 		let full_req = Request::Execution(req.clone());
-		let res = ExecutionResponse {
-			items: vec![DBValue::new(), {
-				let mut value = DBValue::new();
-				value.append_slice(&[1, 1, 1, 2, 3]);
-				value
-			}],
-		};
+		let res = ExecutionResponse { items: vec![vec![], vec![1, 1, 1, 2, 3]] };
 		let full_res = Response::Execution(res.clone());
 
 		check_roundtrip(req);
@@ -1909,7 +1899,7 @@ mod tests {
 				code_hash: Default::default(),
 				storage_root: Default::default()
 			}),
-			Response::Storage(StorageResponse { proof: vec![], value: H256::default() }),
+			Response::Storage(StorageResponse { proof: vec![], value: H256::zero() }),
 			Response::Code(CodeResponse { code: vec![1, 2, 3, 4, 5] }),
 			Response::Execution(ExecutionResponse { items: vec![] }),
 		];

@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -15,6 +15,8 @@
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 extern crate ansi_term;
+extern crate common_types;
+extern crate client_traits;
 extern crate ethcore;
 extern crate ethcore_blockchain as blockchain;
 extern crate ethcore_io as io;
@@ -22,9 +24,9 @@ extern crate ethcore_private_tx;
 extern crate ethcore_sync as sync;
 extern crate ethereum_types;
 extern crate kvdb;
+extern crate spec;
+extern crate snapshot;
 
-#[macro_use]
-extern crate error_chain;
 #[macro_use]
 extern crate log;
 #[macro_use]
@@ -35,12 +37,9 @@ extern crate ethcore_db;
 #[cfg(test)]
 extern crate tempdir;
 
-mod error;
 mod service;
-mod stop_guard;
 
 #[cfg(test)]
 extern crate kvdb_rocksdb;
 
-pub use error::{Error, ErrorKind};
 pub use service::{ClientService, PrivateTxService};

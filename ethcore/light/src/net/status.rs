@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -382,7 +382,7 @@ mod tests {
 			protocol_version: 1,
 			network_id: 1,
 			head_td: U256::default(),
-			head_hash: H256::default(),
+			head_hash: H256::zero(),
 			head_num: 10,
 			genesis_hash: H256::zero(),
 			last_head: None,
@@ -417,7 +417,7 @@ mod tests {
 			protocol_version: 1,
 			network_id: 1,
 			head_td: U256::default(),
-			head_hash: H256::default(),
+			head_hash: H256::zero(),
 			head_num: 10,
 			genesis_hash: H256::zero(),
 			last_head: None,
@@ -452,7 +452,7 @@ mod tests {
 			protocol_version: 1,
 			network_id: 1,
 			head_td: U256::default(),
-			head_hash: H256::default(),
+			head_hash: H256::zero(),
 			head_num: 10,
 			genesis_hash: H256::zero(),
 			last_head: None,
@@ -550,7 +550,7 @@ mod tests {
 			protocol_version: 1,
 			network_id: 1,
 			head_td: U256::default(),
-			head_hash: H256::default(),
+			head_hash: H256::zero(),
 			head_num: 10,
 			genesis_hash: H256::zero(),
 			last_head: None,

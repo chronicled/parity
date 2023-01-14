@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -37,14 +37,14 @@ use v1::types::{
 
 /// Implementation of functions that require signing when no trusted signer is used.
 pub struct SigningUnsafeClient<D> {
-	accounts: Arc<dispatch::Accounts>,
+	accounts: Arc<dyn dispatch::Accounts>,
 	dispatcher: D,
 	deprecation_notice: DeprecationNotice,
 }
 
 impl<D: Dispatcher + 'static> SigningUnsafeClient<D> {
 	/// Creates new SigningUnsafeClient.
-	pub fn new(accounts: &Arc<dispatch::Accounts>, dispatcher: D) -> Self {
+	pub fn new(accounts: &Arc<dyn dispatch::Accounts>, dispatcher: D) -> Self {
 		SigningUnsafeClient {
 			accounts: accounts.clone(),
 			dispatcher,

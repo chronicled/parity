@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -14,14 +14,19 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
-use block_sync::BlockRequest;
+use std::time::Instant;
+
+use crate::{
+	block_sync::BlockRequest,
+	sync_io::SyncIo
+};
+
 use bytes::Bytes;
 use ethereum_types::H256;
+use log::{debug, trace, warn};
 use network::{PeerId};
 use rlp::RlpStream;
-use std::time::Instant;
-use sync_io::SyncIo;
-use types::BlockNumber;
+use common_types::BlockNumber;
 
 use super::sync_packet::SyncPacket;
 use super::sync_packet::SyncPacket::{
@@ -30,6 +35,7 @@ use super::sync_packet::SyncPacket::{
 	GetReceiptsPacket,
 	GetSnapshotManifestPacket,
 	GetSnapshotDataPacket,
+	GetPrivateStatePacket,
 };
 
 use super::{
@@ -43,7 +49,7 @@ pub struct SyncRequester;
 
 impl SyncRequester {
 	/// Perform block download request`
-	pub fn request_blocks(sync: &mut ChainSync, io: &mut SyncIo, peer_id: PeerId, request: BlockRequest, block_set: BlockSet) {
+	pub fn request_blocks(sync: &mut ChainSync, io: &mut dyn SyncIo, peer_id: PeerId, request: BlockRequest, block_set: BlockSet) {
 		match request {
 			BlockRequest::Headers { start, count, skip } => {
 				SyncRequester::request_headers_by_hash(sync, io, peer_id, &start, count, skip, false, block_set);
@@ -58,7 +64,7 @@ impl SyncRequester {
 	}
 
 	/// Request block bodies from a peer
-	fn request_bodies(sync: &mut ChainSync, io: &mut SyncIo, peer_id: PeerId, hashes: Vec<H256>, set: BlockSet) {
+	fn request_bodies(sync: &mut ChainSync, io: &mut dyn SyncIo, peer_id: PeerId, hashes: Vec<H256>, set: BlockSet) {
 		let mut rlp = RlpStream::new_list(hashes.len());
 		trace!(target: "sync", "{} <- GetBlockBodies: {} entries starting from {:?}, set = {:?}", peer_id, hashes.len(), hashes.first(), set);
 		for h in &hashes {
@@ -71,7 +77,7 @@ impl SyncRequester {
 	}
 
 	/// Request headers from a peer by block number
-	pub fn request_fork_header(sync: &mut ChainSync, io: &mut SyncIo, peer_id: PeerId, n: BlockNumber) {
+	pub fn request_fork_header(sync: &mut ChainSync, io: &mut dyn SyncIo, peer_id: PeerId, n: BlockNumber) {
 		trace!(target: "sync", "{} <- GetForkHeader: at {}", peer_id, n);
 		let mut rlp = RlpStream::new_list(4);
 		rlp.append(&n);
@@ -81,11 +87,11 @@ impl SyncRequester {
 		SyncRequester::send_request(sync, io, peer_id, PeerAsking::ForkHeader, GetBlockHeadersPacket, rlp.out());
 	}
 
-	/// Find some headers or blocks to download for a peer.
-	pub fn request_snapshot_data(sync: &mut ChainSync, io: &mut SyncIo, peer_id: PeerId) {
+	/// Find some headers or blocks to download from a peer.
+	pub fn request_snapshot_data(sync: &mut ChainSync, io: &mut dyn SyncIo, peer_id: PeerId) {
 		// find chunk data to download
 		if let Some(hash) = sync.snapshot.needed_chunk() {
-			if let Some(ref mut peer) = sync.peers.get_mut(&peer_id) {
+			if let Some(mut peer) = sync.peers.get_mut(&peer_id) {
 				peer.asking_snapshot_data = Some(hash.clone());
 			}
 			SyncRequester::request_snapshot_chunk(sync, io, peer_id, &hash);
@@ -93,14 +99,22 @@ impl SyncRequester {
 	}
 
 	/// Request snapshot manifest from a peer.
-	pub fn request_snapshot_manifest(sync: &mut ChainSync, io: &mut SyncIo, peer_id: PeerId) {
-		trace!(target: "sync", "{} <- GetSnapshotManifest", peer_id);
-		let rlp = RlpStream::new_list(0);
-		SyncRequester::send_request(sync, io, peer_id, PeerAsking::SnapshotManifest, GetSnapshotManifestPacket, rlp.out());
+	pub fn request_snapshot_manifest(sync: &mut ChainSync, io: &mut dyn SyncIo, peer_id: PeerId) {
+		trace!(target: "sync", "{}: requesting a snapshot manifest", peer_id);
+		SyncRequester::send_request(sync, io, peer_id, PeerAsking::SnapshotManifest, GetSnapshotManifestPacket, rlp::EMPTY_LIST_RLP.to_vec());
+	}
+
+	pub fn request_private_state(sync: &mut ChainSync, io: &mut dyn SyncIo, peer_id: PeerId, hash: &H256) {
+		trace!(target: "privatetx", "{} <- GetPrivateStatePacket", peer_id);
+		let mut rlp = RlpStream::new_list(1);
+		rlp.append(hash);
+		SyncRequester::send_request(sync, io, peer_id, PeerAsking::PrivateState, GetPrivateStatePacket, rlp.out());
+		let peer = sync.peers.get_mut(&peer_id).expect("peer_id may originate either from on_packet, where it is already validated or from enumerating self.peers. qed");
+		peer.asking_private_state = Some(hash.clone());
 	}
 
 	/// Request headers from a peer by block hash
-	fn request_headers_by_hash(sync: &mut ChainSync, io: &mut SyncIo, peer_id: PeerId, h: &H256, count: u64, skip: u64, reverse: bool, set: BlockSet) {
+	fn request_headers_by_hash(sync: &mut ChainSync, io: &mut dyn SyncIo, peer_id: PeerId, h: &H256, count: u64, skip: u64, reverse: bool, set: BlockSet) {
 		trace!(target: "sync", "{} <- GetBlockHeaders: {} entries starting from {}, set = {:?}", peer_id, count, h, set);
 		let mut rlp = RlpStream::new_list(4);
 		rlp.append(h);
@@ -114,7 +128,7 @@ impl SyncRequester {
 	}
 
 	/// Request block receipts from a peer
-	fn request_receipts(sync: &mut ChainSync, io: &mut SyncIo, peer_id: PeerId, hashes: Vec<H256>, set: BlockSet) {
+	fn request_receipts(sync: &mut ChainSync, io: &mut dyn SyncIo, peer_id: PeerId, hashes: Vec<H256>, set: BlockSet) {
 		let mut rlp = RlpStream::new_list(hashes.len());
 		trace!(target: "sync", "{} <- GetBlockReceipts: {} entries starting from {:?}, set = {:?}", peer_id, hashes.len(), hashes.first(), set);
 		for h in &hashes {
@@ -127,7 +141,7 @@ impl SyncRequester {
 	}
 
 	/// Request snapshot chunk from a peer.
-	fn request_snapshot_chunk(sync: &mut ChainSync, io: &mut SyncIo, peer_id: PeerId, chunk: &H256) {
+	fn request_snapshot_chunk(sync: &mut ChainSync, io: &mut dyn SyncIo, peer_id: PeerId, chunk: &H256) {
 		trace!(target: "sync", "{} <- GetSnapshotData {:?}", peer_id, chunk);
 		let mut rlp = RlpStream::new_list(1);
 		rlp.append(chunk);
@@ -135,7 +149,7 @@ impl SyncRequester {
 	}
 
 	/// Generic request sender
-	fn send_request(sync: &mut ChainSync, io: &mut SyncIo, peer_id: PeerId, asking: PeerAsking, packet_id: SyncPacket, packet: Bytes) {
+	fn send_request(sync: &mut ChainSync, io: &mut dyn SyncIo, peer_id: PeerId, asking: PeerAsking, packet_id: SyncPacket, packet: Bytes) {
 		if let Some(ref mut peer) = sync.peers.get_mut(&peer_id) {
 			if peer.asking != PeerAsking::Nothing {
 				warn!(target:"sync", "Asking {:?} while requesting {:?}", peer.asking, asking);

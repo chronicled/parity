@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -28,7 +28,7 @@ pub struct SessionsQueue {
 
 impl SessionsQueue {
 	/// Create new sessions queue.
-	pub fn new(key_storage: &Arc<KeyStorage>, unknown_sessions: BTreeSet<SessionId>) -> Self {
+	pub fn new(key_storage: &Arc<dyn KeyStorage>, unknown_sessions: BTreeSet<SessionId>) -> Self {
 		// TODO [Opt]:
 		// 1) known sessions - change to iter
 		// 2) unknown sesions - request chunk-by-chunk

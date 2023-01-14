@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,29 +16,33 @@
 
 //! Contract for private transactions tests.
 
+extern crate client_traits;
 extern crate common_types as types;
 extern crate env_logger;
 extern crate ethcore;
 extern crate ethcore_io;
 extern crate ethcore_private_tx;
-extern crate ethkey;
+extern crate parity_crypto;
 extern crate keccak_hash as hash;
 extern crate rustc_hex;
+extern crate machine;
+extern crate spec;
 
 #[macro_use]
 extern crate log;
 
 use std::sync::Arc;
+use std::str::FromStr;
 use rustc_hex::{FromHex, ToHex};
-
 use types::ids::BlockId;
 use types::transaction::{Transaction, Action};
-use ethcore::CreateContractAddress;
-use ethcore::client::BlockChainClient;
-use ethcore::executive::{contract_address};
-use ethcore::miner::Miner;
-use ethcore::test_helpers::{generate_dummy_client, push_block_with_transactions};
-use ethkey::{Secret, KeyPair, Signature};
+use ethcore::{
+	test_helpers::{CreateContractAddress, generate_dummy_client, push_block_with_transactions, new_db},
+	miner::Miner,
+};
+use client_traits::BlockChainClient;
+use parity_crypto::publickey::{Secret, KeyPair, Signature};
+use machine::executive::contract_address;
 use hash::keccak;
 
 use ethcore_private_tx::{NoopEncryptor, Provider, ProviderConfig, StoringKeyProvider};
@@ -49,21 +53,24 @@ fn private_contract() {
 	let _ = ::env_logger::try_init();
 	let client = generate_dummy_client(0);
 	let chain_id = client.signing_chain_id();
-	let key1 = KeyPair::from_secret(Secret::from("0000000000000000000000000000000000000000000000000000000000000011")).unwrap();
-	let _key2 = KeyPair::from_secret(Secret::from("0000000000000000000000000000000000000000000000000000000000000012")).unwrap();
-	let key3 = KeyPair::from_secret(Secret::from("0000000000000000000000000000000000000000000000000000000000000013")).unwrap();
-	let key4 = KeyPair::from_secret(Secret::from("0000000000000000000000000000000000000000000000000000000000000014")).unwrap();
+	let key1 = KeyPair::from_secret(Secret::from_str("0000000000000000000000000000000000000000000000000000000000000011").unwrap()).unwrap();
+	let _key2 = KeyPair::from_secret(Secret::from_str("0000000000000000000000000000000000000000000000000000000000000012").unwrap()).unwrap();
+	let key3 = KeyPair::from_secret(Secret::from_str("0000000000000000000000000000000000000000000000000000000000000013").unwrap()).unwrap();
+	let key4 = KeyPair::from_secret(Secret::from_str("0000000000000000000000000000000000000000000000000000000000000014").unwrap()).unwrap();
 
 	let signer = Arc::new(ethcore_private_tx::KeyPairSigner(vec![key1.clone(), key3.clone(), key4.clone()]));
 
 	let config = ProviderConfig{
 		validator_accounts: vec![key3.address(), key4.address()],
 		signer_account: None,
+		logs_path: None,
+		use_offchain_storage: false,
 	};
 
 	let io = ethcore_io::IoChannel::disconnected();
-	let miner = Arc::new(Miner::new_for_tests(&::ethcore::spec::Spec::new_test(), None));
+	let miner = Arc::new(Miner::new_for_tests(&spec::new_test(), None));
 	let private_keys = Arc::new(StoringKeyProvider::default());
+	let db = new_db();
 	let pm = Arc::new(Provider::new(
 			client.clone(),
 			miner,
@@ -72,6 +79,7 @@ fn private_contract() {
 			config,
 			io,
 			private_keys,
+			db.key_value().clone(),
 	));
 
 	let (address, _) = contract_address(CreateContractAddress::FromSenderAndNonce, &key1.address(), &0.into(), &[]);
@@ -111,7 +119,7 @@ fn private_contract() {
 	let private_state = pm.execute_private_transaction(BlockId::Latest, &private_tx).unwrap();
 	let nonced_state_hash = pm.calculate_state_hash(&private_state, private_contract_nonce);
 	let signatures: Vec<_> = [&key3, &key4].iter().map(|k|
-		Signature::from(::ethkey::sign(&k.secret(), &nonced_state_hash).unwrap().into_electrum())).collect();
+		Signature::from(parity_crypto::publickey::sign(&k.secret(), &nonced_state_hash).unwrap().into_electrum())).collect();
 	let public_tx = pm.public_transaction(private_state, &private_tx, &signatures, 1.into(), 0.into()).unwrap();
 	let public_tx = public_tx.sign(&key1.secret(), chain_id);
 	push_block_with_transactions(&client, &[public_tx]);
@@ -138,7 +146,7 @@ fn private_contract() {
 	let private_state = pm.execute_private_transaction(BlockId::Latest, &private_tx).unwrap();
 	let private_state_hash = keccak(&private_state);
 	let signatures: Vec<_> = [&key4].iter().map(|k|
-		Signature::from(::ethkey::sign(&k.secret(), &private_state_hash).unwrap().into_electrum())).collect();
+		Signature::from(parity_crypto::publickey::sign(&k.secret(), &private_state_hash).unwrap().into_electrum())).collect();
 	let public_tx = pm.public_transaction(private_state, &private_tx, &signatures, 2.into(), 0.into()).unwrap();
 	let public_tx = public_tx.sign(&key1.secret(), chain_id);
 	push_block_with_transactions(&client, &[public_tx]);
@@ -184,20 +192,23 @@ fn call_other_private_contract() {
 	// Create client and provider
 	let client = generate_dummy_client(0);
 	let chain_id = client.signing_chain_id();
-	let key1 = KeyPair::from_secret(Secret::from("0000000000000000000000000000000000000000000000000000000000000011")).unwrap();
-	let _key2 = KeyPair::from_secret(Secret::from("0000000000000000000000000000000000000000000000000000000000000012")).unwrap();
-	let key3 = KeyPair::from_secret(Secret::from("0000000000000000000000000000000000000000000000000000000000000013")).unwrap();
-	let key4 = KeyPair::from_secret(Secret::from("0000000000000000000000000000000000000000000000000000000000000014")).unwrap();
+	let key1 = KeyPair::from_secret(Secret::from_str("0000000000000000000000000000000000000000000000000000000000000011").unwrap()).unwrap();
+	let _key2 = KeyPair::from_secret(Secret::from_str("0000000000000000000000000000000000000000000000000000000000000012").unwrap()).unwrap();
+	let key3 = KeyPair::from_secret(Secret::from_str("0000000000000000000000000000000000000000000000000000000000000013").unwrap()).unwrap();
+	let key4 = KeyPair::from_secret(Secret::from_str("0000000000000000000000000000000000000000000000000000000000000014").unwrap()).unwrap();
 	let signer = Arc::new(ethcore_private_tx::KeyPairSigner(vec![key1.clone(), key3.clone(), key4.clone()]));
 
 	let config = ProviderConfig{
 		validator_accounts: vec![key3.address(), key4.address()],
 		signer_account: None,
+		logs_path: None,
+		use_offchain_storage: false,
 	};
 
 	let io = ethcore_io::IoChannel::disconnected();
-	let miner = Arc::new(Miner::new_for_tests(&::ethcore::spec::Spec::new_test(), None));
+	let miner = Arc::new(Miner::new_for_tests(&spec::new_test(), None));
 	let private_keys = Arc::new(StoringKeyProvider::default());
+	let db = new_db();
 	let pm = Arc::new(Provider::new(
 			client.clone(),
 			miner,
@@ -206,6 +217,7 @@ fn call_other_private_contract() {
 			config,
 			io,
 			private_keys.clone(),
+			db.key_value().clone(),
 	));
 
 	// Deploy contract A
@@ -229,7 +241,7 @@ fn call_other_private_contract() {
 	trace!("Creating private contract B");
 	// Build constructor data
 	let mut deploy_data = "6060604052341561000f57600080fd5b6040516020806101c583398101604052808051906020019091905050806000806101000a81548173ffffffffffffffffffffffffffffffffffffffff021916908373ffffffffffffffffffffffffffffffffffffffff1602179055505061014a8061007b6000396000f300606060405260043610610041576000357c0100000000000000000000000000000000000000000000000000000000900463ffffffff1680635197c7aa14610046575b600080fd5b341561005157600080fd5b61005961006f565b6040518082815260200191505060405180910390f35b60008060009054906101000a900473ffffffffffffffffffffffffffffffffffffffff1673ffffffffffffffffffffffffffffffffffffffff16630c55699c6000604051602001526040518163ffffffff167c0100000000000000000000000000000000000000000000000000000000028152600401602060405180830381600087803b15156100fe57600080fd5b6102c65a03f1151561010f57600080fd5b505050604051805190509050905600a165627a7a723058207f8994e02725b47d76ec73e5c54a338d27b306dd1c830276bff2d75fcd1a5c920029000000000000000000000000".to_string();
-	deploy_data.push_str(&address_a.to_vec().to_hex());
+	deploy_data.push_str(&address_a.as_bytes().to_vec().to_hex());
 	let private_contract_b_test = deploy_data.from_hex().unwrap();
 	let mut private_create_tx2 = Transaction::default();
 	private_create_tx2.action = Action::Create;
@@ -257,7 +269,7 @@ fn call_other_private_contract() {
 	let private_state = pm.execute_private_transaction(BlockId::Latest, &private_tx).unwrap();
 	let nonced_state_hash = pm.calculate_state_hash(&private_state, private_contract_nonce);
 	let signatures: Vec<_> = [&key3, &key4].iter().map(|k|
-		Signature::from(::ethkey::sign(&k.secret(), &nonced_state_hash).unwrap().into_electrum())).collect();
+		Signature::from(parity_crypto::publickey::sign(&k.secret(), &nonced_state_hash).unwrap().into_electrum())).collect();
 	let public_tx = pm.public_transaction(private_state, &private_tx, &signatures, 2.into(), 0.into()).unwrap();
 	let public_tx = public_tx.sign(&key1.secret(), chain_id);
 	push_block_with_transactions(&client, &[public_tx]);

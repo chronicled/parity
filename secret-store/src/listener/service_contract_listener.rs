@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -18,11 +18,9 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
-use parking_lot::Mutex;
-use ethcore::client::{ChainNotify, NewBlocks};
-use ethkey::{Public, public_to_address};
 use bytes::Bytes;
-use ethereum_types::{H256, U256, Address};
+use crypto::publickey::{Public, public_to_address};
+use ethereum_types::{H256, U256, Address, BigEndianHash as _};
 use key_server_set::KeyServerSet;
 use key_server_cluster::{NodeId, ClusterClient, ClusterSessionsListener, ClusterSession};
 use key_server_cluster::math;
@@ -32,10 +30,12 @@ use key_server_cluster::decryption_session::SessionImpl as DecryptionSession;
 use key_server_cluster::key_version_negotiation_session::{SessionImpl as KeyVersionNegotiationSession,
 	IsolatedSessionTransport as KeyVersionNegotiationTransport, FailedContinueAction};
 use key_storage::KeyStorage;
+use parking_lot::Mutex;
 use acl_storage::AclStorage;
 use listener::service_contract::ServiceContract;
 use listener::tasks_queue::TasksQueue;
-use {ServerKeyId, NodeKeyPair, Error};
+use {ServerKeyId, Error};
+use blockchain::{NewBlocksNotify, SigningKeyPair};
 
 /// Retry interval (in blocks). Every RETRY_INTERVAL_BLOCKS blocks each KeyServer reads pending requests from
 /// service contract && tries to re-execute. The reason to have this mechanism is primarily because keys
@@ -61,17 +61,17 @@ pub struct ServiceContractListener {
 /// Service contract listener parameters.
 pub struct ServiceContractListenerParams {
 	/// Service contract.
-	pub contract: Arc<ServiceContract>,
+	pub contract: Arc<dyn ServiceContract>,
 	/// This node key pair.
-	pub self_key_pair: Arc<NodeKeyPair>,
+	pub self_key_pair: Arc<dyn SigningKeyPair>,
 	/// Key servers set.
-	pub key_server_set: Arc<KeyServerSet>,
+	pub key_server_set: Arc<dyn KeyServerSet>,
 	/// ACL storage reference.
-	pub acl_storage: Arc<AclStorage>,
+	pub acl_storage: Arc<dyn AclStorage>,
 	/// Cluster reference.
-	pub cluster: Arc<ClusterClient>,
+	pub cluster: Arc<dyn ClusterClient>,
 	/// Key storage reference.
-	pub key_storage: Arc<KeyStorage>,
+	pub key_storage: Arc<dyn KeyStorage>,
 }
 
 /// Service contract listener data.
@@ -83,17 +83,17 @@ struct ServiceContractListenerData {
 	/// Service tasks queue.
 	pub tasks_queue: Arc<TasksQueue<ServiceTask>>,
 	/// Service contract.
-	pub contract: Arc<ServiceContract>,
+	pub contract: Arc<dyn ServiceContract>,
 	/// ACL storage reference.
-	pub acl_storage: Arc<AclStorage>,
+	pub acl_storage: Arc<dyn AclStorage>,
 	/// Cluster client reference.
-	pub cluster: Arc<ClusterClient>,
+	pub cluster: Arc<dyn ClusterClient>,
 	/// This node key pair.
-	pub self_key_pair: Arc<NodeKeyPair>,
+	pub self_key_pair: Arc<dyn SigningKeyPair>,
 	/// Key servers set.
-	pub key_server_set: Arc<KeyServerSet>,
+	pub key_server_set: Arc<dyn KeyServerSet>,
 	/// Key storage reference.
-	pub key_storage: Arc<KeyStorage>,
+	pub key_storage: Arc<dyn KeyStorage>,
 
 }
 
@@ -433,14 +433,8 @@ impl Drop for ServiceContractListener {
 	}
 }
 
-impl ChainNotify for ServiceContractListener {
-	fn new_blocks(&self, new_blocks: NewBlocks) {
-		if new_blocks.has_more_blocks_to_import { return }
-		let enacted_len = new_blocks.route.enacted().len();
-		if enacted_len == 0 && new_blocks.route.retracted().is_empty() {
-			return;
-		}
-
+impl NewBlocksNotify for ServiceContractListener {
+	fn new_blocks(&self, new_enacted_len: usize) {
 		if !self.data.contract.update() {
 			return;
 		}
@@ -449,7 +443,7 @@ impl ChainNotify for ServiceContractListener {
 
 		// schedule retry if received enough blocks since last retry
 		// it maybe inaccurate when switching syncing/synced states, but that's ok
-		if self.data.last_retry.fetch_add(enacted_len, Ordering::Relaxed) >= RETRY_INTERVAL_BLOCKS {
+		if self.data.last_retry.fetch_add(new_enacted_len, Ordering::Relaxed) >= RETRY_INTERVAL_BLOCKS {
 			// shortcut: do not retry if we're isolated from the cluster
 			if !self.data.key_server_set.is_isolated() {
 				self.data.tasks_queue.push(ServiceTask::Retry);
@@ -467,7 +461,7 @@ impl ClusterSessionsListener<GenerationSession> for ServiceContractListener {
 		// ignore result - the only thing that we can do is to log the error
 		let server_key_id = session.id();
 		if let Some(origin) = session.origin() {
-			if let Some(generation_result) = session.wait(Some(Default::default())) {
+			if let Some(generation_result) = session.result() {
 				let generation_result = generation_result.map(Some).map_err(Into::into);
 				let _ = Self::process_server_key_generation_result(&self.data, origin, &server_key_id, generation_result);
 			}
@@ -484,7 +478,7 @@ impl ClusterSessionsListener<DecryptionSession> for ServiceContractListener {
 		let session_id = session.id();
 		let server_key_id = session_id.id;
 		if let (Some(requester), Some(origin)) = (session.requester().and_then(|r| r.address(&server_key_id).ok()), session.origin()) {
-			if let Some(retrieval_result) = session.wait(Some(Default::default())) {
+			if let Some(retrieval_result) = session.result() {
 				let retrieval_result = retrieval_result.map(|key_shadow|
 					session.broadcast_shadows()
 						.and_then(|broadcast_shadows|
@@ -509,8 +503,8 @@ impl ClusterSessionsListener<KeyVersionNegotiationSession<KeyVersionNegotiationT
 		// we're interested in:
 		// 1) sessions failed with fatal error
 		// 2) with decryption continue action
-		let error = match session.wait() {
-			Err(ref error) if !error.is_non_fatal() => error.clone(),
+		let error = match session.result() {
+			Some(Err(ref error)) if !error.is_non_fatal() => error.clone(),
 			_ => return,
 		};
 
@@ -560,7 +554,7 @@ fn log_service_task_result(task: &ServiceTask, self_id: &Public, result: Result<
 }
 
 /// Returns true when session, related to `server_key_id` must be started on `node`.
-fn is_processed_by_this_key_server(key_server_set: &KeyServerSet, node: &NodeId, server_key_id: &H256) -> bool {
+fn is_processed_by_this_key_server(key_server_set: &dyn KeyServerSet, node: &NodeId, server_key_id: &H256) -> bool {
 	let servers = key_server_set.snapshot().current_set;
 	let total_servers_count = servers.len();
 	match total_servers_count {
@@ -574,7 +568,7 @@ fn is_processed_by_this_key_server(key_server_set: &KeyServerSet, node: &NodeId,
 		None => return false,
 	};
 
-	let server_key_id_value: U256 = server_key_id.into();
+	let server_key_id_value: U256 = server_key_id.into_uint();
 	let range_interval = U256::max_value() / total_servers_count;
 	let range_begin = (range_interval + 1) * this_server_index as u32;
 	let range_end = range_begin.saturating_add(range_interval);
@@ -586,7 +580,7 @@ fn is_processed_by_this_key_server(key_server_set: &KeyServerSet, node: &NodeId,
 mod tests {
 	use std::sync::Arc;
 	use std::sync::atomic::Ordering;
-	use ethkey::{Random, Generator, KeyPair};
+	use crypto::publickey::{Random, Generator, KeyPair};
 	use listener::service_contract::ServiceContract;
 	use listener::service_contract::tests::DummyServiceContract;
 	use key_server_cluster::DummyClusterClient;
@@ -595,8 +589,10 @@ mod tests {
 	use key_storage::tests::DummyKeyStorage;
 	use key_server_set::KeyServerSet;
 	use key_server_set::tests::MapKeyServerSet;
-	use {NodeKeyPair, PlainNodeKeyPair, ServerKeyId};
+	use blockchain::SigningKeyPair;
+	use {PlainNodeKeyPair, ServerKeyId};
 	use super::{ServiceTask, ServiceContractListener, ServiceContractListenerParams, is_processed_by_this_key_server};
+	use ethereum_types::Address;
 
 	fn create_non_empty_key_storage(has_doc_key: bool) -> Arc<DummyKeyStorage> {
 		let key_storage = Arc::new(DummyKeyStorage::default());
@@ -611,7 +607,7 @@ mod tests {
 		key_storage
 	}
 
-	fn make_servers_set(is_isolated: bool) -> Arc<KeyServerSet> {
+	fn make_servers_set(is_isolated: bool) -> Arc<dyn KeyServerSet> {
 		Arc::new(MapKeyServerSet::new(is_isolated, vec![
 			("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8".parse().unwrap(),
 				"127.0.0.1:8080".parse().unwrap()),
@@ -622,7 +618,7 @@ mod tests {
 		].into_iter().collect()))
 	}
 
-	fn make_service_contract_listener(contract: Option<Arc<ServiceContract>>, cluster: Option<Arc<DummyClusterClient>>, key_storage: Option<Arc<KeyStorage>>, acl_storage: Option<Arc<AclStorage>>, servers_set: Option<Arc<KeyServerSet>>) -> Arc<ServiceContractListener> {
+	fn make_service_contract_listener(contract: Option<Arc<dyn ServiceContract>>, cluster: Option<Arc<DummyClusterClient>>, key_storage: Option<Arc<dyn KeyStorage>>, acl_storage: Option<Arc<dyn AclStorage>>, servers_set: Option<Arc<dyn KeyServerSet>>) -> Arc<ServiceContractListener> {
 		let contract = contract.unwrap_or_else(|| Arc::new(DummyServiceContract::default()));
 		let cluster = cluster.unwrap_or_else(|| Arc::new(DummyClusterClient::default()));
 		let key_storage = key_storage.unwrap_or_else(|| Arc::new(DummyKeyStorage::default()));
@@ -983,7 +979,7 @@ mod tests {
 		let key_storage = create_non_empty_key_storage(false);
 		let listener = make_service_contract_listener(Some(contract.clone()), None, Some(key_storage), None, None);
 		ServiceContractListener::process_service_task(&listener.data, ServiceTask::StoreDocumentKey(
-			Default::default(), Default::default(), 1.into(), Default::default(), Default::default())).unwrap_err();
+			Default::default(), Default::default(), Address::from_low_u64_be(1), Default::default(), Default::default())).unwrap_err();
 		assert_eq!(*contract.document_keys_store_failures.lock(), vec![Default::default()]);
 	}
 

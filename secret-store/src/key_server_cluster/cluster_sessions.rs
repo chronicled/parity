@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -18,10 +18,12 @@ use std::time::{Duration, Instant};
 use std::sync::{Arc, Weak};
 use std::sync::atomic::AtomicBool;
 use std::collections::{VecDeque, BTreeMap, BTreeSet};
+use futures::{oneshot, Oneshot, Complete, Future};
 use parking_lot::{Mutex, RwLock, Condvar};
 use ethereum_types::H256;
-use ethkey::Secret;
-use key_server_cluster::{Error, NodeId, SessionId, Requester, NodeKeyPair};
+use crypto::publickey::Secret;
+use blockchain::SigningKeyPair;
+use key_server_cluster::{Error, NodeId, SessionId};
 use key_server_cluster::cluster::{Cluster, ClusterConfiguration, ClusterView};
 use key_server_cluster::cluster_connections::ConnectionProvider;
 use key_server_cluster::connection_trigger::ServersSetChangeSessionCreatorConnector;
@@ -68,6 +70,10 @@ pub struct SessionIdWithSubSession {
 pub trait ClusterSession {
 	/// Session identifier type.
 	type Id: ::std::fmt::Debug + Ord + Clone;
+	/// Session creation data type.
+	type CreationData;
+	/// Session (successful) result type.
+	type SuccessfulResult: Send + 'static;
 
 	/// Session type name.
 	fn type_name() -> &'static str;
@@ -85,15 +91,22 @@ pub trait ClusterSession {
 	fn on_message(&self, sender: &NodeId, message: &Message) -> Result<(), Error>;
 
 	/// 'Wait for session completion' helper.
-	fn wait_session<T, U, F: Fn(&U) -> Option<Result<T, Error>>>(completion_event: &Condvar, session_data: &Mutex<U>, timeout: Option<Duration>, result_reader: F) -> Option<Result<T, Error>> {
+	#[cfg(test)]
+	fn wait_session<T, U, F: Fn(&U) -> Option<Result<T, Error>>>(
+		completion: &CompletionSignal<T>,
+		session_data: &Mutex<U>,
+		timeout: Option<Duration>,
+		result_reader: F
+	) -> Option<Result<T, Error>> {
 		let mut locked_data = session_data.lock();
 		match result_reader(&locked_data) {
 			Some(result) => Some(result),
 			None => {
+				let completion_condvar = completion.completion_condvar.as_ref().expect("created in test mode");
 				match timeout {
-					None => completion_event.wait(&mut locked_data),
+					None => completion_condvar.wait(&mut locked_data),
 					Some(timeout) => {
-						completion_event.wait_for(&mut locked_data, timeout);
+						completion_condvar.wait_for(&mut locked_data, timeout);
 					},
 				}
 
@@ -101,6 +114,23 @@ pub trait ClusterSession {
 			},
 		}
 	}
+}
+
+/// Waitable cluster session.
+pub struct WaitableSession<S: ClusterSession> {
+	/// Session handle.
+	pub session: Arc<S>,
+	/// Session result oneshot.
+	pub oneshot: Oneshot<Result<S::SuccessfulResult, Error>>,
+}
+
+/// Session completion signal.
+pub struct CompletionSignal<T> {
+	/// Completion future.
+	pub completion_future: Mutex<Option<Complete<Result<T, Error>>>>,
+
+	/// Completion condvar.
+	pub completion_condvar: Option<Condvar>,
 }
 
 /// Administrative session.
@@ -122,19 +152,22 @@ pub enum AdminSessionCreationData {
 /// Active sessions on this cluster.
 pub struct ClusterSessions {
 	/// Key generation sessions.
-	pub generation_sessions: ClusterSessionsContainer<GenerationSessionImpl, GenerationSessionCreator, ()>,
+	pub generation_sessions: ClusterSessionsContainer<GenerationSessionImpl, GenerationSessionCreator>,
 	/// Encryption sessions.
-	pub encryption_sessions: ClusterSessionsContainer<EncryptionSessionImpl, EncryptionSessionCreator, ()>,
+	pub encryption_sessions: ClusterSessionsContainer<EncryptionSessionImpl, EncryptionSessionCreator>,
 	/// Decryption sessions.
-	pub decryption_sessions: ClusterSessionsContainer<DecryptionSessionImpl, DecryptionSessionCreator, Requester>,
+	pub decryption_sessions: ClusterSessionsContainer<DecryptionSessionImpl, DecryptionSessionCreator>,
 	/// Schnorr signing sessions.
-	pub schnorr_signing_sessions: ClusterSessionsContainer<SchnorrSigningSessionImpl, SchnorrSigningSessionCreator, Requester>,
+	pub schnorr_signing_sessions: ClusterSessionsContainer<SchnorrSigningSessionImpl, SchnorrSigningSessionCreator>,
 	/// ECDSA signing sessions.
-	pub ecdsa_signing_sessions: ClusterSessionsContainer<EcdsaSigningSessionImpl, EcdsaSigningSessionCreator, Requester>,
+	pub ecdsa_signing_sessions: ClusterSessionsContainer<EcdsaSigningSessionImpl, EcdsaSigningSessionCreator>,
 	/// Key version negotiation sessions.
-	pub negotiation_sessions: ClusterSessionsContainer<KeyVersionNegotiationSessionImpl<VersionNegotiationTransport>, KeyVersionNegotiationSessionCreator, ()>,
+	pub negotiation_sessions: ClusterSessionsContainer<
+		KeyVersionNegotiationSessionImpl<VersionNegotiationTransport>,
+		KeyVersionNegotiationSessionCreator
+	>,
 	/// Administrative sessions.
-	pub admin_sessions: ClusterSessionsContainer<AdminSession, AdminSessionCreator, AdminSessionCreationData>,
+	pub admin_sessions: ClusterSessionsContainer<AdminSession, AdminSessionCreator>,
 	/// Self node id.
 	self_node_id: NodeId,
 	/// Creator core.
@@ -150,19 +183,17 @@ pub trait ClusterSessionsListener<S: ClusterSession>: Send + Sync {
 }
 
 /// Active sessions container.
-pub struct ClusterSessionsContainer<S: ClusterSession, SC: ClusterSessionCreator<S, D>, D> {
+pub struct ClusterSessionsContainer<S: ClusterSession, SC: ClusterSessionCreator<S>> {
 	/// Sessions creator.
 	pub creator: SC,
 	/// Active sessions.
 	sessions: RwLock<BTreeMap<S::Id, QueuedSession<S>>>,
 	/// Listeners. Lock order: sessions -> listeners.
-	listeners: Mutex<Vec<Weak<ClusterSessionsListener<S>>>>,
+	listeners: Mutex<Vec<Weak<dyn ClusterSessionsListener<S>>>>,
 	/// Sessions container state.
 	container_state: Arc<Mutex<ClusterSessionsContainerState>>,
 	/// Do not actually remove sessions.
 	preserve_sessions: bool,
-	/// Phantom data.
-	_pd: ::std::marker::PhantomData<D>,
 }
 
 /// Session and its message queue.
@@ -170,7 +201,7 @@ pub struct QueuedSession<S> {
 	/// Session master.
 	pub master: NodeId,
 	/// Cluster view.
-	pub cluster_view: Arc<Cluster>,
+	pub cluster_view: Arc<dyn Cluster>,
 	/// Last keep alive time.
 	pub last_keep_alive_time: Instant,
 	/// Last received message time.
@@ -194,7 +225,7 @@ pub enum ClusterSessionsContainerState {
 
 impl ClusterSessions {
 	/// Create new cluster sessions container.
-	pub fn new(config: &ClusterConfiguration, servers_set_change_session_creator_connector: Arc<ServersSetChangeSessionCreatorConnector>) -> Self {
+	pub fn new(config: &ClusterConfiguration, servers_set_change_session_creator_connector: Arc<dyn ServersSetChangeSessionCreatorConnector>) -> Self {
 		let container_state = Arc::new(Mutex::new(ClusterSessionsContainerState::Idle));
 		let creator_core = Arc::new(SessionCreatorCore::new(config));
 		ClusterSessions {
@@ -279,7 +310,7 @@ impl ClusterSessions {
 	}
 }
 
-impl<S, SC, D> ClusterSessionsContainer<S, SC, D> where S: ClusterSession, SC: ClusterSessionCreator<S, D> {
+impl<S, SC> ClusterSessionsContainer<S, SC> where S: ClusterSession, SC: ClusterSessionCreator<S> {
 	pub fn new(creator: SC, container_state: Arc<Mutex<ClusterSessionsContainerState>>) -> Self {
 		ClusterSessionsContainer {
 			creator: creator,
@@ -287,11 +318,10 @@ impl<S, SC, D> ClusterSessionsContainer<S, SC, D> where S: ClusterSession, SC: C
 			listeners: Mutex::new(Vec::new()),
 			container_state: container_state,
 			preserve_sessions: false,
-			_pd: Default::default(),
 		}
 	}
 
-	pub fn add_listener(&self, listener: Arc<ClusterSessionsListener<S>>) {
+	pub fn add_listener(&self, listener: Arc<dyn ClusterSessionsListener<S>>) {
 		self.listeners.lock().push(Arc::downgrade(&listener));
 	}
 
@@ -316,7 +346,15 @@ impl<S, SC, D> ClusterSessionsContainer<S, SC, D> where S: ClusterSession, SC: C
 		self.sessions.read().values().nth(0).map(|s| s.session.clone())
 	}
 
-	pub fn insert(&self, cluster: Arc<Cluster>, master: NodeId, session_id: S::Id, session_nonce: Option<u64>, is_exclusive_session: bool, creation_data: Option<D>) -> Result<Arc<S>, Error> {
+	pub fn insert(
+		&self,
+		cluster: Arc<dyn Cluster>,
+		master: NodeId,
+		session_id: S::Id,
+		session_nonce: Option<u64>,
+		is_exclusive_session: bool,
+		creation_data: Option<S::CreationData>,
+	) -> Result<WaitableSession<S>, Error> {
 		let mut sessions = self.sessions.write();
 		if sessions.contains_key(&session_id) {
 			return Err(Error::DuplicateSessionId);
@@ -335,11 +373,11 @@ impl<S, SC, D> ClusterSessionsContainer<S, SC, D> where S: ClusterSession, SC: C
 			cluster_view: cluster,
 			last_keep_alive_time: Instant::now(),
 			last_message_time: Instant::now(),
-			session: session.clone(),
+			session: session.session.clone(),
 			queue: VecDeque::new(),
 		};
 		sessions.insert(session_id, queued_session);
-		self.notify_listeners(|l| l.on_session_inserted(session.clone()));
+		self.notify_listeners(|l| l.on_session_inserted(session.session.clone()));
 
 		Ok(session)
 	}
@@ -402,7 +440,7 @@ impl<S, SC, D> ClusterSessionsContainer<S, SC, D> where S: ClusterSession, SC: C
 		}
 	}
 
-	fn notify_listeners<F: Fn(&ClusterSessionsListener<S>) -> ()>(&self, callback: F) {
+	fn notify_listeners<F: Fn(&dyn ClusterSessionsListener<S>) -> ()>(&self, callback: F) {
 		let mut listeners = self.listeners.lock();
 		let mut listener_index = 0;
 		while listener_index < listeners.len() {
@@ -419,7 +457,12 @@ impl<S, SC, D> ClusterSessionsContainer<S, SC, D> where S: ClusterSession, SC: C
 	}
 }
 
-impl<S, SC, D> ClusterSessionsContainer<S, SC, D> where S: ClusterSession, SC: ClusterSessionCreator<S, D>, SessionId: From<S::Id> {
+impl<S, SC> ClusterSessionsContainer<S, SC>
+	where
+		S: ClusterSession,
+		SC: ClusterSessionCreator<S>,
+		SessionId: From<S::Id>,
+{
 	pub fn send_keep_alive(&self, session_id: &S::Id, self_node_id: &NodeId) {
 		if let Some(session) = self.sessions.write().get_mut(session_id) {
 			let now = Instant::now();
@@ -521,6 +564,8 @@ impl AdminSession {
 
 impl ClusterSession for AdminSession {
 	type Id = SessionId;
+	type CreationData = AdminSessionCreationData;
+	type SuccessfulResult = ();
 
 	fn type_name() -> &'static str {
 		"admin"
@@ -569,7 +614,41 @@ impl ClusterSession for AdminSession {
 	}
 }
 
-pub fn create_cluster_view(self_key_pair: Arc<NodeKeyPair>, connections: Arc<ConnectionProvider>, requires_all_connections: bool) -> Result<Arc<Cluster>, Error> {
+impl<S: ClusterSession> WaitableSession<S> {
+	pub fn new(session: S, oneshot: Oneshot<Result<S::SuccessfulResult, Error>>) -> Self {
+		WaitableSession {
+			session: Arc::new(session),
+			oneshot,
+		}
+	}
+
+	pub fn into_wait_future(self) -> Box<dyn Future<Item=S::SuccessfulResult, Error=Error> + Send> {
+		Box::new(self.oneshot
+			.map_err(|e| Error::Internal(e.to_string()))
+			.and_then(|res| res))
+	}
+}
+
+impl<T> CompletionSignal<T> {
+	pub fn new() -> (Self, Oneshot<Result<T, Error>>) {
+		let (complete, oneshot) = oneshot();
+		let completion_condvar = if cfg!(test) { Some(Condvar::new()) } else { None };
+		(CompletionSignal {
+			completion_future: Mutex::new(Some(complete)),
+			completion_condvar,
+		}, oneshot)
+	}
+
+	pub fn send(&self, result: Result<T, Error>) {
+		let completion_future = ::std::mem::replace(&mut *self.completion_future.lock(), None);
+		completion_future.map(|c| c.send(result));
+		if let Some(ref completion_condvar) = self.completion_condvar {
+			completion_condvar.notify_all();
+		}
+	}
+}
+
+pub fn create_cluster_view(self_key_pair: Arc<dyn SigningKeyPair>, connections: Arc<dyn ConnectionProvider>, requires_all_connections: bool) -> Result<Arc<dyn Cluster>, Error> {
 	let mut connected_nodes = connections.connected_nodes()?;
 	let disconnected_nodes = connections.disconnected_nodes();
 
@@ -590,7 +669,7 @@ pub fn create_cluster_view(self_key_pair: Arc<NodeKeyPair>, connections: Arc<Con
 mod tests {
 	use std::sync::Arc;
 	use std::sync::atomic::{AtomicUsize, Ordering};
-	use ethkey::{Random, Generator};
+	use crypto::publickey::{Random, Generator};
 	use key_server_cluster::{Error, DummyAclStorage, DummyKeyStorage, MapKeyServerSet, PlainNodeKeyPair};
 	use key_server_cluster::cluster::ClusterConfiguration;
 	use key_server_cluster::connection_trigger::SimpleServersSetChangeSessionCreatorConnector;

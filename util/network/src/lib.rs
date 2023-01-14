@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -19,7 +19,6 @@
 extern crate parity_crypto as crypto;
 extern crate ethcore_io as io;
 extern crate ethereum_types;
-extern crate ethkey;
 extern crate rlp;
 extern crate ipnetwork;
 extern crate parity_snappy as snappy;
@@ -32,9 +31,7 @@ extern crate serde_derive;
 
 #[cfg(test)] #[macro_use]
 extern crate assert_matches;
-
-#[macro_use]
-extern crate error_chain;
+extern crate derive_more;
 
 #[macro_use]
 extern crate lazy_static;
@@ -46,7 +43,7 @@ mod error;
 
 pub use connection_filter::{ConnectionFilter, ConnectionDirection};
 pub use io::TimerToken;
-pub use error::{Error, ErrorKind, DisconnectReason};
+pub use error::{Error, DisconnectReason};
 
 use client_version::ClientVersion;
 use std::cmp::Ordering;
@@ -56,7 +53,7 @@ use std::str::{self, FromStr};
 use std::sync::Arc;
 use std::time::Duration;
 use ipnetwork::{IpNetwork, IpNetworkError};
-use ethkey::Secret;
+use crypto::publickey::Secret;
 use ethereum_types::H512;
 use rlp::{Decodable, DecoderError, Rlp};
 
@@ -71,13 +68,13 @@ pub type NodeId = H512;
 /// Local (temporary) peer session ID.
 pub type PeerId = usize;
 
-/// Messages used to communitate with the event loop from other threads.
+/// Messages used to communicate with the event loop from other threads.
 #[derive(Clone)]
 pub enum NetworkIoMessage {
 	/// Register a new protocol handler.
 	AddHandler {
 		/// Handler shared instance.
-		handler: Arc<NetworkProtocolHandler + Sync>,
+		handler: Arc<dyn NetworkProtocolHandler + Sync>,
 		/// Protocol Id.
 		protocol: ProtocolId,
 		/// Supported protocol versions and number of packet IDs reserved by the protocol (packet count).
@@ -177,6 +174,15 @@ impl Ord for SessionCapabilityInfo {
 	}
 }
 
+/// Type of NAT resolving method
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub enum NatType {
+	Nothing,
+	Any,
+	UPnP,
+	NatPMP,
+}
+
 /// Network service configuration
 #[derive(Debug, PartialEq, Clone)]
 pub struct NetworkConfiguration {
@@ -192,6 +198,8 @@ pub struct NetworkConfiguration {
 	pub udp_port: Option<u16>,
 	/// Enable NAT configuration
 	pub nat_enabled: bool,
+	/// Nat type
+	pub nat_type: NatType,
 	/// Enable discovery
 	pub discovery_enabled: bool,
 	/// List of initial node addresses
@@ -232,6 +240,7 @@ impl NetworkConfiguration {
 			public_address: None,
 			udp_port: None,
 			nat_enabled: true,
+			nat_type: NatType::Any,
 			discovery_enabled: true,
 			boot_nodes: Vec::new(),
 			use_secret: None,
@@ -363,15 +372,15 @@ impl<'a, T> NetworkContext for &'a T where T: ?Sized + NetworkContext {
 /// `Message` is the type for message data.
 pub trait NetworkProtocolHandler: Sync + Send {
 	/// Initialize the handler
-	fn initialize(&self, _io: &NetworkContext) {}
+	fn initialize(&self, _io: &dyn NetworkContext) {}
 	/// Called when new network packet received.
-	fn read(&self, io: &NetworkContext, peer: &PeerId, packet_id: u8, data: &[u8]);
+	fn read(&self, io: &dyn NetworkContext, peer: &PeerId, packet_id: u8, data: &[u8]);
 	/// Called when new peer is connected. Only called when peer supports the same protocol.
-	fn connected(&self, io: &NetworkContext, peer: &PeerId);
+	fn connected(&self, io: &dyn NetworkContext, peer: &PeerId);
 	/// Called when a previously connected peer disconnects.
-	fn disconnected(&self, io: &NetworkContext, peer: &PeerId);
+	fn disconnected(&self, io: &dyn NetworkContext, peer: &PeerId);
 	/// Timer function called after a timeout created with `NetworkContext::timeout`.
-	fn timeout(&self, _io: &NetworkContext, _timer: TimerToken) {}
+	fn timeout(&self, _io: &dyn NetworkContext, _timer: TimerToken) {}
 }
 
 /// Non-reserved peer modes.
@@ -396,42 +405,42 @@ impl NonReservedPeerMode {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpFilter {
-    pub predefined: AllowIP,
-    pub custom_allow: Vec<IpNetwork>,
-    pub custom_block: Vec<IpNetwork>,
+	pub predefined: AllowIP,
+	pub custom_allow: Vec<IpNetwork>,
+	pub custom_block: Vec<IpNetwork>,
 }
 
 impl Default for IpFilter {
-    fn default() -> Self {
-        IpFilter {
-            predefined: AllowIP::All,
-            custom_allow: vec![],
-            custom_block: vec![],
-        }
-    }
+	fn default() -> Self {
+		IpFilter {
+			predefined: AllowIP::All,
+			custom_allow: vec![],
+			custom_block: vec![],
+		}
+	}
 }
 
 impl IpFilter {
-    /// Attempt to parse the peer mode from a string.
-    pub fn parse(s: &str) -> Result<IpFilter, IpNetworkError> {
-        let mut filter = IpFilter::default();
-        for f in s.split_whitespace() {
-            match f {
-                "all" => filter.predefined = AllowIP::All,
-                "private" => filter.predefined = AllowIP::Private,
-                "public" => filter.predefined = AllowIP::Public,
-                "none" => filter.predefined = AllowIP::None,
-                custom => {
-                    if custom.starts_with("-") {
-                        filter.custom_block.push(IpNetwork::from_str(&custom.to_owned().split_off(1))?)
-                    } else {
-                        filter.custom_allow.push(IpNetwork::from_str(custom)?)
-                    }
-                }
-            }
-        }
-        Ok(filter)
-    }
+	/// Attempt to parse the peer mode from a string.
+	pub fn parse(s: &str) -> Result<IpFilter, IpNetworkError> {
+		let mut filter = IpFilter::default();
+		for f in s.split_whitespace() {
+			match f {
+				"all" => filter.predefined = AllowIP::All,
+				"private" => filter.predefined = AllowIP::Private,
+				"public" => filter.predefined = AllowIP::Public,
+				"none" => filter.predefined = AllowIP::None,
+				custom => {
+					if custom.starts_with("-") {
+						filter.custom_block.push(IpNetwork::from_str(&custom.to_owned().split_off(1))?)
+					} else {
+						filter.custom_allow.push(IpNetwork::from_str(custom)?)
+					}
+				}
+			}
+		}
+		Ok(filter)
+	}
 }
 
 /// IP fiter
@@ -443,6 +452,6 @@ pub enum AllowIP {
 	Private,
 	/// Connect to public network only
 	Public,
-    /// Block all addresses
-    None,
+	/// Block all addresses
+	None,
 }

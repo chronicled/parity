@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -38,7 +38,12 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Instant, Duration};
 
-use types::encoded;
+use crate::{
+	api::Notification,
+	chain::SyncState as ChainSyncState,
+};
+
+use common_types::encoded;
 use light::client::{AsLightClient, LightChainClient};
 use light::net::{
 	PeerStatus, Announcement, Handler, BasicContext,
@@ -46,10 +51,12 @@ use light::net::{
 	Error as NetError,
 };
 use light::request::{self, CompleteHeadersRequest as HeadersRequest};
+use log::{debug, trace};
 use network::PeerId;
 use ethereum_types::{H256, U256};
 use parking_lot::{Mutex, RwLock};
-use rand::{Rng, OsRng};
+use rand::{rngs::OsRng, seq::SliceRandom};
+use futures::sync::mpsc;
 
 use self::sync_round::{AbortReason, SyncRound, ResponseContext};
 
@@ -75,13 +82,13 @@ struct ChainInfo {
 }
 
 impl PartialOrd for ChainInfo {
-	fn partial_cmp(&self, other: &Self) -> Option<::std::cmp::Ordering> {
+	fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
 		self.head_td.partial_cmp(&other.head_td)
 	}
 }
 
 impl Ord for ChainInfo {
-	fn cmp(&self, other: &Self) -> ::std::cmp::Ordering {
+	fn cmp(&self, other: &Self) -> std::cmp::Ordering {
 		self.head_td.cmp(&other.head_td)
 	}
 }
@@ -99,14 +106,20 @@ impl Peer {
 	}
 }
 
-// search for a common ancestor with the best chain.
+/// Search for a common ancestor with the best chain.
 #[derive(Debug)]
 enum AncestorSearch {
-	Queued(u64), // queued to search for blocks starting from here.
-	Awaiting(ReqId, u64, HeadersRequest), // awaiting response for this request.
-	Prehistoric, // prehistoric block found. TODO: start to roll back CHTs.
-	FoundCommon(u64, H256), // common block found.
-	Genesis, // common ancestor is the genesis.
+	/// Queued to search for blocks starting from here.
+	Queued(u64), //
+	/// Awaiting response for this request.
+	Awaiting(ReqId, u64, HeadersRequest),
+	/// Pre-historic block found.
+	// TODO: start to roll back CHTs.
+	Prehistoric,
+	/// Common block found.
+	FoundCommon(u64, H256),
+	/// Common ancestor is the genesis.
+	Genesis,
 }
 
 impl AncestorSearch {
@@ -117,7 +130,7 @@ impl AncestorSearch {
 		}
 	}
 
-	fn process_response<L>(self, ctx: &ResponseContext, client: &L) -> AncestorSearch
+	fn process_response<L>(self, ctx: &dyn ResponseContext, client: &L) -> AncestorSearch
 		where L: AsLightClient
 	{
 		let client = client.as_light_client();
@@ -255,7 +268,7 @@ impl Deref for SyncStateWrapper {
 struct ResponseCtx<'a> {
 	peer: PeerId,
 	req_id: ReqId,
-	ctx: &'a BasicContext,
+	ctx: &'a dyn BasicContext,
 	data: &'a [encoded::Header],
 }
 
@@ -275,6 +288,7 @@ pub struct LightSync<L: AsLightClient> {
 	client: Arc<L>,
 	rng: Mutex<OsRng>,
 	state: Mutex<SyncStateWrapper>,
+	senders: RwLock<Vec<mpsc::UnboundedSender<ChainSyncState>>>,
 	// We duplicate this state tracking to avoid deadlocks in `is_major_importing`.
 	is_idle: Mutex<bool>,
 }
@@ -288,7 +302,7 @@ struct PendingReq {
 impl<L: AsLightClient + Send + Sync> Handler for LightSync<L> {
 	fn on_connect(
 		&self,
-		ctx: &EventContext,
+		ctx: &dyn EventContext,
 		status: &Status,
 		capabilities: &Capabilities
 	) -> PeerStatus {
@@ -315,7 +329,7 @@ impl<L: AsLightClient + Send + Sync> Handler for LightSync<L> {
 		}
 	}
 
-	fn on_disconnect(&self, ctx: &EventContext, unfulfilled: &[ReqId]) {
+	fn on_disconnect(&self, ctx: &dyn EventContext, unfulfilled: &[ReqId]) {
 		let peer_id = ctx.peer();
 
 		let peer = match self.peers.write().remove(&peer_id).map(|p| p.into_inner()) {
@@ -366,7 +380,7 @@ impl<L: AsLightClient + Send + Sync> Handler for LightSync<L> {
 		self.maintain_sync(ctx.as_basic());
 	}
 
-	fn on_announcement(&self, ctx: &EventContext, announcement: &Announcement) {
+	fn on_announcement(&self, ctx: &dyn EventContext, announcement: &Announcement) {
 		let (last_td, chain_info) = {
 			let peers = self.peers.read();
 			match peers.get(&ctx.peer()) {
@@ -402,7 +416,7 @@ impl<L: AsLightClient + Send + Sync> Handler for LightSync<L> {
 		self.maintain_sync(ctx.as_basic());
 	}
 
-	fn on_responses(&self, ctx: &EventContext, req_id: ReqId, responses: &[request::Response]) {
+	fn on_responses(&self, ctx: &dyn EventContext, req_id: ReqId, responses: &[request::Response]) {
 		let peer = ctx.peer();
 		if !self.peers.read().contains_key(&peer) {
 			return
@@ -444,7 +458,7 @@ impl<L: AsLightClient + Send + Sync> Handler for LightSync<L> {
 		self.maintain_sync(ctx.as_basic());
 	}
 
-	fn tick(&self, ctx: &BasicContext) {
+	fn tick(&self, ctx: &dyn BasicContext) {
 		self.maintain_sync(ctx);
 	}
 }
@@ -454,7 +468,19 @@ impl<L: AsLightClient> LightSync<L> {
 	/// Sets the LightSync's state, and update
 	/// `is_idle`
 	fn set_state(&self, state: &mut SyncStateWrapper, next_state: SyncState) {
+
+		match next_state {
+			SyncState::Idle => self.notify_senders(ChainSyncState::Idle),
+			_ => self.notify_senders(ChainSyncState::Blocks)
+		};
+
 		state.set(next_state, &mut self.is_idle.lock());
+	}
+
+	fn notify_senders(&self, state: ChainSyncState) {
+		self.senders.write().retain(|sender| {
+			sender.unbounded_send(state).is_ok()
+		})
 	}
 
 	// Begins a search for the common ancestor and our best block.
@@ -476,8 +502,8 @@ impl<L: AsLightClient> LightSync<L> {
 	}
 
 	// handles request dispatch, block import, state machine transitions, and timeouts.
-	fn maintain_sync(&self, ctx: &BasicContext) {
-		use ethcore::error::{Error as EthcoreError, ErrorKind as EthcoreErrorKind, ImportErrorKind};
+	fn maintain_sync(&self, ctx: &dyn BasicContext) {
+		use common_types::errors::{EthcoreError, ImportError};
 
 		const DRAIN_AMOUNT: usize = 128;
 
@@ -508,10 +534,10 @@ impl<L: AsLightClient> LightSync<L> {
 				for header in sink.drain(..) {
 					match client.queue_header(header) {
 						Ok(_) => {}
-						Err(EthcoreError(EthcoreErrorKind::Import(ImportErrorKind::AlreadyInChain), _)) => {
+						Err(EthcoreError::Import(ImportError::AlreadyInChain)) => {
 							trace!(target: "sync", "Block already in chain. Continuing.");
 						},
-						Err(EthcoreError(EthcoreErrorKind::Import(ImportErrorKind::AlreadyQueued), _)) => {
+						Err(EthcoreError::Import(ImportError::AlreadyQueued)) => {
 							trace!(target: "sync", "Block already queued. Continuing.");
 						},
 						Err(e) => {
@@ -621,7 +647,7 @@ impl<L: AsLightClient> LightSync<L> {
 			// naive request dispatcher: just give to any peer which says it will
 			// give us responses. but only one request per peer per state transition.
 			let dispatcher = move |req: HeadersRequest| {
-				rng.shuffle(&mut peer_ids);
+				peer_ids.shuffle(&mut *rng);
 
 				let request = {
 					let mut builder = request::Builder::default();
@@ -667,6 +693,14 @@ impl<L: AsLightClient> LightSync<L> {
 			self.set_state(&mut state, next_state);
 		}
 	}
+
+	// returns receiving end of futures::mpsc::unbounded channel
+	// poll the channel for changes to sync state.
+	fn sync_notification(&self) -> Notification<ChainSyncState> {
+		let (sender, receiver) = futures::sync::mpsc::unbounded();
+		self.senders.write().push(sender);
+		receiver
+	}
 }
 
 // public API
@@ -682,7 +716,8 @@ impl<L: AsLightClient> LightSync<L> {
 			peers: RwLock::new(HashMap::new()),
 			pending_reqs: Mutex::new(HashMap::new()),
 			client: client,
-			rng: Mutex::new(OsRng::new()?),
+			rng: Mutex::new(OsRng),
+			senders: RwLock::new(Vec::new()),
 			state: Mutex::new(SyncStateWrapper::idle()),
 			is_idle: Mutex::new(true),
 		})
@@ -699,6 +734,10 @@ pub trait SyncInfo {
 
 	/// Whether major sync is underway.
 	fn is_major_importing(&self) -> bool;
+
+	/// returns the receieving end of a futures::mpsc unbounded channel
+	/// poll the channel for changes to sync state
+	fn sync_notification(&self) -> Notification<ChainSyncState>;
 }
 
 impl<L: AsLightClient> SyncInfo for LightSync<L> {
@@ -720,4 +759,7 @@ impl<L: AsLightClient> SyncInfo for LightSync<L> {
 		is_verifying || is_syncing
 	}
 
+	fn sync_notification(&self) -> Notification<ChainSyncState> {
+		self.sync_notification()
+	}
 }

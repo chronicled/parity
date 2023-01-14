@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -58,7 +58,7 @@ pub struct EthClient<C, S: LightSyncProvider + LightNetworkDispatcher + 'static,
 	client: Arc<C>,
 	on_demand: Arc<OD>,
 	transaction_queue: Arc<RwLock<TransactionQueue>>,
-	accounts: Arc<Fn() -> Vec<Address> + Send + Sync>,
+	accounts: Arc<dyn Fn() -> Vec<Address> + Send + Sync>,
 	cache: Arc<Mutex<LightDataCache>>,
 	polls: Mutex<PollManager<SyncPollFilter>>,
 	poll_lifetime: u32,
@@ -101,7 +101,7 @@ where
 		client: Arc<C>,
 		on_demand: Arc<OD>,
 		transaction_queue: Arc<RwLock<TransactionQueue>>,
-		accounts: Arc<Fn() -> Vec<Address> + Send + Sync>,
+		accounts: Arc<dyn Fn() -> Vec<Address> + Send + Sync>,
 		cache: Arc<Mutex<LightDataCache>>,
 		gas_price_percentile: usize,
 		poll_lifetime: u32

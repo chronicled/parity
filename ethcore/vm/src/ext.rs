@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -19,7 +19,7 @@
 use std::sync::Arc;
 use ethereum_types::{U256, H256, Address};
 use bytes::Bytes;
-use call_type::CallType;
+use action_type::ActionType;
 use env_info::EnvInfo;
 use schedule::Schedule;
 use return_data::ReturnData;
@@ -97,6 +97,7 @@ pub trait Ext {
 		gas: &U256,
 		value: &U256,
 		code: &[u8],
+		parent_version: &U256,
 		address: CreateContractAddress,
 		trap: bool,
 	) -> ::std::result::Result<ContractCreateResult, TrapKind>;
@@ -114,7 +115,7 @@ pub trait Ext {
 		value: Option<U256>,
 		data: &[u8],
 		code_address: &Address,
-		call_type: CallType,
+		call_type: ActionType,
 		trap: bool
 	) -> ::std::result::Result<MessageCallResult, TrapKind>;
 

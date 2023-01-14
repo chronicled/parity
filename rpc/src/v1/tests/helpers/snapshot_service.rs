@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -14,11 +14,12 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
-use ethcore::snapshot::{ManifestData, RestorationStatus, SnapshotService};
+use snapshot::SnapshotService;
 
 use bytes::Bytes;
 use ethereum_types::H256;
 use parking_lot::Mutex;
+use types::snapshot::{ManifestData, RestorationStatus};
 
 /// Mocked snapshot service (used for sync info extensions).
 pub struct TestSnapshotService {
@@ -51,5 +52,6 @@ impl SnapshotService for TestSnapshotService {
 	fn abort_snapshot(&self) {}
 	fn restore_state_chunk(&self, _hash: H256, _chunk: Bytes) { }
 	fn restore_block_chunk(&self, _hash: H256, _chunk: Bytes) { }
+	fn abort_snapshot(&self) {}
 	fn shutdown(&self) { }
 }
