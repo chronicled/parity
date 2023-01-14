@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -82,6 +82,7 @@ impl Filter {
 		}
 
 		let num_to_id = |num| match num {
+			BlockNumber::Hash { hash, .. } => BlockId::Hash(hash),
 			BlockNumber::Num(n) => BlockId::Number(n),
 			BlockNumber::Earliest => BlockId::Earliest,
 			BlockNumber::Latest | BlockNumber::Pending => BlockId::Latest,
@@ -188,7 +189,7 @@ mod tests {
 			address: Some(VariadicValue::Multiple(vec![])),
 			topics: Some(vec![
 				VariadicValue::Null,
-				VariadicValue::Single("000000000000000000000000a94f5374fce5edbc8e2a8697c15331677e6ebf0b".into()),
+				VariadicValue::Single(H256::from_str("000000000000000000000000a94f5374fce5edbc8e2a8697c15331677e6ebf0b").unwrap()),
 				VariadicValue::Null,
 			]),
 			limit: None,
@@ -201,7 +202,7 @@ mod tests {
 			address: Some(vec![]),
 			topics: vec![
 				None,
-				Some(vec!["000000000000000000000000a94f5374fce5edbc8e2a8697c15331677e6ebf0b".into()]),
+				Some(vec![H256::from_str("000000000000000000000000a94f5374fce5edbc8e2a8697c15331677e6ebf0b").unwrap()]),
 				None,
 				None,
 			],

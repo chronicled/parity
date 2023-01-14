@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -24,7 +24,7 @@ extern crate keccak_hash as hash;
 extern crate patricia_trie_ethereum as ethtrie;
 
 mod action_params;
-mod call_type;
+mod action_type;
 mod env_info;
 mod schedule;
 mod ext;
@@ -34,9 +34,9 @@ mod error;
 pub mod tests;
 
 pub use action_params::{ActionParams, ActionValue, ParamsType};
-pub use call_type::CallType;
+pub use action_type::ActionType;
 pub use env_info::{EnvInfo, LastHashes};
-pub use schedule::{Schedule, CleanDustMode, WasmCosts};
+pub use schedule::{Schedule, VersionedSchedule, CleanDustMode, WasmCosts};
 pub use ext::{Ext, MessageCallResult, ContractCreateResult, CreateContractAddress};
 pub use return_data::{ReturnData, GasLeft};
 pub use error::{Error, Result, TrapResult, TrapError, TrapKind, ExecTrapResult, ExecTrapError};
@@ -46,17 +46,17 @@ pub trait Exec: Send {
 	/// This function should be used to execute transaction.
 	/// It returns either an error, a known amount of gas left, or parameters to be used
 	/// to compute the final gas left.
-	fn exec(self: Box<Self>, ext: &mut Ext) -> ExecTrapResult<GasLeft>;
+	fn exec(self: Box<Self>, ext: &mut dyn Ext) -> ExecTrapResult<GasLeft>;
 }
 
 /// Resume call interface
 pub trait ResumeCall: Send {
 	/// Resume an execution for call, returns back the Vm interface.
-	fn resume_call(self: Box<Self>, result: MessageCallResult) -> Box<Exec>;
+	fn resume_call(self: Box<Self>, result: MessageCallResult) -> Box<dyn Exec>;
 }
 
 /// Resume create interface
 pub trait ResumeCreate: Send {
 	/// Resume an execution from create, returns back the Vm interface.
-	fn resume_create(self: Box<Self>, result: ContractCreateResult) -> Box<Exec>;
+	fn resume_create(self: Box<Self>, result: ContractCreateResult) -> Box<dyn Exec>;
 }

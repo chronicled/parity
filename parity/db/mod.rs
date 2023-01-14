@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -19,7 +19,4 @@
 #[path="rocksdb/mod.rs"]
 mod impls;
 
-pub use self::impls::{open_db, restoration_db_handler, migrate};
-
-#[cfg(feature = "secretstore")]
-pub use self::impls::open_secretstore_db;
+pub use self::impls::{open_db_light, restoration_db_handler, migrate};

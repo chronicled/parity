@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -26,13 +26,14 @@ mod shared_cache;
 use std::marker::PhantomData;
 use std::{cmp, mem};
 use std::sync::Arc;
+use std::convert::TryFrom;
 use hash::keccak;
 use bytes::Bytes;
-use ethereum_types::{U256, H256, Address};
-use num_bigint::BigUint;
+use ethereum_types::{U256, U512, H256, Address, BigEndianHash};
+
 
 use vm::{
-	self, ActionParams, ParamsType, ActionValue, CallType, MessageCallResult,
+	self, ActionParams, ParamsType, ActionValue, ActionType, MessageCallResult,
 	ContractCreateResult, CreateContractAddress, ReturnData, GasLeft, Schedule,
 	TrapKind, TrapError
 };
@@ -61,17 +62,6 @@ const TWO_POW_64: U256 = U256([0, 0x1, 0, 0]); // 0x1 00000000 00000000
 const TWO_POW_96: U256 = U256([0, 0x100000000, 0, 0]); //0x1 00000000 00000000 00000000
 const TWO_POW_224: U256 = U256([0, 0, 0, 0x100000000]); //0x1 00000000 00000000 00000000 00000000 00000000 00000000 00000000
 const TWO_POW_248: U256 = U256([0, 0, 0, 0x100000000000000]); //0x1 00000000 00000000 00000000 00000000 00000000 00000000 00000000 000000
-
-fn to_biguint(x: U256) -> BigUint {
-	let mut bytes = [0u8; 32];
-	x.to_little_endian(&mut bytes);
-	BigUint::from_bytes_le(&bytes)
-}
-
-fn from_biguint(x: BigUint) -> U256 {
-	let bytes = x.to_bytes_le();
-	U256::from_little_endian(&bytes)
-}
 
 /// Abstraction over raw vector of Bytes. Easier state management of PC.
 struct CodeReader {
@@ -126,6 +116,8 @@ struct InterpreterParams {
 	pub code_address: Address,
 	/// Hash of currently executed code.
 	pub code_hash: Option<H256>,
+	/// Code version.
+	pub code_version: U256,
 	/// Receive address. Usually equal to code_address,
 	/// except when called using CALLCODE.
 	pub address: Address,
@@ -141,8 +133,8 @@ struct InterpreterParams {
 	pub value: ActionValue,
 	/// Input data.
 	pub data: Option<Bytes>,
-	/// Type of call
-	pub call_type: CallType,
+	/// Type of action
+	pub action_type: ActionType,
 	/// Param types encoding
 	pub params_type: ParamsType,
 }
@@ -152,6 +144,7 @@ impl From<ActionParams> for InterpreterParams {
 		InterpreterParams {
 			code_address: params.code_address,
 			code_hash: params.code_hash,
+			code_version: params.code_version,
 			address: params.address,
 			sender: params.sender,
 			origin: params.origin,
@@ -159,7 +152,7 @@ impl From<ActionParams> for InterpreterParams {
 			gas_price: params.gas_price,
 			value: params.value,
 			data: params.data,
-			call_type: params.call_type,
+			action_type: params.action_type,
 			params_type: params.params_type,
 		}
 	}
@@ -196,7 +189,7 @@ pub struct Interpreter<Cost: CostType> {
 }
 
 impl<Cost: 'static + CostType> vm::Exec for Interpreter<Cost> {
-	fn exec(mut self: Box<Self>, ext: &mut vm::Ext) -> vm::ExecTrapResult<GasLeft> {
+	fn exec(mut self: Box<Self>, ext: &mut dyn vm::Ext) -> vm::ExecTrapResult<GasLeft> {
 		loop {
 			let result = self.step(ext);
 			match result {
@@ -217,7 +210,7 @@ impl<Cost: 'static + CostType> vm::Exec for Interpreter<Cost> {
 }
 
 impl<Cost: 'static + CostType> vm::ResumeCall for Interpreter<Cost> {
-	fn resume_call(mut self: Box<Self>, result: MessageCallResult) -> Box<vm::Exec> {
+	fn resume_call(mut self: Box<Self>, result: MessageCallResult) -> Box<dyn vm::Exec> {
 		{
 			let this = &mut *self;
 			let (out_off, out_size) = this.resume_output_range.take().expect("Box<ResumeCall> is obtained from a call opcode; resume_output_range is always set after those opcodes are executed; qed");
@@ -252,7 +245,7 @@ impl<Cost: 'static + CostType> vm::ResumeCall for Interpreter<Cost> {
 }
 
 impl<Cost: 'static + CostType> vm::ResumeCreate for Interpreter<Cost> {
-	fn resume_create(mut self: Box<Self>, result: ContractCreateResult) -> Box<vm::Exec> {
+	fn resume_create(mut self: Box<Self>, result: ContractCreateResult) -> Box<dyn vm::Exec> {
 		match result {
 			ContractCreateResult::Created(address, gas_left) => {
 				self.stack.push(address_to_u256(address));
@@ -300,7 +293,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 
 	/// Execute a single step on the VM.
 	#[inline(always)]
-	pub fn step(&mut self, ext: &mut vm::Ext) -> InterpreterResult {
+	pub fn step(&mut self, ext: &mut dyn vm::Ext) -> InterpreterResult {
 		if self.done {
 			return InterpreterResult::Stopped;
 		}
@@ -441,7 +434,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 		InterpreterResult::Continue
 	}
 
-	fn verify_instruction(&self, ext: &vm::Ext, instruction: Instruction, info: &InstructionInfo) -> vm::Result<()> {
+	fn verify_instruction(&self, ext: &dyn vm::Ext, instruction: Instruction, info: &InstructionInfo) -> vm::Result<()> {
 		let schedule = ext.schedule();
 
 		if (instruction == instructions::DELEGATECALL && !schedule.have_delegate_call) ||
@@ -478,7 +471,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 
 	fn mem_written(
 		instruction: Instruction,
-		stack: &Stack<U256>
+		stack: &dyn Stack<U256>
 	) -> Option<(usize, usize)> {
 		let read = |pos| stack.peek(pos).low_u64() as usize;
 		let written = match instruction {
@@ -499,7 +492,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 
 	fn store_written(
 		instruction: Instruction,
-		stack: &Stack<U256>
+		stack: &dyn Stack<U256>
 	) -> Option<(U256, U256)> {
 		match instruction {
 			instructions::SSTORE => Some((stack.peek(0).clone(), stack.peek(1).clone())),
@@ -510,7 +503,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 	fn exec_instruction(
 		&mut self,
 		gas: Cost,
-		ext: &mut vm::Ext,
+		ext: &mut dyn vm::Ext,
 		instruction: Instruction,
 		provided: Option<Cost>
 	) -> vm::Result<InstructionResult<Cost>> {
@@ -539,7 +532,9 @@ impl<Cost: CostType> Interpreter<Cost> {
 				let init_size = self.stack.pop_back();
 				let address_scheme = match instruction {
 					instructions::CREATE => CreateContractAddress::FromSenderAndNonce,
-					instructions::CREATE2 => CreateContractAddress::FromSenderSaltAndCodeHash(self.stack.pop_back().into()),
+					instructions::CREATE2 => CreateContractAddress::FromSenderSaltAndCodeHash(
+						BigEndianHash::from_uint(&self.stack.pop_back())
+					),
 					_ => unreachable!("instruction can only be CREATE/CREATE2 checked above; qed"),
 				};
 
@@ -560,7 +555,14 @@ impl<Cost: CostType> Interpreter<Cost> {
 
 				let contract_code = self.mem.read_slice(init_off, init_size);
 
-				let create_result = ext.create(&create_gas.as_u256(), &endowment, contract_code, address_scheme, true);
+				let create_result = ext.create(
+					&create_gas.as_u256(), 
+					&endowment, 
+					contract_code, 
+					&self.params.code_version, 
+					address_scheme, 
+					true,
+				);
 				return match create_result {
 					Ok(ContractCreateResult::Created(address, gas_left)) => {
 						self.stack.push(address_to_u256(address));
@@ -614,14 +616,14 @@ impl<Cost: CostType> Interpreter<Cost> {
 							return Err(vm::Error::MutableCallInStaticContext);
 						}
 						let has_balance = ext.balance(&self.params.address)? >= value.expect("value set for all but delegate call; qed");
-						(&self.params.address, &code_address, has_balance, CallType::Call)
+						(&self.params.address, &code_address, has_balance, ActionType::Call)
 					},
 					instructions::CALLCODE => {
 						let has_balance = ext.balance(&self.params.address)? >= value.expect("value set for all but delegate call; qed");
-						(&self.params.address, &self.params.address, has_balance, CallType::CallCode)
+						(&self.params.address, &self.params.address, has_balance, ActionType::CallCode)
 					},
-					instructions::DELEGATECALL => (&self.params.sender, &self.params.address, true, CallType::DelegateCall),
-					instructions::STATICCALL => (&self.params.address, &code_address, true, CallType::StaticCall),
+					instructions::DELEGATECALL => (&self.params.sender, &self.params.address, true, ActionType::DelegateCall),
+					instructions::STATICCALL => (&self.params.address, &code_address, true, ActionType::StaticCall),
 					_ => panic!(format!("Unexpected instruction {:?} in CALL branch.", instruction))
 				};
 
@@ -696,7 +698,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 				let size = self.stack.pop_back();
 				let topics = self.stack.pop_n(no_of_topics)
 					.iter()
-					.map(H256::from)
+					.map(BigEndianHash::from_uint)
 					.collect();
 				ext.log(topics, self.mem.read_slice(offset, size))?;
 			},
@@ -733,21 +735,21 @@ impl<Cost: CostType> Interpreter<Cost> {
 				let offset = self.stack.pop_back();
 				let size = self.stack.pop_back();
 				let k = keccak(self.mem.read_slice(offset, size));
-				self.stack.push(U256::from(&*k));
+				self.stack.push(k.into_uint());
 			},
 			instructions::SLOAD => {
-				let key = H256::from(&self.stack.pop_back());
-				let word = U256::from(&*ext.storage_at(&key)?);
+				let key = BigEndianHash::from_uint(&self.stack.pop_back());
+				let word = ext.storage_at(&key)?.into_uint();
 				self.stack.push(word);
 			},
 			instructions::SSTORE => {
-				let address = H256::from(&self.stack.pop_back());
+				let address = BigEndianHash::from_uint(&self.stack.pop_back());
 				let val = self.stack.pop_back();
 
-				let current_val = U256::from(&*ext.storage_at(&address)?);
+				let current_val = ext.storage_at(&address)?.into_uint();
 				// Increase refund for clear
 				if ext.schedule().eip1283 {
-					let original_val = U256::from(&*ext.initial_storage_at(&address)?);
+					let original_val = ext.initial_storage_at(&address)?.into_uint();
 					gasometer::handle_eip1283_sstore_clears_refund(ext, &original_val, &current_val, &val);
 				} else {
 					if !current_val.is_zero() && val.is_zero() {
@@ -755,7 +757,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 						ext.add_sstore_refund(sstore_clears_schedule);
 					}
 				}
-				ext.set_storage(address, H256::from(&val))?;
+				ext.set_storage(address, BigEndianHash::from_uint(&val))?;
 			},
 			instructions::PC => {
 				self.stack.push(U256::from(self.reader.position - 1));
@@ -816,7 +818,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 			instructions::EXTCODEHASH => {
 				let address = u256_to_address(&self.stack.pop_back());
 				let hash = ext.extcodehash(&address)?.unwrap_or_else(H256::zero);
-				self.stack.push(U256::from(hash));
+				self.stack.push(hash.into_uint());
 			},
 			instructions::CALLDATACOPY => {
 				Self::copy_data_to_memory(&mut self.mem, &mut self.stack, &self.params.data.as_ref().map_or_else(|| &[] as &[u8], |d| &*d as &[u8]));
@@ -850,7 +852,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 			instructions::BLOCKHASH => {
 				let block_number = self.stack.pop_back();
 				let block_hash = ext.blockhash(&block_number);
-				self.stack.push(U256::from(&*block_hash));
+				self.stack.push(block_hash.into_uint());
 			},
 			instructions::COINBASE => {
 				self.stack.push(address_to_u256(ext.env_info().author.clone()));
@@ -1046,12 +1048,12 @@ impl<Cost: CostType> Interpreter<Cost> {
 				let c = self.stack.pop_back();
 
 				self.stack.push(if !c.is_zero() {
-					let a_num = to_biguint(a);
-					let b_num = to_biguint(b);
-					let c_num = to_biguint(c);
-					let res = a_num + b_num;
-					let x = res % c_num;
-					from_biguint(x)
+					let a_512 = U512::from(a);
+					let b_512 = U512::from(b);
+					let c_512 = U512::from(c);
+					let res = a_512 + b_512;
+					let x = res % c_512;
+					U256::try_from(x).expect("U512 % U256 fits U256; qed")
 				} else {
 					U256::zero()
 				});
@@ -1062,12 +1064,12 @@ impl<Cost: CostType> Interpreter<Cost> {
 				let c = self.stack.pop_back();
 
 				self.stack.push(if !c.is_zero() {
-					let a_num = to_biguint(a);
-					let b_num = to_biguint(b);
-					let c_num = to_biguint(c);
-					let res = a_num * b_num;
-					let x = res % c_num;
-					from_biguint(x)
+					let a_512 = U512::from(a);
+					let b_512 = U512::from(b);
+					let c_512 = U512::from(c);
+					let res = a_512 * b_512;
+					let x = res % c_512;
+					U256::try_from(x).expect("U512 % U256 fits U256; qed")
 				} else {
 					U256::zero()
 				});
@@ -1143,7 +1145,7 @@ impl<Cost: CostType> Interpreter<Cost> {
 		Ok(InstructionResult::Ok)
 	}
 
-	fn copy_data_to_memory(mem: &mut Vec<u8>, stack: &mut Stack<U256>, source: &[u8]) {
+	fn copy_data_to_memory(mem: &mut Vec<u8>, stack: &mut dyn Stack<U256>, source: &[u8]) {
 		let dest_offset = stack.pop_back();
 		let source_offset = stack.pop_back();
 		let size = stack.pop_back();
@@ -1207,25 +1209,26 @@ fn set_sign(value: U256, sign: bool) -> U256 {
 
 #[inline]
 fn u256_to_address(value: &U256) -> Address {
-	Address::from(H256::from(value))
+	let addr: H256 = BigEndianHash::from_uint(value);
+	Address::from(addr)
 }
 
 #[inline]
 fn address_to_u256(value: Address) -> U256 {
-	U256::from(&*H256::from(value))
+	H256::from(value).into_uint()
 }
 
 #[cfg(test)]
 mod tests {
 	use std::sync::Arc;
 	use rustc_hex::FromHex;
-	use vmtype::VMType;
 	use factory::Factory;
 	use vm::{self, Exec, ActionParams, ActionValue};
 	use vm::tests::{FakeExt, test_finalize};
+	use ethereum_types::Address;
 
-	fn interpreter(params: ActionParams, ext: &vm::Ext) -> Box<Exec> {
-		Factory::new(VMType::Interpreter, 1).create(params, ext.schedule(), ext.depth())
+	fn interpreter(params: ActionParams, ext: &dyn vm::Ext) -> Box<dyn Exec> {
+		Factory::new(1).create(params, ext.schedule(), ext.depth())
 	}
 
 	#[test]
@@ -1233,17 +1236,17 @@ mod tests {
 		let code = "7feeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff006000527faaffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffaa6020526000620f120660406000601773945304eb96065b2a98b57a48a06ae28d285a71b56101f4f1600055".from_hex().unwrap();
 
 		let mut params = ActionParams::default();
-		params.address = 5.into();
+		params.address = Address::from_low_u64_be(5);
 		params.gas = 300_000.into();
 		params.gas_price = 1.into();
 		params.value = ActionValue::Transfer(100_000.into());
 		params.code = Some(Arc::new(code));
 		let mut ext = FakeExt::new();
-		ext.balances.insert(5.into(), 1_000_000_000.into());
+		ext.balances.insert(Address::from_low_u64_be(5), 1_000_000_000.into());
 		ext.tracing = true;
 
 		let gas_left = {
-			let mut vm = interpreter(params, &ext);
+			let vm = interpreter(params, &ext);
 			test_finalize(vm.exec(&mut ext).ok().unwrap()).unwrap()
 		};
 
@@ -1256,16 +1259,16 @@ mod tests {
 		let code = "6001600160000360003e00".from_hex().unwrap();
 
 		let mut params = ActionParams::default();
-		params.address = 5.into();
+		params.address = Address::from_low_u64_be(5);
 		params.gas = 300_000.into();
 		params.gas_price = 1.into();
 		params.code = Some(Arc::new(code));
 		let mut ext = FakeExt::new_byzantium();
-		ext.balances.insert(5.into(), 1_000_000_000.into());
+		ext.balances.insert(Address::from_low_u64_be(5), 1_000_000_000.into());
 		ext.tracing = true;
 
 		let err = {
-			let mut vm = interpreter(params, &ext);
+			let vm = interpreter(params, &ext);
 			test_finalize(vm.exec(&mut ext).ok().unwrap()).err().unwrap()
 		};
 

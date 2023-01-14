@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -14,40 +14,46 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
-use std::net::{SocketAddr, SocketAddrV4, Ipv4Addr};
+use std::cmp::{max, min};
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io::{self, Read, Write};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::ops::*;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-use std::ops::*;
-use std::cmp::{min, max};
-use std::path::{Path, PathBuf};
-use std::io::{Read, Write, self};
-use std::fs;
 use std::time::Duration;
-use ethkey::{KeyPair, Secret, Random, Generator};
-use hash::keccak;
-use mio::*;
-use mio::deprecated::{EventLoop};
-use mio::tcp::*;
-use mio::udp::*;
-use ethereum_types::H256;
-use rlp::{RlpStream, Encodable};
 
-use session::{Session, SessionData};
-use io::*;
-use PROTOCOL_VERSION;
-use node_table::*;
-use network::{NetworkConfiguration, NetworkIoMessage, ProtocolId, PeerId, PacketId};
-use network::{NonReservedPeerMode, NetworkContext as NetworkContextTrait};
-use network::{SessionInfo, Error, ErrorKind, DisconnectReason, NetworkProtocolHandler};
-use discovery::{Discovery, TableUpdates, NodeEntry, MAX_DATAGRAM_SIZE};
-use network::client_version::ClientVersion;
-use ip_utils::{map_external_address, select_public_address};
+use ethereum_types::H256;
+use keccak_hash::keccak;
+use log::{debug, info, trace, warn};
+use mio::{
+	deprecated::EventLoop, PollOpt, Ready, tcp::{TcpListener, TcpStream},
+	Token,
+	udp::UdpSocket
+};
 use parity_path::restrict_permissions_owner;
 use parking_lot::{Mutex, RwLock};
-use network::{ConnectionFilter, ConnectionDirection};
-use connection::PAYLOAD_SOFT_LIMIT;
+use rlp::{Encodable, RlpStream};
+
+use ethcore_io::{IoContext, IoHandler, IoManager, StreamToken, TimerToken};
+use parity_crypto::publickey::{Generator, KeyPair, Random, Secret};
+use network::{
+	client_version::ClientVersion, ConnectionDirection, ConnectionFilter, DisconnectReason, Error,
+	NetworkConfiguration, NetworkContext as NetworkContextTrait, NetworkIoMessage, NetworkProtocolHandler,
+	NonReservedPeerMode, PacketId, PeerId, ProtocolId, SessionInfo
+};
+
+use crate::{
+	connection::PAYLOAD_SOFT_LIMIT,
+	discovery::{Discovery, MAX_DATAGRAM_SIZE, NodeEntry, TableUpdates},
+	ip_utils::{map_external_address, select_public_address},
+	node_table::*,
+	PROTOCOL_VERSION,
+	session::{Session, SessionData}
+};
 
 type Slab<T> = ::slab::Slab<T, usize>;
 
@@ -155,7 +161,7 @@ impl<'s> NetworkContextTrait for NetworkContext<'s> {
 
 	fn respond(&self, packet_id: PacketId, data: Vec<u8>) -> Result<(), Error> {
 		assert!(self.session.is_some(), "Respond called without network context");
-		self.session_id.map_or_else(|| Err(ErrorKind::Expired.into()), |id| self.send(id, packet_id, data))
+		self.session_id.map_or_else(|| Err(Error::Expired), |id| self.send(id, packet_id, data))
 	}
 
 	fn disable_peer(&self, peer: PeerId) {
@@ -263,17 +269,17 @@ pub struct Host {
 	sessions: Arc<RwLock<Slab<SharedSession>>>,
 	discovery: Mutex<Option<Discovery<'static>>>,
 	nodes: RwLock<NodeTable>,
-	handlers: RwLock<HashMap<ProtocolId, Arc<NetworkProtocolHandler + Sync>>>,
+	handlers: RwLock<HashMap<ProtocolId, Arc<dyn NetworkProtocolHandler + Sync>>>,
 	timers: RwLock<HashMap<TimerToken, ProtocolTimer>>,
 	timer_counter: RwLock<usize>,
 	reserved_nodes: RwLock<HashSet<NodeId>>,
 	stopping: AtomicBool,
-	filter: Option<Arc<ConnectionFilter>>,
+	filter: Option<Arc<dyn ConnectionFilter>>,
 }
 
 impl Host {
 	/// Create a new instance
-	pub fn new(mut config: NetworkConfiguration, filter: Option<Arc<ConnectionFilter>>) -> Result<Host, Error> {
+	pub fn new(mut config: NetworkConfiguration, filter: Option<Arc<dyn ConnectionFilter>>) -> Result<Host, Error> {
 		let mut listen_address = match config.listen_address {
 			None => SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), DEFAULT_PORT)),
 			Some(addr) => addr,
@@ -455,7 +461,7 @@ impl Host {
 				let public_address = select_public_address(local_endpoint.address.port());
 				let public_endpoint = NodeEndpoint { address: public_address, udp_port: local_endpoint.udp_port };
 				if self.info.read().config.nat_enabled {
-					match map_external_address(&local_endpoint) {
+					match map_external_address(&local_endpoint, &self.info.read().config.nat_type) {
 						Some(endpoint) => {
 							info!("NAT mapped to external address {}", endpoint.address);
 							endpoint
@@ -618,8 +624,8 @@ impl Host {
 
 		let socket = {
 			let address = {
-				let mut nodes = self.nodes.write();
-				if let Some(node) = nodes.get_mut(id) {
+				let nodes = self.nodes.read();
+				if let Some(node) = nodes.get(id) {
 					node.endpoint.address
 				} else {
 					debug!(target: "network", "Connection to expired node aborted");
@@ -720,8 +726,8 @@ impl Host {
 							let reserved_nodes = self.reserved_nodes.read();
 							let s = session.lock();
 							trace!(target: "network", "Session read error: {}:{:?} ({:?}) {:?}", token, s.id(), s.remote_addr(), e);
-							match *e.kind() {
-								ErrorKind::Disconnect(DisconnectReason::IncompatibleProtocol) | ErrorKind::Disconnect(DisconnectReason::UselessPeer) => {
+							match e {
+								Error::Disconnect(DisconnectReason::IncompatibleProtocol) | Error::Disconnect(DisconnectReason::UselessPeer) => {
 									if let Some(id) = s.id() {
 										if !reserved_nodes.contains(id) {
 											let mut nodes = self.nodes.write();
@@ -835,6 +841,7 @@ impl Host {
 				if duplicate {
 					trace!(target: "network", "Rejected duplicate connection: {}", token);
 					session.lock().disconnect(io, DisconnectReason::DuplicatePeer);
+					drop(handlers);
 					self.kill_connection(token, io, false);
 					return;
 				}
@@ -926,7 +933,7 @@ impl Host {
 		let mut failure_id = None;
 		let mut deregister = false;
 		let mut expired_session = None;
-		if let FIRST_SESSION ... LAST_SESSION = token {
+		if let FIRST_SESSION ..= LAST_SESSION = token {
 			let sessions = self.sessions.read();
 			if let Some(session) = sessions.get(token).cloned() {
 				expired_session = Some(session.clone());
@@ -981,14 +988,14 @@ impl Host {
 		self.nodes.write().update(node_changes, &*reserved_nodes);
 	}
 
-	pub fn with_context<F>(&self, protocol: ProtocolId, io: &IoContext<NetworkIoMessage>, action: F) where F: FnOnce(&NetworkContextTrait) {
+	pub fn with_context<F>(&self, protocol: ProtocolId, io: &IoContext<NetworkIoMessage>, action: F) where F: FnOnce(&dyn NetworkContextTrait) {
 		let reserved = { self.reserved_nodes.read() };
 
 		let context = NetworkContext::new(io, protocol, None, self.sessions.clone(), &reserved);
 		action(&context);
 	}
 
-	pub fn with_context_eval<F, T>(&self, protocol: ProtocolId, io: &IoContext<NetworkIoMessage>, action: F) -> T where F: FnOnce(&NetworkContextTrait) -> T {
+	pub fn with_context_eval<F, T>(&self, protocol: ProtocolId, io: &IoContext<NetworkIoMessage>, action: F) -> T where F: FnOnce(&dyn NetworkContextTrait) -> T {
 		let reserved = { self.reserved_nodes.read() };
 
 		let context = NetworkContext::new(io, protocol, None, self.sessions.clone(), &reserved);
@@ -1007,7 +1014,7 @@ impl IoHandler<NetworkIoMessage> for Host {
 	fn stream_hup(&self, io: &IoContext<NetworkIoMessage>, stream: StreamToken) {
 		trace!(target: "network", "Hup: {}", stream);
 		match stream {
-			FIRST_SESSION ... LAST_SESSION => self.connection_closed(stream, io),
+			FIRST_SESSION ..= LAST_SESSION => self.connection_closed(stream, io),
 			_ => warn!(target: "network", "Unexpected hup"),
 		};
 	}
@@ -1017,7 +1024,7 @@ impl IoHandler<NetworkIoMessage> for Host {
 			return;
 		}
 		match stream {
-			FIRST_SESSION ... LAST_SESSION => self.session_readable(stream, io),
+			FIRST_SESSION ..= LAST_SESSION => self.session_readable(stream, io),
 			DISCOVERY => self.discovery_readable(io),
 			TCP_ACCEPT => self.accept(io),
 			_ => panic!("Received unknown readable token"),
@@ -1029,7 +1036,7 @@ impl IoHandler<NetworkIoMessage> for Host {
 			return;
 		}
 		match stream {
-			FIRST_SESSION ... LAST_SESSION => self.session_writable(stream, io),
+			FIRST_SESSION ..= LAST_SESSION => self.session_writable(stream, io),
 			DISCOVERY => self.discovery_writable(io),
 			_ => panic!("Received unknown writable token"),
 		}
@@ -1041,7 +1048,7 @@ impl IoHandler<NetworkIoMessage> for Host {
 		}
 		match token {
 			IDLE => self.maintain_network(io),
-			FIRST_SESSION ... LAST_SESSION => self.connection_timeout(token, io),
+			FIRST_SESSION ..= LAST_SESSION => self.connection_timeout(token, io),
 			DISCOVERY_REFRESH => {
 				// Run the _slow_ discovery if enough peers are connected
 				if !self.has_enough_peers() {
@@ -1150,7 +1157,7 @@ impl IoHandler<NetworkIoMessage> for Host {
 
 	fn register_stream(&self, stream: StreamToken, reg: Token, event_loop: &mut EventLoop<IoManager<NetworkIoMessage>>) {
 		match stream {
-			FIRST_SESSION ... LAST_SESSION => {
+			FIRST_SESSION ..= LAST_SESSION => {
 				let session = { self.sessions.read().get(stream).cloned() };
 				if let Some(session) = session {
 					session.lock().register_socket(reg, event_loop).expect("Error registering socket");
@@ -1170,7 +1177,7 @@ impl IoHandler<NetworkIoMessage> for Host {
 
 	fn deregister_stream(&self, stream: StreamToken, event_loop: &mut EventLoop<IoManager<NetworkIoMessage>>) {
 		match stream {
-			FIRST_SESSION ... LAST_SESSION => {
+			FIRST_SESSION ..= LAST_SESSION => {
 				let mut connections = self.sessions.write();
 				if let Some(connection) = connections.get(stream).cloned() {
 					let c = connection.lock();
@@ -1187,7 +1194,7 @@ impl IoHandler<NetworkIoMessage> for Host {
 
 	fn update_stream(&self, stream: StreamToken, reg: Token, event_loop: &mut EventLoop<IoManager<NetworkIoMessage>>) {
 		match stream {
-			FIRST_SESSION ... LAST_SESSION => {
+			FIRST_SESSION ..= LAST_SESSION => {
 				let connection = { self.sessions.read().get(stream).cloned() };
 				if let Some(connection) = connection {
 					connection.lock().update_socket(reg, event_loop).expect("Error updating socket");
@@ -1229,7 +1236,7 @@ fn save_key(path: &Path, key: &Secret) {
 	if let Err(e) = restrict_permissions_owner(path, true, false) {
 		warn!(target: "network", "Failed to modify permissions of the file ({})", e);
 	}
-	if let Err(e) = file.write(&key.hex().into_bytes()[2..]) {
+	if let Err(e) = file.write(&key.to_hex().into_bytes()) {
 		warn!("Error writing key file: {:?}", e);
 	}
 }

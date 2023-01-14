@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -17,12 +17,13 @@
 use std::collections::{BTreeSet, BTreeMap};
 use std::collections::btree_map::Entry;
 use std::sync::Arc;
-use parking_lot::{Mutex, Condvar};
-use ethkey::{Public, Secret, Signature, sign};
+use futures::Oneshot;
+use parking_lot::Mutex;
+use crypto::publickey::{Public, Secret, Signature, sign};
 use ethereum_types::H256;
 use key_server_cluster::{Error, NodeId, SessionId, SessionMeta, AclStorage, DocumentKeyShare, Requester};
 use key_server_cluster::cluster::{Cluster};
-use key_server_cluster::cluster_sessions::{SessionIdWithSubSession, ClusterSession};
+use key_server_cluster::cluster_sessions::{SessionIdWithSubSession, ClusterSession, CompletionSignal};
 use key_server_cluster::generation_session::{SessionImpl as GenerationSession, SessionParams as GenerationSessionParams,
 	SessionState as GenerationSessionState};
 use key_server_cluster::math;
@@ -55,11 +56,11 @@ struct SessionCore {
 	/// Key share.
 	pub key_share: Option<DocumentKeyShare>,
 	/// Cluster which allows this node to send messages to other nodes in the cluster.
-	pub cluster: Arc<Cluster>,
+	pub cluster: Arc<dyn Cluster>,
 	/// Session-level nonce.
 	pub nonce: u64,
-	/// SessionImpl completion condvar.
-	pub completed: Condvar,
+	/// Session completion signal.
+	pub completed: CompletionSignal<Signature>,
 }
 
 /// Signing consensus session type.
@@ -111,9 +112,9 @@ pub struct SessionParams {
 	/// Key share.
 	pub key_share: Option<DocumentKeyShare>,
 	/// ACL storage.
-	pub acl_storage: Arc<AclStorage>,
+	pub acl_storage: Arc<dyn AclStorage>,
 	/// Cluster
-	pub cluster: Arc<Cluster>,
+	pub cluster: Arc<dyn Cluster>,
 	/// Session nonce.
 	pub nonce: u64,
 }
@@ -129,7 +130,7 @@ struct SigningConsensusTransport {
 	/// Selected key version (on master node).
 	version: Option<H256>,
 	/// Cluster.
-	cluster: Arc<Cluster>,
+	cluster: Arc<dyn Cluster>,
 }
 
 /// Signing key generation transport.
@@ -141,7 +142,7 @@ struct NonceGenerationTransport<F: Fn(SessionId, Secret, u64, GenerationMessage)
 	/// Session-level nonce.
 	nonce: u64,
 	/// Cluster.
-	cluster: Arc<Cluster>,
+	cluster: Arc<dyn Cluster>,
 	/// Other nodes ids.
 	other_nodes_ids: BTreeSet<NodeId>,
 	/// Message mapping function.
@@ -157,7 +158,7 @@ struct SigningJobTransport {
 	/// Session-level nonce.
 	nonce: u64,
 	/// Cluster.
-	cluster: Arc<Cluster>,
+	cluster: Arc<dyn Cluster>,
 }
 
 /// Session delegation status.
@@ -170,7 +171,10 @@ enum DelegationStatus {
 
 impl SessionImpl {
 	/// Create new signing session.
-	pub fn new(params: SessionParams, requester: Option<Requester>) -> Result<Self, Error> {
+	pub fn new(
+		params: SessionParams,
+		requester: Option<Requester>,
+	) -> Result<(Self, Oneshot<Result<Signature, Error>>), Error> {
 		debug_assert_eq!(params.meta.threshold, params.key_share.as_ref().map(|ks| ks.threshold).unwrap_or_default());
 
 		let consensus_transport = SigningConsensusTransport {
@@ -197,14 +201,15 @@ impl SessionImpl {
 			consensus_transport: consensus_transport,
 		})?;
 
-		Ok(SessionImpl {
+		let (completed, oneshot) = CompletionSignal::new();
+		Ok((SessionImpl {
 			core: SessionCore {
 				meta: params.meta,
 				access_key: params.access_key,
 				key_share: params.key_share,
 				cluster: params.cluster,
 				nonce: params.nonce,
-				completed: Condvar::new(),
+				completed,
 			},
 			data: Mutex::new(SessionData {
 				state: SessionState::ConsensusEstablishing,
@@ -218,10 +223,11 @@ impl SessionImpl {
 				delegation_status: None,
 				result: None,
 			}),
-		})
+		}, oneshot))
 	}
 
 	/// Wait for session completion.
+	#[cfg(test)]
 	pub fn wait(&self) -> Result<Signature, Error> {
 		Self::wait_session(&self.core.completed, &self.data, None, |data| data.result.clone())
 			.expect("wait_session returns Some if called without timeout; qed")
@@ -251,7 +257,6 @@ impl SessionImpl {
 		})))?;
 		data.delegation_status = Some(DelegationStatus::DelegatedTo(master));
 		Ok(())
-
 	}
 
 	/// Initialize signing session on master node.
@@ -284,8 +289,9 @@ impl SessionImpl {
 
 		// consensus established => threshold is 0 => we can generate signature on this node
 		if data.consensus_session.state() == ConsensusSessionState::ConsensusEstablished {
-			data.result = Some(sign(&key_version.secret_share, &message_hash).map_err(Into::into));
-			self.core.completed.notify_all();
+			let result = sign(&key_version.secret_share, &message_hash).map_err(Into::into);
+			data.result = Some(result.clone());
+			self.core.completed.send(result);
 		}
 
 		Ok(())
@@ -797,7 +803,7 @@ impl SessionImpl {
 				map: map_message,
 			}),
 			nonce: None,
-		})
+		}).0
 	}
 
 	/// Set signing session result.
@@ -820,8 +826,8 @@ impl SessionImpl {
 			};
 		}
 
-		data.result = Some(result);
-		core.completed.notify_all();
+		data.result = Some(result.clone());
+		core.completed.send(result);
 	}
 
 	/// Check if all nonces are generated.
@@ -883,6 +889,8 @@ impl SessionImpl {
 
 impl ClusterSession for SessionImpl {
 	type Id = SessionIdWithSubSession;
+	type CreationData = Requester;
+	type SuccessfulResult = Signature;
 
 	fn type_name() -> &'static str {
 		"ecdsa_signing"
@@ -1062,7 +1070,7 @@ impl JobTransport for SigningJobTransport {
 mod tests {
 	use std::sync::Arc;
 	use ethereum_types::H256;
-	use ethkey::{self, Random, Generator, Public, verify_public, public_to_address};
+	use crypto::publickey::{Random, Generator, Public, verify_public, public_to_address};
 	use key_server_cluster::{SessionId, Error, KeyStorage};
 	use key_server_cluster::cluster::tests::{MessageLoop as ClusterMessageLoop};
 	use key_server_cluster::signing_session_ecdsa::SessionImpl;
@@ -1082,7 +1090,7 @@ mod tests {
 		pub fn init_with_version(self, key_version: Option<H256>) -> Result<(Self, Public, H256), Error> {
 			let message_hash = H256::random();
 			let requester = Random.generate().unwrap();
-			let signature = ethkey::sign(requester.secret(), &SessionId::default()).unwrap();
+			let signature = crypto::publickey::sign(requester.secret(), &SessionId::default()).unwrap();
 			self.0.cluster(0).client()
 				.new_ecdsa_signing_session(Default::default(), signature.into(), key_version, message_hash)
 				.map(|_| (self, *requester.public(), message_hash))

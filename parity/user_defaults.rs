@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -22,7 +22,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::de::from_reader;
 use serde_json::ser::to_string;
 use journaldb::Algorithm;
-use ethcore::client::{Mode as ClientMode};
+use types::client_types::Mode as ClientMode;
 
 #[derive(Clone)]
 pub struct Seconds(Duration);

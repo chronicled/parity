@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -20,7 +20,7 @@ use std::str::FromStr;
 use bytes::ToPretty;
 use accounts::AccountProvider;
 use ethereum_types::{Address, H520, U256};
-use ethcore::client::TestBlockChainClient;
+use ethcore::test_helpers::TestBlockChainClient;
 use jsonrpc_core::IoHandler;
 use parking_lot::Mutex;
 use types::transaction::{Action, Transaction};
@@ -34,7 +34,7 @@ use v1::tests::helpers::TestMinerService;
 use v1::types::{EIP191Version, PresignedTransaction};
 use rustc_hex::ToHex;
 use serde_json::to_value;
-use ethkey::Secret;
+use crypto::publickey::Secret;
 
 struct PersonalTester {
 	_runtime: Runtime,
@@ -363,7 +363,7 @@ fn sign_eip191_with_validator() {
 	}"#;
 	let with_validator = to_value(PresignedTransaction {
 		validator: address.into(),
-		data: keccak("hello world").to_vec().into()
+		data: keccak("hello world").as_bytes().to_vec().into()
 	}).unwrap();
 	let result = eip191::hash_message(EIP191Version::PresignedTransaction, with_validator).unwrap();
 	let result = tester.accounts.sign(address, Some("password123".into()), result).unwrap().into_electrum();

@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -18,24 +18,16 @@
 //!
 //! Blocks can be produced by a local node or they may be received from the network.
 //!
-//! To create a block locally, we start with an `OpenBlock`. This block is mutable
-//! and can be appended to with transactions and uncles.
-//!
-//! When ready, `OpenBlock` can be closed and turned into a `ClosedBlock`. A `ClosedBlock` can
-//! be reopend again by a miner under certain circumstances. On block close, state commit is
-//! performed.
-//!
-//! `LockedBlock` is a version of a `ClosedBlock` that cannot be reopened. It can be sealed
-//! using an engine.
-//!
-//! `ExecutedBlock` is an underlaying data structure used by all structs above to store block
-//! related info.
+//! Other block types are found in `ethcore`
 
 use bytes::Bytes;
+use ethereum_types::{H256, U256};
+use parity_util_mem::MallocSizeOf;
 
+use BlockNumber;
 use header::Header;
 use rlp::{Rlp, RlpStream, Decodable, DecoderError};
-use transaction::UnverifiedTransaction;
+use transaction::{UnverifiedTransaction, SignedTransaction};
 
 /// A block, encoded as it is on the block chain.
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -73,4 +65,54 @@ impl Decodable for Block {
 			uncles: rlp.list_at(2)?,
 		})
 	}
+}
+
+/// Preprocessed block data gathered in `verify_block_unordered` call
+#[derive(MallocSizeOf)]
+pub struct PreverifiedBlock {
+	/// Populated block header
+	pub header: Header,
+	/// Populated block transactions
+	pub transactions: Vec<SignedTransaction>,
+	/// Populated block uncles
+	pub uncles: Vec<Header>,
+	/// Block bytes
+	pub bytes: Bytes,
+}
+
+/// Brief info about inserted block.
+#[derive(Clone)]
+pub struct BlockInfo {
+	/// Block hash.
+	pub hash: H256,
+	/// Block number.
+	pub number: BlockNumber,
+	/// Total block difficulty.
+	pub total_difficulty: U256,
+	/// Block location in blockchain.
+	pub location: BlockLocation
+}
+
+/// Describes location of newly inserted block.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BlockLocation {
+	/// It's part of the canon chain.
+	CanonChain,
+	/// It's not a part of the canon chain.
+	Branch,
+	/// It's part of the fork which should become canon chain,
+	/// because its total difficulty is higher than current
+	/// canon chain difficulty.
+	BranchBecomingCanonChain(BranchBecomingCanonChainData),
+}
+
+/// Info about heaviest fork
+#[derive(Debug, Clone, PartialEq)]
+pub struct BranchBecomingCanonChainData {
+	/// Hash of the newest common ancestor with old canon chain.
+	pub ancestor: H256,
+	/// Hashes of the blocks between ancestor and this block.
+	pub enacted: Vec<H256>,
+	/// Hashes of the blocks which were invalidated.
+	pub retracted: Vec<H256>,
 }

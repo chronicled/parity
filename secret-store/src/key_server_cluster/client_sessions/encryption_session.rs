@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,15 +16,15 @@
 
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter, Error as FmtError};
-use std::time;
 use std::sync::Arc;
-use parking_lot::{Condvar, Mutex};
+use futures::Oneshot;
+use parking_lot::Mutex;
 use ethereum_types::Address;
-use ethkey::Public;
+use crypto::publickey::Public;
 use key_server_cluster::{Error, NodeId, SessionId, Requester, KeyStorage,
 	DocumentKeyShare, ServerKeyId};
 use key_server_cluster::cluster::Cluster;
-use key_server_cluster::cluster_sessions::ClusterSession;
+use key_server_cluster::cluster_sessions::{ClusterSession, CompletionSignal};
 use key_server_cluster::message::{Message, EncryptionMessage, InitializeEncryptionSession,
 	ConfirmEncryptionInitialization, EncryptionSessionError};
 
@@ -44,13 +44,13 @@ pub struct SessionImpl {
 	/// Encrypted data.
 	encrypted_data: Option<DocumentKeyShare>,
 	/// Key storage.
-	key_storage: Arc<KeyStorage>,
+	key_storage: Arc<dyn KeyStorage>,
 	/// Cluster which allows this node to send messages to other nodes in the cluster.
-	cluster: Arc<Cluster>,
+	cluster: Arc<dyn Cluster>,
 	/// Session nonce.
 	nonce: u64,
-	/// SessionImpl completion condvar.
-	completed: Condvar,
+	/// Session completion signal.
+	completed: CompletionSignal<()>,
 	/// Mutable session data.
 	data: Mutex<SessionData>,
 }
@@ -64,9 +64,9 @@ pub struct SessionParams {
 	/// Encrypted data (result of running generation_session::SessionImpl).
 	pub encrypted_data: Option<DocumentKeyShare>,
 	/// Key storage.
-	pub key_storage: Arc<KeyStorage>,
+	pub key_storage: Arc<dyn KeyStorage>,
 	/// Cluster
-	pub cluster: Arc<Cluster>,
+	pub cluster: Arc<dyn Cluster>,
 	/// Session nonce.
 	pub nonce: u64,
 }
@@ -108,34 +108,29 @@ pub enum SessionState {
 
 impl SessionImpl {
 	/// Create new encryption session.
-	pub fn new(params: SessionParams) -> Result<Self, Error> {
+	pub fn new(params: SessionParams) -> Result<(Self, Oneshot<Result<(), Error>>), Error> {
 		check_encrypted_data(params.encrypted_data.as_ref())?;
 
-		Ok(SessionImpl {
+		let (completed, oneshot) = CompletionSignal::new();
+		Ok((SessionImpl {
 			id: params.id,
 			self_node_id: params.self_node_id,
 			encrypted_data: params.encrypted_data,
 			key_storage: params.key_storage,
 			cluster: params.cluster,
 			nonce: params.nonce,
-			completed: Condvar::new(),
+			completed,
 			data: Mutex::new(SessionData {
 				state: SessionState::WaitingForInitialization,
 				nodes: BTreeMap::new(),
 				result: None,
 			}),
-		})
+		}, oneshot))
 	}
 
 	/// Get this node Id.
 	pub fn node(&self) -> &NodeId {
 		&self.self_node_id
-	}
-
-	/// Wait for session completion.
-	pub fn wait(&self, timeout: Option<time::Duration>) -> Result<(), Error> {
-		Self::wait_session(&self.completed, &self.data, timeout, |data| data.result.clone())
-			.expect("wait_session returns Some if called without timeout; qed")
 	}
 
 	/// Start new session initialization. This must be called on master node.
@@ -175,7 +170,7 @@ impl SessionImpl {
 		} else {
 			data.state = SessionState::Finished;
 			data.result = Some(Ok(()));
-			self.completed.notify_all();
+			self.completed.send(Ok(()));
 
 			Ok(())
 		}
@@ -230,7 +225,7 @@ impl SessionImpl {
 		// update state
 		data.state = SessionState::Finished;
 		data.result = Some(Ok(()));
-		self.completed.notify_all();
+		self.completed.send(Ok(()));
 
 		Ok(())
 	}
@@ -238,6 +233,8 @@ impl SessionImpl {
 
 impl ClusterSession for SessionImpl {
 	type Id = SessionId;
+	type CreationData = ();
+	type SuccessfulResult = ();
 
 	fn type_name() -> &'static str {
 		"encryption"
@@ -260,7 +257,7 @@ impl ClusterSession for SessionImpl {
 
 		data.state = SessionState::Failed;
 		data.result = Some(Err(Error::NodeDisconnected));
-		self.completed.notify_all();
+		self.completed.send(Err(Error::NodeDisconnected));
 	}
 
 	fn on_session_timeout(&self) {
@@ -270,7 +267,7 @@ impl ClusterSession for SessionImpl {
 
 		data.state = SessionState::Failed;
 		data.result = Some(Err(Error::NodeDisconnected));
-		self.completed.notify_all();
+		self.completed.send(Err(Error::NodeDisconnected));
 	}
 
 	fn on_session_error(&self, node: &NodeId, error: Error) {
@@ -290,8 +287,8 @@ impl ClusterSession for SessionImpl {
 		warn!("{}: encryption session failed with error: {} from {}", self.node(), error, node);
 
 		data.state = SessionState::Failed;
-		data.result = Some(Err(error));
-		self.completed.notify_all();
+		data.result = Some(Err(error.clone()));
+		self.completed.send(Err(error));
 	}
 
 	fn on_message(&self, sender: &NodeId, message: &Message) -> Result<(), Error> {
@@ -334,7 +331,7 @@ pub fn check_encrypted_data(key_share: Option<&DocumentKeyShare>) -> Result<(), 
 }
 
 /// Update key share with encrypted document key.
-pub fn update_encrypted_data(key_storage: &Arc<KeyStorage>, key_id: ServerKeyId, mut key_share: DocumentKeyShare, author: Address, common_point: Public, encrypted_point: Public) -> Result<(), Error> {
+pub fn update_encrypted_data(key_storage: &Arc<dyn KeyStorage>, key_id: ServerKeyId, mut key_share: DocumentKeyShare, author: Address, common_point: Public, encrypted_point: Public) -> Result<(), Error> {
 	// author must be the same
 	if key_share.author != author {
 		return Err(Error::AccessDenied);

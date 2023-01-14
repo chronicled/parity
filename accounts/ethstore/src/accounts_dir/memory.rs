@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use parking_lot::RwLock;
 use itertools;
-use ethkey::Address;
+use crypto::publickey::Address;
 
 use {SafeAccount, Error};
 use super::KeyDirectory;
@@ -68,7 +68,7 @@ impl KeyDirectory for MemoryDirectory {
 	fn unique_repr(&self) -> Result<u64, Error> {
 		let mut val = 0u64;
 		let accounts = self.accounts.read();
-		for acc in accounts.keys() { val = val ^ acc.low_u64() }
+		for acc in accounts.keys() { val = val ^ acc.to_low_u64_be() }
 		Ok(val)
 	}
 }

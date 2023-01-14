@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,20 +16,16 @@
 
 use std::sync::Arc;
 use parking_lot::RwLock;
-use common_types::filter::Filter;
 use ethabi::RawLog;
 use ethabi::FunctionOutputDecoder;
-use call_contract::CallContract;
-use ethcore::client::{Client, BlockChainClient, BlockId};
-use ethkey::{Public, public_to_address};
+use crypto::publickey::{Public, public_to_address};
 use hash::keccak;
 use bytes::Bytes;
-use ethereum_types::{H256, U256, Address};
+use ethereum_types::{H256, U256, Address, H512};
 use listener::ApiMask;
 use listener::service_contract_listener::ServiceTask;
-use trusted_client::TrustedClient;
-use helpers::{get_confirmed_block_hash, REQUEST_CONFIRMATIONS_REQUIRED};
-use {ServerKeyId, NodeKeyPair, ContractAddress};
+use blockchain::{SecretStoreChain, Filter, SigningKeyPair, ContractAddress, BlockId};
+use ServerKeyId;
 
 use_contract!(service, "res/service.json");
 
@@ -68,9 +64,9 @@ pub trait ServiceContract: Send + Sync {
 	/// Update contract when new blocks are enacted. Returns true if contract is installed && up-to-date (i.e. chain is synced).
 	fn update(&self) -> bool;
 	/// Read recent contract logs. Returns topics of every entry.
-	fn read_logs(&self) -> Box<Iterator<Item=ServiceTask>>;
+	fn read_logs(&self) -> Box<dyn Iterator<Item=ServiceTask>>;
 	/// Publish generated key.
-	fn read_pending_requests(&self) -> Box<Iterator<Item=(bool, ServiceTask)>>;
+	fn read_pending_requests(&self) -> Box<dyn Iterator<Item=(bool, ServiceTask)>>;
 	/// Publish generated server key.
 	fn publish_generated_server_key(&self, origin: &Address, server_key_id: &ServerKeyId, server_key: Public) -> Result<(), String>;
 	/// Publish server key generation error.
@@ -96,9 +92,9 @@ pub struct OnChainServiceContract {
 	/// Requests mask.
 	mask: ApiMask,
 	/// Blockchain client.
-	client: TrustedClient,
+	client: Arc<dyn SecretStoreChain>,
 	/// This node key pair.
-	self_key_pair: Arc<NodeKeyPair>,
+	self_key_pair: Arc<dyn SigningKeyPair>,
 	/// Contract registry name (if any).
 	name: String,
 	/// Contract address source.
@@ -136,7 +132,7 @@ struct DocumentKeyShadowRetrievalService;
 
 impl OnChainServiceContract {
 	/// Create new on-chain service contract.
-	pub fn new(mask: ApiMask, client: TrustedClient, name: String, address_source: ContractAddress, self_key_pair: Arc<NodeKeyPair>) -> Self {
+	pub fn new(mask: ApiMask, client: Arc<dyn SecretStoreChain>, name: String, address_source: ContractAddress, self_key_pair: Arc<dyn SigningKeyPair>) -> Self {
 		let contract = OnChainServiceContract {
 			mask: mask,
 			client: client,
@@ -155,24 +151,23 @@ impl OnChainServiceContract {
 
 	/// Send transaction to the service contract.
 	fn send_contract_transaction<C, P>(&self, tx_name: &str, origin: &Address, server_key_id: &ServerKeyId, is_response_required: C, prepare_tx: P) -> Result<(), String>
-		where C: FnOnce(&Client, &Address, &ServerKeyId, &Address) -> bool,
-			P: FnOnce(&Client, &Address) -> Result<Bytes, String> {
+		where C: FnOnce(&dyn SecretStoreChain, &Address, &ServerKeyId, &Address) -> bool,
+			P: FnOnce(&dyn SecretStoreChain, &Address) -> Result<Bytes, String> {
 		// only publish if contract address is set && client is online
-		let client = match self.client.get() {
-			Some(client) => client,
-			None => return Err("trusted client is required to publish key".into()),
-		};
+		if !self.client.is_trusted() {
+			return Err("trusted client is required to publish key".into())
+		}
 
 		// only publish key if contract waits for publication
 		// failing is ok here - it could be that enough confirmations have been recevied
 		// or key has been requested using HTTP API
 		let self_address = public_to_address(self.self_key_pair.public());
-		if !is_response_required(&*client, origin, server_key_id, &self_address) {
+		if !is_response_required(&*self.client, origin, server_key_id, &self_address) {
 			return Ok(());
 		}
 
 		// prepare transaction data
-		let transaction_data = prepare_tx(&*client, origin)?;
+		let transaction_data = prepare_tx(&*self.client, origin)?;
 
 		// send transaction
 		self.client.transact_contract(
@@ -188,9 +183,9 @@ impl OnChainServiceContract {
 
 	/// Create task-specific pending requests iterator.
 	fn create_pending_requests_iterator<
-		C: 'static + Fn(&Client, &Address, &BlockId) -> Result<U256, String>,
-		R: 'static + Fn(&NodeKeyPair, &Client, &Address, &BlockId, U256) -> Result<(bool, ServiceTask), String>
-	>(&self, client: Arc<Client>, contract_address: &Address, block: &BlockId, get_count: C, read_item: R) -> Box<Iterator<Item=(bool, ServiceTask)>> {
+		C: 'static + Fn(&dyn SecretStoreChain, &Address, &BlockId) -> Result<U256, String>,
+		R: 'static + Fn(&dyn SigningKeyPair, &dyn SecretStoreChain, &Address, &BlockId, U256) -> Result<(bool, ServiceTask), String>
+	>(&self, client: Arc<dyn SecretStoreChain>, contract_address: &Address, block: &BlockId, get_count: C, read_item: R) -> Box<dyn Iterator<Item=(bool, ServiceTask)>> {
 		get_count(&*client, contract_address, block)
 			.map(|count| {
 				let client = client.clone();
@@ -207,7 +202,7 @@ impl OnChainServiceContract {
 						.ok(),
 					index: 0.into(),
 					length: count,
-				}) as Box<Iterator<Item=(bool, ServiceTask)>>
+				}) as Box<dyn Iterator<Item=(bool, ServiceTask)>>
 			})
 			.map_err(|error| {
 				warn!(target: "secretstore", "{}: creating pending requests iterator failed: {}",
@@ -220,7 +215,7 @@ impl OnChainServiceContract {
 
 	/// Update service contract address.
 	fn update_contract_address(&self) -> bool {
-		let contract_address = self.client.read_contract_address(self.name.clone(), &self.address_source);
+		let contract_address = self.client.read_contract_address(&self.name, &self.address_source);
 		let mut data = self.data.write();
 		if contract_address != data.contract_address {
 			trace!(target: "secretstore", "{}: installing {} service contract from address {:?}",
@@ -235,67 +230,46 @@ impl OnChainServiceContract {
 
 impl ServiceContract for OnChainServiceContract {
 	fn update(&self) -> bool {
-		self.update_contract_address() && self.client.get().is_some()
+		self.update_contract_address() && self.client.is_trusted()
 	}
 
-	fn read_logs(&self) -> Box<Iterator<Item=ServiceTask>> {
-		let client = match self.client.get() {
-			Some(client) => client,
-			None => {
-				warn!(target: "secretstore", "{}: client is offline during read_logs call",
-					self.self_key_pair.public());
-				return Box::new(::std::iter::empty());
-			},
+	fn read_logs(&self) -> Box<dyn Iterator<Item=ServiceTask>> {
+		if !self.client.is_trusted() {
+			warn!(target: "secretstore", "{}: client is offline during read_logs call",
+				self.self_key_pair.public());
+			return Box::new(::std::iter::empty());
+		}
+
+		let address = match self.data.read().contract_address {
+			Some(address) => address,
+			None => return Box::new(::std::iter::empty()), // no contract installed
+		};
+		let confirmed_block = match self.client.get_confirmed_block_hash() {
+			Some(confirmed_block) => confirmed_block,
+			None => return Box::new(::std::iter::empty()), // no block with enough confirmations
 		};
 
-		// prepare range of blocks to read logs from
-		let (address, first_block, last_block) = {
-			let mut data = self.data.write();
-			let address = match data.contract_address {
-				Some(address) => address,
-				None => return Box::new(::std::iter::empty()), // no contract installed
-			};
-			let confirmed_block = match get_confirmed_block_hash(&*client, REQUEST_CONFIRMATIONS_REQUIRED) {
-				Some(confirmed_block) => confirmed_block,
-				None => return Box::new(::std::iter::empty()), // no block with enough confirmations
-			};
-			let first_block = match data.last_log_block.take().and_then(|b| client.tree_route(&b, &confirmed_block)) {
-				// if we have a route from last_log_block to confirmed_block => search for logs on this route
-				//
-				// potentially this could lead us to reading same logs twice when reorganizing to the fork, which
-				// already has been canonical previosuly
-				// the worst thing that can happen in this case is spending some time reading unneeded data from SS db
-				Some(ref route) if route.index < route.blocks.len() => route.blocks[route.index],
-				// else we care only about confirmed block
-				_ => confirmed_block.clone(),
-			};
-
-			data.last_log_block = Some(confirmed_block.clone());
-			(address, first_block, confirmed_block)
-		};
-
-		// read server key generation requests
-		let request_logs = client.logs(Filter {
-			from_block: BlockId::Hash(first_block),
-			to_block: BlockId::Hash(last_block),
+		let request_logs = self.client.retrieve_last_logs(Filter {
+			from_block: BlockId::Hash(self.data.read().last_log_block.unwrap_or_else(|| confirmed_block)),
 			address: Some(vec![address]),
 			topics: vec![Some(mask_topics(&self.mask))],
-			limit: None,
 		}).unwrap_or_default();
+
+		let mut data = self.data.write();
+		data.last_log_block = Some(confirmed_block.clone());
 
 		Box::new(request_logs.into_iter()
 			.filter_map(|log| {
-				let raw_log: RawLog = (log.entry.topics.into_iter().map(|t| t.0.into()).collect(), log.entry.data).into();
-				if raw_log.topics[0] == *SERVER_KEY_GENERATION_REQUESTED_EVENT_NAME_HASH {
-					ServerKeyGenerationService::parse_log(&address, raw_log)
-				} else if raw_log.topics[0] == *SERVER_KEY_RETRIEVAL_REQUESTED_EVENT_NAME_HASH {
-					ServerKeyRetrievalService::parse_log(&address, raw_log)
-				} else if raw_log.topics[0] == *DOCUMENT_KEY_STORE_REQUESTED_EVENT_NAME_HASH {
-					DocumentKeyStoreService::parse_log(&address, raw_log)
-				} else if raw_log.topics[0] == *DOCUMENT_KEY_COMMON_PART_RETRIEVAL_REQUESTED_EVENT_NAME_HASH {
-					DocumentKeyShadowRetrievalService::parse_common_request_log(&address, raw_log)
-				} else if raw_log.topics[0] == *DOCUMENT_KEY_PERSONAL_PART_RETRIEVAL_REQUESTED_EVENT_NAME_HASH {
-					DocumentKeyShadowRetrievalService::parse_personal_request_log(&address, raw_log)
+				if log.topics[0] == *SERVER_KEY_GENERATION_REQUESTED_EVENT_NAME_HASH {
+					ServerKeyGenerationService::parse_log(&address, log)
+				} else if log.topics[0] == *SERVER_KEY_RETRIEVAL_REQUESTED_EVENT_NAME_HASH {
+					ServerKeyRetrievalService::parse_log(&address, log)
+				} else if log.topics[0] == *DOCUMENT_KEY_STORE_REQUESTED_EVENT_NAME_HASH {
+					DocumentKeyStoreService::parse_log(&address, log)
+				} else if log.topics[0] == *DOCUMENT_KEY_COMMON_PART_RETRIEVAL_REQUESTED_EVENT_NAME_HASH {
+					DocumentKeyShadowRetrievalService::parse_common_request_log(&address, log)
+				} else if log.topics[0] == *DOCUMENT_KEY_PERSONAL_PART_RETRIEVAL_REQUESTED_EVENT_NAME_HASH {
+					DocumentKeyShadowRetrievalService::parse_personal_request_log(&address, log)
 				} else {
 					Err("unknown type of log entry".into())
 				}
@@ -308,40 +282,38 @@ impl ServiceContract for OnChainServiceContract {
 			}).collect::<Vec<_>>().into_iter())
 	}
 
-	fn read_pending_requests(&self) -> Box<Iterator<Item=(bool, ServiceTask)>> {
-		let client = match self.client.get() {
-			Some(client) => client,
-			None => return Box::new(::std::iter::empty()),
-		};
+	fn read_pending_requests(&self) -> Box<dyn Iterator<Item=(bool, ServiceTask)>> {
+		if !self.client.is_trusted() {
+			return Box::new(::std::iter::empty())
+		}
 
-		// we only need requests that are here for more than REQUEST_CONFIRMATIONS_REQUIRED blocks
-		// => we're reading from Latest - (REQUEST_CONFIRMATIONS_REQUIRED + 1) block
+		// we only need requests that are here from the last confirm block
 		let data = self.data.read();
 		match data.contract_address {
 			None => Box::new(::std::iter::empty()),
-			Some(contract_address) => get_confirmed_block_hash(&*client, REQUEST_CONFIRMATIONS_REQUIRED + 1)
+			Some(contract_address) => self.client.get_confirmed_block_hash()
 				.map(|b| {
 					let block = BlockId::Hash(b);
 					let iter = match self.mask.server_key_generation_requests {
-						true => Box::new(self.create_pending_requests_iterator(client.clone(), &contract_address, &block,
+						true => Box::new(self.create_pending_requests_iterator(self.client.clone(), &contract_address, &block,
 							&ServerKeyGenerationService::read_pending_requests_count,
-							&ServerKeyGenerationService::read_pending_request)) as Box<Iterator<Item=(bool, ServiceTask)>>,
+							&ServerKeyGenerationService::read_pending_request)) as Box<dyn Iterator<Item=(bool, ServiceTask)>>,
 						false => Box::new(::std::iter::empty()),
 					};
 					let iter = match self.mask.server_key_retrieval_requests {
-						true => Box::new(iter.chain(self.create_pending_requests_iterator(client.clone(), &contract_address, &block,
+						true => Box::new(iter.chain(self.create_pending_requests_iterator(self.client.clone(), &contract_address, &block,
 							&ServerKeyRetrievalService::read_pending_requests_count,
 							&ServerKeyRetrievalService::read_pending_request))),
 						false => iter,
 					};
 					let iter = match self.mask.document_key_store_requests {
-						true => Box::new(iter.chain(self.create_pending_requests_iterator(client.clone(), &contract_address, &block,
+						true => Box::new(iter.chain(self.create_pending_requests_iterator(self.client.clone(), &contract_address, &block,
 							&DocumentKeyStoreService::read_pending_requests_count,
 							&DocumentKeyStoreService::read_pending_request))),
 						false => iter,
 					};
 					let iter = match self.mask.document_key_shadow_retrieval_requests {
-						true => Box::new(iter.chain(self.create_pending_requests_iterator(client, &contract_address, &block,
+						true => Box::new(iter.chain(self.create_pending_requests_iterator(self.client.clone(), &contract_address, &block,
 							&DocumentKeyShadowRetrievalService::read_pending_requests_count,
 							&DocumentKeyShadowRetrievalService::read_pending_request))),
 						false => iter
@@ -455,7 +427,7 @@ impl ServerKeyGenerationService {
 	}
 
 	/// Check if response from key server is required.
-	pub fn is_response_required(client: &Client, contract_address: &Address, server_key_id: &ServerKeyId, key_server: &Address) -> bool {
+	pub fn is_response_required(client: &dyn SecretStoreChain, contract_address: &Address, server_key_id: &ServerKeyId, key_server: &Address) -> bool {
 		// we're checking confirmation in Latest block, because we're interested in latest contract state here
 		let (encoded, decoder) = service::functions::is_server_key_generation_response_required::call(*server_key_id, *key_server);
 		match client.call_contract(BlockId::Latest, *contract_address, encoded) {
@@ -466,7 +438,7 @@ impl ServerKeyGenerationService {
 
 	/// Prepare publish key transaction data.
 	pub fn prepare_pubish_tx_data(server_key_id: &ServerKeyId, server_key_public: &Public) -> Bytes {
-		service::functions::server_key_generated::encode_input(*server_key_id, server_key_public.to_vec())
+		service::functions::server_key_generated::encode_input(*server_key_id, server_key_public.as_bytes().to_vec())
 	}
 
 	/// Prepare error transaction data.
@@ -475,14 +447,14 @@ impl ServerKeyGenerationService {
 	}
 
 	/// Read pending requests count.
-	fn read_pending_requests_count(client: &Client, contract_address: &Address, block: &BlockId) -> Result<U256, String> {
+	fn read_pending_requests_count(client: &dyn SecretStoreChain, contract_address: &Address, block: &BlockId) -> Result<U256, String> {
 		let (encoded, decoder) = service::functions::server_key_generation_requests_count::call();
 		decoder.decode(&client.call_contract(*block, *contract_address, encoded)?)
 			.map_err(|e| e.to_string())
 	}
 
 	/// Read pending request.
-	fn read_pending_request(self_key_pair: &NodeKeyPair, client: &Client, contract_address: &Address, block: &BlockId, index: U256) -> Result<(bool, ServiceTask), String> {
+	fn read_pending_request(self_key_pair: &dyn SigningKeyPair, client: &dyn SecretStoreChain, contract_address: &Address, block: &BlockId, index: U256) -> Result<(bool, ServiceTask), String> {
 		let self_address = public_to_address(self_key_pair.public());
 
 		let (encoded, decoder) = service::functions::get_server_key_generation_request::call(index);
@@ -515,7 +487,7 @@ impl ServerKeyRetrievalService {
 	}
 
 	/// Check if response from key server is required.
-	pub fn is_response_required(client: &Client, contract_address: &Address, server_key_id: &ServerKeyId, key_server: &Address) -> bool {
+	pub fn is_response_required(client: &dyn SecretStoreChain, contract_address: &Address, server_key_id: &ServerKeyId, key_server: &Address) -> bool {
 		// we're checking confirmation in Latest block, because we're interested in latest contract state here
 		let (encoded, decoder) = service::functions::is_server_key_retrieval_response_required::call(*server_key_id, *key_server);
 		match client.call_contract(BlockId::Latest, *contract_address, encoded) {
@@ -526,7 +498,7 @@ impl ServerKeyRetrievalService {
 
 	/// Prepare publish key transaction data.
 	pub fn prepare_pubish_tx_data(server_key_id: &ServerKeyId, server_key_public: Public, threshold: U256) -> Bytes {
-		service::functions::server_key_retrieved::encode_input(*server_key_id, server_key_public.to_vec(), threshold)
+		service::functions::server_key_retrieved::encode_input(*server_key_id, server_key_public.as_bytes().to_vec(), threshold)
 	}
 
 	/// Prepare error transaction data.
@@ -535,14 +507,14 @@ impl ServerKeyRetrievalService {
 	}
 
 	/// Read pending requests count.
-	fn read_pending_requests_count(client: &Client, contract_address: &Address, block: &BlockId) -> Result<U256, String> {
+	fn read_pending_requests_count(client: &dyn SecretStoreChain, contract_address: &Address, block: &BlockId) -> Result<U256, String> {
 		let (encoded, decoder) = service::functions::server_key_retrieval_requests_count::call();
 		decoder.decode(&client.call_contract(*block, *contract_address, encoded)?)
 			.map_err(|e| e.to_string())
 	}
 
 	/// Read pending request.
-	fn read_pending_request(self_key_pair: &NodeKeyPair, client: &Client, contract_address: &Address, block: &BlockId, index: U256) -> Result<(bool, ServiceTask), String> {
+	fn read_pending_request(self_key_pair: &dyn SigningKeyPair, client: &dyn SecretStoreChain, contract_address: &Address, block: &BlockId, index: U256) -> Result<(bool, ServiceTask), String> {
 		let self_address = public_to_address(self_key_pair.public());
 
 		let (encoded, decoder) = service::functions::get_server_key_retrieval_request::call(index);
@@ -566,13 +538,19 @@ impl DocumentKeyStoreService {
 	/// Parse request log entry.
 	pub fn parse_log(origin: &Address, raw_log: RawLog) -> Result<ServiceTask, String> {
 		match service::events::document_key_store_requested::parse_log(raw_log) {
-			Ok(l) => Ok(ServiceTask::StoreDocumentKey(origin.clone(), l.server_key_id, l.author, (*l.common_point).into(), (*l.encrypted_point).into())),
+			Ok(l) => Ok(ServiceTask::StoreDocumentKey(
+				origin.clone(),
+				l.server_key_id,
+				l.author,
+				H512::from_slice(&*l.common_point),
+				H512::from_slice(&*l.encrypted_point),
+			)),
 			Err(e) => Err(format!("{}", e)),
 		}
 	}
 
 	/// Check if response from key server is required.
-	pub fn is_response_required(client: &Client, contract_address: &Address, server_key_id: &ServerKeyId, key_server: &Address) -> bool {
+	pub fn is_response_required(client: &dyn SecretStoreChain, contract_address: &Address, server_key_id: &ServerKeyId, key_server: &Address) -> bool {
 		// we're checking confirmation in Latest block, because we're interested in latest contract state here
 		let (encoded, decoder) = service::functions::is_document_key_store_response_required::call(*server_key_id, *key_server);
 		match client.call_contract(BlockId::Latest, *contract_address, encoded) {
@@ -592,14 +570,14 @@ impl DocumentKeyStoreService {
 	}
 
 	/// Read pending requests count.
-	fn read_pending_requests_count(client: &Client, contract_address: &Address, block: &BlockId) -> Result<U256, String> {
+	fn read_pending_requests_count(client: &dyn SecretStoreChain, contract_address: &Address, block: &BlockId) -> Result<U256, String> {
 		let (encoded, decoder) = service::functions::document_key_store_requests_count::call();
 		decoder.decode(&client.call_contract(*block, *contract_address, encoded)?)
 			.map_err(|e| e.to_string())
 	}
 
 	/// Read pending request.
-	fn read_pending_request(self_key_pair: &NodeKeyPair, client: &Client, contract_address: &Address, block: &BlockId, index: U256) -> Result<(bool, ServiceTask), String> {
+	fn read_pending_request(self_key_pair: &dyn SigningKeyPair, client: &dyn SecretStoreChain, contract_address: &Address, block: &BlockId, index: U256) -> Result<(bool, ServiceTask), String> {
 		let self_address = public_to_address(self_key_pair.public());
 		let (encoded, decoder) = service::functions::get_document_key_store_request::call(index);
 		let (server_key_id, author, common_point, encrypted_point) = decoder.decode(&client.call_contract(*block, *contract_address, encoded)?)
@@ -633,13 +611,13 @@ impl DocumentKeyShadowRetrievalService {
 	/// Parse personal request log entry.
 	pub fn parse_personal_request_log(origin: &Address, raw_log: RawLog) -> Result<ServiceTask, String> {
 		match service::events::document_key_personal_retrieval_requested::parse_log(raw_log) {
-			Ok(l) => Ok(ServiceTask::RetrieveShadowDocumentKeyPersonal(origin.clone(), l.server_key_id, (*l.requester_public).into())),
+			Ok(l) => Ok(ServiceTask::RetrieveShadowDocumentKeyPersonal(origin.clone(), l.server_key_id, H512::from_slice(&*l.requester_public))),
 			Err(e) => Err(e.to_string())
 		}
 	}
 
 	/// Check if response from key server is required.
-	pub fn is_response_required(client: &Client, contract_address: &Address, server_key_id: &ServerKeyId, requester: &Address, key_server: &Address) -> bool {
+	pub fn is_response_required(client: &dyn SecretStoreChain, contract_address: &Address, server_key_id: &ServerKeyId, requester: &Address, key_server: &Address) -> bool {
 		// we're checking confirmation in Latest block, because we're interested in latest contract state here
 		let (encoded, decoder) = service::functions::is_document_key_shadow_retrieval_response_required::call(*server_key_id, *requester, *key_server);
 		match client.call_contract(BlockId::Latest, *contract_address, encoded) {
@@ -650,11 +628,11 @@ impl DocumentKeyShadowRetrievalService {
 
 	/// Prepare publish common key transaction data.
 	pub fn prepare_pubish_common_tx_data(server_key_id: &ServerKeyId, requester: &Address, common_point: Public, threshold: U256) -> Bytes {
-		service::functions::document_key_common_retrieved::encode_input(*server_key_id, *requester, common_point.to_vec(), threshold)
+		service::functions::document_key_common_retrieved::encode_input(*server_key_id, *requester, common_point.as_bytes().to_vec(), threshold)
 	}
 
 	/// Prepare publish personal key transaction data.
-	pub fn prepare_pubish_personal_tx_data(client: &Client, contract_address: &Address, server_key_id: &ServerKeyId, requester: &Address, participants: &[Address], decrypted_secret: Public, shadow: Bytes) -> Result<Bytes, String> {
+	pub fn prepare_pubish_personal_tx_data(client: &dyn SecretStoreChain, contract_address: &Address, server_key_id: &ServerKeyId, requester: &Address, participants: &[Address], decrypted_secret: Public, shadow: Bytes) -> Result<Bytes, String> {
 		let mut participants_mask = U256::default();
 		for participant in participants {
 			let participant_index = Self::map_key_server_address(client, contract_address, participant.clone())
@@ -662,7 +640,7 @@ impl DocumentKeyShadowRetrievalService {
 			participants_mask = participants_mask | (U256::one() << participant_index);
 		}
 		Ok(service::functions::document_key_personal_retrieved::encode_input(
-			*server_key_id, *requester, participants_mask, decrypted_secret.to_vec(), shadow
+			*server_key_id, *requester, participants_mask, decrypted_secret.as_bytes().to_vec(), shadow
 		))
 	}
 
@@ -672,14 +650,14 @@ impl DocumentKeyShadowRetrievalService {
 	}
 
 	/// Read pending requests count.
-	fn read_pending_requests_count(client: &Client, contract_address: &Address, block: &BlockId) -> Result<U256, String> {
+	fn read_pending_requests_count(client: &dyn SecretStoreChain, contract_address: &Address, block: &BlockId) -> Result<U256, String> {
 		let (encoded, decoder) = service::functions::document_key_shadow_retrieval_requests_count::call();
 		decoder.decode(&client.call_contract(*block, *contract_address, encoded)?)
 			.map_err(|e| e.to_string())
 	}
 
 	/// Read pending request.
-	fn read_pending_request(self_key_pair: &NodeKeyPair, client: &Client, contract_address: &Address, block: &BlockId, index: U256) -> Result<(bool, ServiceTask), String> {
+	fn read_pending_request(self_key_pair: &dyn SigningKeyPair, client: &dyn SecretStoreChain, contract_address: &Address, block: &BlockId, index: U256) -> Result<(bool, ServiceTask), String> {
 		let self_address = public_to_address(self_key_pair.public());
 
 		let (encoded, decoder) = service::functions::get_document_key_shadow_retrieval_request::call(index);
@@ -709,7 +687,7 @@ impl DocumentKeyShadowRetrievalService {
 	}
 
 	/// Map from key server address to key server index.
-	fn map_key_server_address(client: &Client, contract_address: &Address, key_server: Address) -> Result<u8, String> {
+	fn map_key_server_address(client: &dyn SecretStoreChain, contract_address: &Address, key_server: Address) -> Result<u8, String> {
 		// we're checking confirmation in Latest block, because tx ,ust be appended to the latest state
 		let (encoded, decoder) = service::functions::require_key_server::call(key_server);
 		let index = decoder.decode(&client.call_contract(BlockId::Latest, *contract_address, encoded)?)
@@ -718,7 +696,7 @@ impl DocumentKeyShadowRetrievalService {
 		if index > u8::max_value().into() {
 			Err(format!("key server index is too big: {}", index))
 		} else {
-			let index: u32 = index.into();
+			let index: u32 = index.low_u32();
 			Ok(index as u8)
 		}
 	}
@@ -746,7 +724,7 @@ fn serialize_threshold(threshold: usize) -> Result<U256, String> {
 pub mod tests {
 	use parking_lot::Mutex;
 	use bytes::Bytes;
-	use ethkey::Public;
+	use crypto::publickey::Public;
 	use ethereum_types::Address;
 	use listener::service_contract_listener::ServiceTask;
 	use {ServerKeyId};
@@ -773,11 +751,11 @@ pub mod tests {
 			true
 		}
 
-		fn read_logs(&self) -> Box<Iterator<Item=ServiceTask>> {
+		fn read_logs(&self) -> Box<dyn Iterator<Item=ServiceTask>> {
 			Box::new(self.logs.clone().into_iter())
 		}
 
-		fn read_pending_requests(&self) -> Box<Iterator<Item=(bool, ServiceTask)>> {
+		fn read_pending_requests(&self) -> Box<dyn Iterator<Item=(bool, ServiceTask)>> {
 			Box::new(self.pending_requests.clone().into_iter())
 		}
 

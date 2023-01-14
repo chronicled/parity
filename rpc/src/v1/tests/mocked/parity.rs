@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -15,13 +15,17 @@
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::sync::Arc;
-use ethcore::client::{TestBlockChainClient, Executed, TransactionId};
+use ethcore::test_helpers::TestBlockChainClient;
 use ethcore_logger::RotatingLogger;
-use ethereum_types::{Address, U256, H256};
-use ethstore::ethkey::{Generator, Random};
+use ethereum_types::{Address, U256, H256, BigEndianHash, Bloom};
+use crypto::publickey::{Generator, Random};
+use machine::executed::Executed;
 use miner::pool::local_transactions::Status as LocalTransactionStatus;
 use sync::ManageNetwork;
-use types::receipt::{LocalizedReceipt, TransactionOutcome};
+use types::{
+	ids::TransactionId,
+	receipt::{LocalizedReceipt, TransactionOutcome},
+};
 
 use jsonrpc_core::IoHandler;
 use v1::{Parity, ParityClient};
@@ -41,7 +45,7 @@ pub struct Dependencies {
 	pub updater: Arc<TestUpdater>,
 	pub logger: Arc<RotatingLogger>,
 	pub settings: Arc<NetworkSettings>,
-	pub network: Arc<ManageNetwork>,
+	pub network: Arc<dyn ManageNetwork>,
 	pub ws_address: Option<Host>,
 }
 
@@ -126,7 +130,7 @@ fn rpc_parity_version_info() {
 	let io = deps.default_client();
 
 	let request = r#"{"jsonrpc": "2.0", "method": "parity_versionInfo", "params": [], "id": 1}"#;
-	let response = r#"{"jsonrpc":"2.0","result":{"hash":"0x0000000000000000000000000000000000000096","track":"beta","version":{"major":1,"minor":5,"patch":0}},"id":1}"#;
+	let response = r#"{"jsonrpc":"2.0","result":{"hash":"0x0000000000000000000000000000000000000096","track":"stable","version":{"major":1,"minor":5,"patch":0}},"id":1}"#;
 	assert_eq!(io.handle_request_sync(request), Some(response.to_owned()));
 }
 
@@ -136,7 +140,7 @@ fn rpc_parity_releases_info() {
 	let io = deps.default_client();
 
 	let request = r#"{"jsonrpc": "2.0", "method": "parity_releasesInfo", "params": [], "id": 1}"#;
-	let response = r#"{"jsonrpc":"2.0","result":{"fork":15100,"minor":null,"this_fork":15000,"track":{"binary":"0x00000000000000000000000000000000000000000000000000000000000005e6","fork":15100,"is_critical":true,"version":{"hash":"0x0000000000000000000000000000000000000097","track":"beta","version":{"major":1,"minor":5,"patch":1}}}},"id":1}"#;
+	let response = r#"{"jsonrpc":"2.0","result":{"fork":15100,"minor":null,"this_fork":15000,"track":{"binary":"0x00000000000000000000000000000000000000000000000000000000000005e6","fork":15100,"is_critical":true,"version":{"hash":"0x0000000000000000000000000000000000000097","track":"stable","version":{"major":1,"minor":5,"patch":1}}}},"id":1}"#;
 	assert_eq!(io.handle_request_sync(request), Some(response.to_owned()));
 }
 
@@ -312,11 +316,44 @@ fn rpc_parity_unsigned_transactions_count_when_signer_disabled() {
 }
 
 #[test]
-fn rpc_parity_pending_transactions() {
+fn rpc_parity_pending_transactions_without_limit_without_filter() {
 	let deps = Dependencies::new();
 	let io = deps.default_client();
 
 	let request = r#"{"jsonrpc": "2.0", "method": "parity_pendingTransactions", "params":[], "id": 1}"#;
+	let response = r#"{"jsonrpc":"2.0","result":[],"id":1}"#;
+
+	assert_eq!(io.handle_request_sync(request), Some(response.to_owned()));
+}
+
+#[test]
+fn rpc_parity_pending_transactions_with_limit_without_filter() {
+	let deps = Dependencies::new();
+	let io = deps.default_client();
+
+	let request = r#"{"jsonrpc": "2.0", "method": "parity_pendingTransactions", "params":[5], "id": 1}"#;
+	let response = r#"{"jsonrpc":"2.0","result":[],"id":1}"#;
+
+	assert_eq!(io.handle_request_sync(request), Some(response.to_owned()));
+}
+
+#[test]
+fn rpc_parity_pending_transactions_without_limit_with_filter() {
+	let deps = Dependencies::new();
+	let io = deps.default_client();
+
+	let request = r#"{"jsonrpc": "2.0", "method": "parity_pendingTransactions", "params":[null,{"to":{"eq":"0xe8b2d01ffa0a15736b2370b6e5064f9702c891b6"},"gas":{"gt":"0x493e0"}}], "id": 1}"#;
+	let response = r#"{"jsonrpc":"2.0","result":[],"id":1}"#;
+
+	assert_eq!(io.handle_request_sync(request), Some(response.to_owned()));
+}
+
+#[test]
+fn rpc_parity_pending_transactions_with_limit_with_filter() {
+	let deps = Dependencies::new();
+	let io = deps.default_client();
+
+	let request = r#"{"jsonrpc": "2.0", "method": "parity_pendingTransactions", "params":[5,{"to":{"eq":"0xe8b2d01ffa0a15736b2370b6e5064f9702c891b6"},"gas":{"gt":"0x493e0"}}], "id": 1}"#;
 	let response = r#"{"jsonrpc":"2.0","result":[],"id":1}"#;
 
 	assert_eq!(io.handle_request_sync(request), Some(response.to_owned()));
@@ -353,7 +390,7 @@ fn rpc_parity_ws_address() {
 #[test]
 fn rpc_parity_next_nonce() {
 	let deps = Dependencies::new();
-	let address = Address::default();
+	let address = Address::zero();
 	let io1 = deps.default_client();
 	let deps = Dependencies::new();
 	deps.miner.increment_nonce(&address);
@@ -396,10 +433,10 @@ fn rpc_parity_local_transactions() {
 		action: ::types::transaction::Action::Create,
 		data: vec![1, 2, 3],
 		nonce: 0.into(),
-	}.fake_sign(3.into());
+	}.fake_sign(Address::from_low_u64_be(3));
 	let tx = Arc::new(::miner::pool::VerifiedTransaction::from_pending_block_transaction(tx));
-	deps.miner.local_transactions.lock().insert(10.into(), LocalTransactionStatus::Pending(tx.clone()));
-	deps.miner.local_transactions.lock().insert(15.into(), LocalTransactionStatus::Pending(tx.clone()));
+	deps.miner.local_transactions.lock().insert(H256::from_low_u64_be(10), LocalTransactionStatus::Pending(tx.clone()));
+	deps.miner.local_transactions.lock().insert(H256::from_low_u64_be(15), LocalTransactionStatus::Pending(tx.clone()));
 
 	let request = r#"{"jsonrpc": "2.0", "method": "parity_localTransactions", "params":[], "id": 1}"#;
 	let response = r#"{"jsonrpc":"2.0","result":{"0x000000000000000000000000000000000000000000000000000000000000000a":{"status":"pending"},"0x000000000000000000000000000000000000000000000000000000000000000f":{"status":"pending"}},"id":1}"#;
@@ -412,8 +449,8 @@ fn rpc_parity_chain_status() {
 	let deps = Dependencies::new();
 	let io = deps.default_client();
 
-	*deps.client.ancient_block.write() = Some((H256::default(), 5));
-	*deps.client.first_block.write() = Some((H256::from(U256::from(1234)), 3333));
+	*deps.client.ancient_block.write() = Some((H256::zero(), 5));
+	*deps.client.first_block.write() = Some((BigEndianHash::from_uint(&U256::from(1234)), 3333));
 
 	let request = r#"{"jsonrpc": "2.0", "method": "parity_chainStatus", "params":[], "id": 1}"#;
 	let response = r#"{"jsonrpc":"2.0","result":{"blockGap":["0x6","0xd05"]},"id":1}"#;
@@ -484,19 +521,19 @@ fn rpc_parity_call() {
 fn rpc_parity_block_receipts() {
 	let deps = Dependencies::new();
 	deps.client.receipts.write()
-		.insert(TransactionId::Hash(1.into()), LocalizedReceipt {
-			transaction_hash: 1.into(),
+		.insert(TransactionId::Hash(H256::from_low_u64_be(1)), LocalizedReceipt {
+			transaction_hash: H256::from_low_u64_be(1),
 			transaction_index: 0,
-			block_hash: 3.into(),
+			block_hash: H256::from_low_u64_be(3),
 			block_number: 0,
 			cumulative_gas_used: 21_000.into(),
 			gas_used: 21_000.into(),
 			contract_address: None,
 			logs: vec![],
-			log_bloom: 1.into(),
+			log_bloom: Bloom::from_low_u64_be(1),
 			outcome: TransactionOutcome::Unknown,
 			to: None,
-			from: 9.into(),
+			from: Address::from_low_u64_be(9),
 		});
 	let io = deps.default_client();
 
@@ -506,7 +543,7 @@ fn rpc_parity_block_receipts() {
 		"params": [],
 		"id": 1
 	}"#;
-	let response = r#"{"jsonrpc":"2.0","result":[{"blockHash":"0x0000000000000000000000000000000000000000000000000000000000000003","blockNumber":"0x0","contractAddress":null,"cumulativeGasUsed":"0x5208","from":"0x0000000000000000000000000000000000000009","gasUsed":"0x5208","logs":[],"logsBloom":"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001","root":null,"status":null,"to":null,"transactionHash":"0x0000000000000000000000000000000000000000000000000000000000000001","transactionIndex":"0x0"}],"id":1}"#;
+	let response = r#"{"jsonrpc":"2.0","result":[{"blockHash":"0x0000000000000000000000000000000000000000000000000000000000000003","blockNumber":"0x0","contractAddress":null,"cumulativeGasUsed":"0x5208","from":"0x0000000000000000000000000000000000000009","gasUsed":"0x5208","logs":[],"logsBloom":"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001","to":null,"transactionHash":"0x0000000000000000000000000000000000000000000000000000000000000001","transactionIndex":"0x0"}],"id":1}"#;
 
 	assert_eq!(io.handle_request_sync(request), Some(response.to_owned()));
 }

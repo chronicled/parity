@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -17,7 +17,7 @@
 //! Transaction Pool
 
 use ethereum_types::{U256, H256, Address};
-use heapsize::HeapSizeOf;
+use parity_util_mem::MallocSizeOfExt;
 use types::transaction;
 use txpool;
 
@@ -176,7 +176,7 @@ impl txpool::VerifiedTransaction for VerifiedTransaction {
 	}
 
 	fn mem_usage(&self) -> usize {
-		self.transaction.heap_size_of_children()
+		self.transaction.malloc_size_of()
 	}
 
 	fn sender(&self) -> &Address {
@@ -198,4 +198,22 @@ impl ScoredTransaction for VerifiedTransaction {
 	fn nonce(&self) -> U256 {
 		self.transaction.nonce
 	}
+}
+
+/// Pool transactions status
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TxStatus {
+	/// Added transaction
+	Added,
+	/// Rejected transaction
+	Rejected,
+	/// Dropped transaction
+	Dropped,
+	/// Invalid transaction
+	Invalid,
+	/// Canceled transaction
+	Canceled,
+	/// Culled transaction
+	Culled,
 }

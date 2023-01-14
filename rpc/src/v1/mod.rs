@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -46,6 +46,7 @@ pub use self::impls::*;
 pub use self::helpers::{NetworkSettings, block_import, dispatch};
 pub use self::metadata::Metadata;
 pub use self::types::Origin;
+pub use self::types::pubsub::PubSubSyncStatus;
 pub use self::extractors::{RpcExtractor, WsExtractor, WsStats, WsDispatcher};
 
 /// Signer utilities

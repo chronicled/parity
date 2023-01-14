@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,46 +16,47 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use hash::keccak;
-use ethereum_types::H256;
-use parking_lot::Mutex;
-use bytes::Bytes;
-use ethcore::snapshot::{SnapshotService, ManifestData, RestorationStatus};
-use ethcore::client::EachBlockWith;
-use types::BlockNumber;
-use super::helpers::*;
-use {SyncConfig, WarpSync};
 
+use crate::{
+	api::{SyncConfig, WarpSync},
+	tests::helpers::TestNet
+};
+
+use bytes::Bytes;
+use ethcore::test_helpers::EachBlockWith;
+use ethereum_types::H256;
+use keccak_hash::keccak;
+use parking_lot::Mutex;
+use snapshot::SnapshotService;
+use common_types::{
+	BlockNumber,
+	snapshot::{ManifestData, RestorationStatus},
+};
+
+#[derive(Default)]
 pub struct TestSnapshotService {
 	manifest: Option<ManifestData>,
 	chunks: HashMap<H256, Bytes>,
-
 	restoration_manifest: Mutex<Option<ManifestData>>,
 	state_restoration_chunks: Mutex<HashMap<H256, Bytes>>,
 	block_restoration_chunks: Mutex<HashMap<H256, Bytes>>,
 }
 
 impl TestSnapshotService {
-	pub fn new() -> TestSnapshotService {
-		TestSnapshotService {
-			manifest: None,
-			chunks: HashMap::new(),
-			restoration_manifest: Mutex::new(None),
-			state_restoration_chunks: Mutex::new(HashMap::new()),
-			block_restoration_chunks: Mutex::new(HashMap::new()),
-		}
+	pub fn new() -> Self {
+		Default::default()
 	}
 
 	pub fn new_with_snapshot(num_chunks: usize, block_hash: H256, block_number: BlockNumber) -> TestSnapshotService {
 		let num_state_chunks = num_chunks / 2;
 		let num_block_chunks = num_chunks - num_state_chunks;
-		let state_chunks: Vec<Bytes> = (0..num_state_chunks).map(|_| H256::random().to_vec()).collect();
-		let block_chunks: Vec<Bytes> = (0..num_block_chunks).map(|_| H256::random().to_vec()).collect();
+		let state_chunks: Vec<Bytes> = (0..num_state_chunks).map(|_| H256::random().as_bytes().to_vec()).collect();
+		let block_chunks: Vec<Bytes> = (0..num_block_chunks).map(|_| H256::random().as_bytes().to_vec()).collect();
 		let manifest = ManifestData {
 			version: 2,
 			state_hashes: state_chunks.iter().map(|data| keccak(data)).collect(),
 			block_hashes: block_chunks.iter().map(|data| keccak(data)).collect(),
-			state_root: H256::new(),
+			state_root: H256::zero(),
 			block_number: block_number,
 			block_hash: block_hash,
 		};
@@ -147,7 +148,7 @@ fn snapshot_sync() {
 	let mut config = SyncConfig::default();
 	config.warp_sync = WarpSync::Enabled;
 	let mut net = TestNet::new_with_config(5, config);
-	let snapshot_service = Arc::new(TestSnapshotService::new_with_snapshot(16, H256::new(), 500000));
+	let snapshot_service = Arc::new(TestSnapshotService::new_with_snapshot(16, H256::zero(), 500000));
 	for i in 0..4 {
 		net.peer_mut(i).snapshot_service = snapshot_service.clone();
 		net.peer(i).chain.add_blocks(1, EachBlockWith::Nothing);

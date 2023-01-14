@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -19,7 +19,7 @@ use jsonrpc_core::Result;
 use jsonrpc_derive::rpc;
 
 /// Net rpc interface.
-#[rpc]
+#[rpc(server)]
 pub trait Net {
 	/// Returns protocol version.
 	#[rpc(name = "net_version")]

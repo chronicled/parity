@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -43,6 +43,7 @@ extern crate futures;
 extern crate ansi_term;
 extern crate cid;
 extern crate itertools;
+extern crate machine;
 extern crate multihash;
 extern crate order_stat;
 extern crate parking_lot;
@@ -60,6 +61,7 @@ extern crate jsonrpc_http_server as http;
 extern crate jsonrpc_ipc_server as ipc;
 extern crate jsonrpc_pubsub;
 
+extern crate client_traits;
 extern crate common_types as types;
 extern crate ethash;
 extern crate ethcore;
@@ -82,8 +84,12 @@ extern crate parity_updater as updater;
 extern crate parity_version as version;
 extern crate eip_712;
 extern crate rlp;
+extern crate account_state;
+
 extern crate stats;
+extern crate snapshot;
 extern crate tempdir;
+extern crate trace;
 extern crate vm;
 
 #[cfg(any(test, feature = "ethcore-accounts"))]
@@ -96,6 +102,12 @@ extern crate tiny_keccak;
 extern crate log;
 #[macro_use]
 extern crate serde_derive;
+
+#[cfg(test)]
+extern crate rand_xorshift;
+
+#[cfg(test)]
+extern crate engine;
 
 #[cfg(test)]
 extern crate ethjson;
@@ -116,6 +128,11 @@ extern crate fake_fetch;
 #[cfg(test)]
 extern crate ethcore_io as io;
 
+#[cfg(test)]
+extern crate spec;
+#[cfg(test)]
+extern crate verification;
+
 pub extern crate jsonrpc_ws_server as ws;
 
 mod authcodes;
@@ -126,7 +143,12 @@ pub mod tests;
 
 pub use jsonrpc_core::{FutureOutput, FutureResult, FutureResponse, FutureRpcResult};
 pub use jsonrpc_pubsub::Session as PubSubSession;
-pub use ipc::{Server as IpcServer, MetaExtractor as IpcMetaExtractor, RequestContext as IpcRequestContext};
+pub use ipc::{
+	MetaExtractor as IpcMetaExtractor,
+	RequestContext as IpcRequestContext,
+	SecurityAttributes,
+	Server as IpcServer,
+};
 pub use http::{
 	hyper,
 	RequestMiddleware, RequestMiddlewareAction,
@@ -134,7 +156,8 @@ pub use http::{
 };
 
 pub use v1::{NetworkSettings, Metadata, Origin, informant, dispatch, signer};
-pub use v1::block_import::{is_major_importing, is_major_importing_or_waiting};
+pub use v1::block_import::{is_major_importing_or_waiting};
+pub use v1::PubSubSyncStatus;
 pub use v1::extractors::{RpcExtractor, WsExtractor, WsStats, WsDispatcher};
 pub use authcodes::{AuthCodes, TimeProvider};
 pub use http_common::HttpMetaExtractor;
@@ -208,13 +231,18 @@ pub fn start_ipc<M, S, H, T>(
 	addr: &str,
 	handler: H,
 	extractor: T,
+	chmod: u16
 ) -> ::std::io::Result<ipc::Server> where
 	M: jsonrpc_core::Metadata,
 	S: jsonrpc_core::Middleware<M>,
 	H: Into<jsonrpc_core::MetaIoHandler<M, S>>,
 	T: IpcMetaExtractor<M>,
 {
+	let attr = SecurityAttributes::empty()
+		.set_mode(chmod as _)?;
+
 	ipc::ServerBuilder::with_meta_extractor(handler, extractor)
+		.set_security_attributes(attr)
 		.start(addr)
 }
 

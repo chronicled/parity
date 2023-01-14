@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -32,6 +32,7 @@ pub mod rpc;
 pub mod secretstore;
 pub mod signer;
 pub mod traces;
+pub mod transactions_pool;
 pub mod web3;
 
 pub use self::debug::Debug;
@@ -50,4 +51,5 @@ pub use self::rpc::Rpc;
 pub use self::secretstore::SecretStore;
 pub use self::signer::Signer;
 pub use self::traces::Traces;
+pub use self::transactions_pool::TransactionsPool;
 pub use self::web3::Web3;

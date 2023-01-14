@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -19,7 +19,8 @@ use std::collections::HashSet;
 use edit_distance::edit_distance;
 use parity_wordlist;
 
-use super::{Address, Brain, Generator};
+use super::Brain;
+use parity_crypto::publickey::{Address, Generator};
 
 /// Tries to find a phrase for address, given the number
 /// of expected words and a partial phrase.

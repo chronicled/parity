@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -15,25 +15,20 @@
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::collections::{BTreeMap, HashMap};
-use std::num::NonZeroU32;
 use std::mem;
 use std::path::PathBuf;
 use parking_lot::{Mutex, RwLock};
 use std::time::{Instant, Duration};
 
+use crypto::KEY_ITERATIONS;
 use random::Random;
-use ethkey::{self, Signature, Password, Address, Message, Secret, Public, KeyPair, ExtendedKeyPair};
+use crypto::publickey::{Signature, Address, Message, Secret, Public, KeyPair, ExtendedKeyPair};
+use ethkey::Password;
 use accounts_dir::{KeyDirectory, VaultKeyDirectory, VaultKey, SetKeyError};
 use account::SafeAccount;
 use presale::PresaleWallet;
 use json::{self, Uuid, OpaqueKeyFile};
 use {import, Error, SimpleSecretStore, SecretStore, SecretVaultRef, StoreAccountRef, Derivation, OpaqueSecret};
-
-
-lazy_static! {
-	static ref KEY_ITERATIONS: NonZeroU32 =
-		NonZeroU32::new(crypto::KEY_ITERATIONS as u32).expect("KEY_ITERATIONS > 0; qed");
-}
 
 /// Accounts store.
 pub struct EthStore {
@@ -42,12 +37,12 @@ pub struct EthStore {
 
 impl EthStore {
 	/// Open a new accounts store with given key directory backend.
-	pub fn open(directory: Box<KeyDirectory>) -> Result<Self, Error> {
-		Self::open_with_iterations(directory, *KEY_ITERATIONS)
+	pub fn open(directory: Box<dyn KeyDirectory>) -> Result<Self, Error> {
+		Self::open_with_iterations(directory, KEY_ITERATIONS as u32)
 	}
 
 	/// Open a new account store with given key directory backend and custom number of iterations.
-	pub fn open_with_iterations(directory: Box<KeyDirectory>, iterations: NonZeroU32) -> Result<Self, Error> {
+	pub fn open_with_iterations(directory: Box<dyn KeyDirectory>, iterations: u32) -> Result<Self, Error> {
 		Ok(EthStore {
 			store: EthMultiStore::open_with_iterations(directory, iterations)?,
 		})
@@ -190,7 +185,7 @@ impl SecretStore for EthStore {
 		Ok(account.check_password(password))
 	}
 
-	fn copy_account(&self, new_store: &SimpleSecretStore, new_vault: SecretVaultRef, account: &StoreAccountRef, password: &Password, new_password: &Password) -> Result<(), Error> {
+	fn copy_account(&self, new_store: &dyn SimpleSecretStore, new_vault: SecretVaultRef, account: &StoreAccountRef, password: &Password, new_password: &Password) -> Result<(), Error> {
 		let account = self.get(account)?;
 		let secret = account.crypto.secret(password)?;
 		new_store.insert_account(new_vault, secret, new_password)?;
@@ -262,11 +257,11 @@ impl SecretStore for EthStore {
 
 /// Similar to `EthStore` but may store many accounts (with different passwords) for the same `Address`
 pub struct EthMultiStore {
-	dir: Box<KeyDirectory>,
-	iterations: NonZeroU32,
+	dir: Box<dyn KeyDirectory>,
+	iterations: u32,
 	// order lock: cache, then vaults
 	cache: RwLock<BTreeMap<StoreAccountRef, Vec<SafeAccount>>>,
-	vaults: Mutex<HashMap<String, Box<VaultKeyDirectory>>>,
+	vaults: Mutex<HashMap<String, Box<dyn VaultKeyDirectory>>>,
 	timestamp: Mutex<Timestamp>,
 }
 
@@ -278,12 +273,12 @@ struct Timestamp {
 
 impl EthMultiStore {
 	/// Open new multi-accounts store with given key directory backend.
-	pub fn open(directory: Box<KeyDirectory>) -> Result<Self, Error> {
-		Self::open_with_iterations(directory, *KEY_ITERATIONS)
+	pub fn open(directory: Box<dyn KeyDirectory>) -> Result<Self, Error> {
+		Self::open_with_iterations(directory, KEY_ITERATIONS as u32)
 	}
 
 	/// Open new multi-accounts store with given key directory backend and custom number of iterations for new keys.
-	pub fn open_with_iterations(directory: Box<KeyDirectory>, iterations: NonZeroU32) -> Result<Self, Error> {
+	pub fn open_with_iterations(directory: Box<dyn KeyDirectory>, iterations: u32) -> Result<Self, Error> {
 		let store = EthMultiStore {
 			dir: directory,
 			vaults: Mutex::new(HashMap::new()),
@@ -448,13 +443,13 @@ impl EthMultiStore {
 			Derivation::Hierarchical(path) => {
 				for path_item in path {
 					extended = extended.derive(
-						if path_item.soft { ethkey::Derivation::Soft(path_item.index) }
-						else { ethkey::Derivation::Hard(path_item.index) }
+						if path_item.soft { crypto::publickey::Derivation::Soft(path_item.index) }
+						else { crypto::publickey::Derivation::Hard(path_item.index) }
 					)?;
 				}
 			},
-			Derivation::SoftHash(h256) => { extended = extended.derive(ethkey::Derivation::Soft(h256))?; }
-			Derivation::HardHash(h256) => { extended = extended.derive(ethkey::Derivation::Hard(h256))?; }
+			Derivation::SoftHash(h256) => { extended = extended.derive(crypto::publickey::Derivation::Soft(h256))?; }
+			Derivation::HardHash(h256) => { extended = extended.derive(crypto::publickey::Derivation::Hard(h256))?; }
 		}
 		Ok(extended)
 	}
@@ -485,7 +480,7 @@ impl SimpleSecretStore for EthMultiStore {
 		let accounts = self.get_matching(&account_ref, password)?;
 		for account in accounts {
 			let extended = self.generate(account.crypto.secret(password)?, derivation)?;
-			return Ok(ethkey::public_to_address(extended.public().public()));
+			return Ok(crypto::publickey::public_to_address(extended.public().public()));
 		}
 		Err(Error::InvalidPassword)
 	}
@@ -497,7 +492,7 @@ impl SimpleSecretStore for EthMultiStore {
 		for account in accounts {
 			let extended = self.generate(account.crypto.secret(password)?, derivation)?;
 			let secret = extended.secret().as_raw();
-			return Ok(ethkey::sign(&secret, message)?)
+			return Ok(crypto::publickey::sign(&secret, message)?)
 		}
 		Err(Error::InvalidPassword)
 	}
@@ -696,7 +691,7 @@ mod tests {
 	extern crate tempdir;
 
 	use accounts_dir::{KeyDirectory, MemoryDirectory, RootDiskDirectory};
-	use ethkey::{Random, Generator, KeyPair};
+	use crypto::publickey::{Random, Generator, KeyPair};
 	use secret_store::{SimpleSecretStore, SecretStore, SecretVaultRef, StoreAccountRef, Derivation};
 	use super::{EthStore, EthMultiStore};
 	use self::tempdir::TempDir;
@@ -715,7 +710,7 @@ mod tests {
 	}
 
 	struct RootDiskDirectoryGuard {
-		pub key_dir: Option<Box<KeyDirectory>>,
+		pub key_dir: Option<Box<dyn KeyDirectory>>,
 		_path: TempDir,
 	}
 
@@ -1090,7 +1085,7 @@ mod tests {
 			SecretVaultRef::Root,
 			&address,
 			&"test".into(),
-			Derivation::HardHash(H256::from(0)),
+			Derivation::HardHash(H256::zero()),
 		).unwrap();
 
 		// there should be 2 accounts in the store

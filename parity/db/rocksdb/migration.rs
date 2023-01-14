@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -21,7 +21,7 @@ use std::fmt::{Display, Formatter, Error as FmtError};
 use super::migration_rocksdb::{Manager as MigrationManager, Config as MigrationConfig, ChangeColumns};
 use super::kvdb_rocksdb::{CompactionProfile, DatabaseConfig};
 use ethcore::client::DatabaseCompactionProfile;
-use ethcore;
+use types::errors::EthcoreError;
 
 use super::helpers;
 use super::blooms::migrate_blooms;
@@ -29,23 +29,31 @@ use super::blooms::migrate_blooms;
 /// The migration from v10 to v11.
 /// Adds a column for node info.
 pub const TO_V11: ChangeColumns = ChangeColumns {
-	pre_columns: Some(6),
-	post_columns: Some(7),
+	pre_columns: 6,
+	post_columns: 7,
 	version: 11,
 };
 
 /// The migration from v11 to v12.
 /// Adds a column for light chain storage.
 pub const TO_V12: ChangeColumns = ChangeColumns {
-	pre_columns: Some(7),
-	post_columns: Some(8),
+	pre_columns: 7,
+	post_columns: 8,
 	version: 12,
+};
+
+/// The migration from v12 to v14.
+/// Adds a column for private transactions state storage.
+pub const TO_V14: ChangeColumns = ChangeColumns {
+	pre_columns: 8,
+	post_columns: 9,
+	version: 14,
 };
 
 /// Database is assumed to be at default version, when no version file is found.
 const DEFAULT_VERSION: u32 = 5;
 /// Current version of database models.
-const CURRENT_VERSION: u32 = 13;
+const CURRENT_VERSION: u32 = 14;
 /// A version of database at which blooms-db was introduced
 const BLOOMS_DB_VERSION: u32 = 13;
 /// Defines how many items are migrated to the new version of database at once.
@@ -63,7 +71,7 @@ pub enum Error {
 	/// Migration is not possible.
 	MigrationImpossible,
 	/// Blooms-db migration error.
-	BloomsDB(ethcore::error::Error),
+	BloomsDB(EthcoreError),
 	/// Migration was completed succesfully,
 	/// but there was a problem with io.
 	Io(IoError),
@@ -147,6 +155,7 @@ fn consolidated_database_migrations(compaction_profile: &CompactionProfile) -> R
 	let mut manager = MigrationManager::new(default_migration_settings(compaction_profile));
 	manager.add_migration(TO_V11).map_err(|_| Error::MigrationImpossible)?;
 	manager.add_migration(TO_V12).map_err(|_| Error::MigrationImpossible)?;
+	manager.add_migration(TO_V14).map_err(|_| Error::MigrationImpossible)?;
 	Ok(manager)
 }
 
@@ -208,22 +217,22 @@ pub fn migrate(path: &Path, compaction_profile: &DatabaseCompactionProfile) -> R
 
 	// Further migrations
 	if version < CURRENT_VERSION && exists(&db_path) {
-		println!("Migrating database from version {} to {}", version, CURRENT_VERSION);
+		info!(target: "migration", "Migrating database from version {} to {}", version, CURRENT_VERSION);
 		migrate_database(version, &db_path, consolidated_database_migrations(&compaction_profile)?)?;
 
 		if version < BLOOMS_DB_VERSION {
-			println!("Migrating blooms to blooms-db...");
+			info!(target: "migration", "Migrating blooms to blooms-db...");
 			let db_config = DatabaseConfig {
 				max_open_files: 64,
-				memory_budget: None,
 				compaction: compaction_profile,
 				columns: ethcore_db::NUM_COLUMNS,
+				..Default::default()
 			};
 
 			migrate_blooms(&db_path, &db_config).map_err(Error::BloomsDB)?;
 		}
 
-		println!("Migration finished");
+		info!(target: "migration", "Migration finished");
 	}
 
 	// update version file.

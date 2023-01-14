@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -17,13 +17,14 @@
 //! Clique params deserialization.
 
 use std::num::NonZeroU64;
+use serde::Deserialize;
 
 /// Clique params deserialization.
 #[derive(Debug, PartialEq, Deserialize)]
 pub struct CliqueParams {
-	/// period as defined in EIP
+	/// period as defined in EIP 225
 	pub period: Option<u64>,
-	/// epoch length as defined in EIP
+	/// epoch length as defined in EIP 225
 	pub epoch: Option<NonZeroU64>
 }
 
@@ -36,10 +37,7 @@ pub struct Clique {
 
 #[cfg(test)]
 mod tests {
-	use serde_json;
-	use uint::Uint;
-	use ethereum_types::U256;
-	use super::*;
+	use super::{Clique, NonZeroU64};
 
 	#[test]
 	fn clique_deserialization() {

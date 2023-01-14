@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -19,11 +19,10 @@ use ethkey::Password;
 use ethstore::PresaleWallet;
 use helpers::{password_prompt, password_from_file};
 use params::SpecType;
-use std::num::NonZeroU32;
 
 #[derive(Debug, PartialEq)]
 pub struct ImportWallet {
-	pub iterations: NonZeroU32,
+	pub iterations: u32,
 	pub path: String,
 	pub spec: SpecType,
 	pub wallet_path: String,
@@ -44,7 +43,7 @@ pub fn execute(cmd: ImportWallet) -> Result<String, String> {
 }
 
 #[cfg(feature = "accounts")]
-pub fn import_account(cmd: &ImportWallet, kp: ethkey::KeyPair, password: Password) {
+pub fn import_account(cmd: &ImportWallet, kp: parity_crypto::publickey::KeyPair, password: Password) {
 	use accounts::{AccountProvider, AccountProviderSettings};
 	use ethstore::EthStore;
 	use ethstore::accounts_dir::RootDiskDirectory;
@@ -56,4 +55,4 @@ pub fn import_account(cmd: &ImportWallet, kp: ethkey::KeyPair, password: Passwor
 }
 
 #[cfg(not(feature = "accounts"))]
-pub fn import_account(_cmd: &ImportWallet, _kp: ethkey::KeyPair, _password: Password) {}
+pub fn import_account(_cmd: &ImportWallet, _kp: parity_crypto::publickey::KeyPair, _password: Password) {}

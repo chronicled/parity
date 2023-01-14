@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -25,10 +25,14 @@ use parking_lot::{Mutex, MutexGuard};
 use rand::{self, Rng};
 use target_info::Target;
 
-use common_types::BlockNumber;
-use common_types::filter::Filter;
-use ethcore::client::{BlockId, BlockChainClient, ChainNotify, NewBlocks};
-use ethereum_types::H256;
+use common_types::{
+	BlockNumber,
+	ids::BlockId,
+	filter::Filter,
+	chain_notify::NewBlocks,
+};
+use client_traits::{BlockChainClient, ChainNotify};
+use ethereum_types::{H256, H160};
 use hash_fetch::{self as fetch, HashFetch};
 use parity_path::restrict_permissions_owner;
 use service::Service;
@@ -140,11 +144,11 @@ pub struct Updater<O = OperationsContractClient, F = fetch::Client, T = StdTimeP
 	// Useful environmental stuff.
 	update_policy: UpdatePolicy,
 	weak_self: Mutex<Weak<Updater<O, F, T, R>>>,
-	client: Weak<BlockChainClient>,
-	sync: Option<Weak<SyncProvider>>,
+	client: Weak<dyn BlockChainClient>,
+	sync: Option<Weak<dyn SyncProvider>>,
 	fetcher: F,
 	operations_client: O,
-	exit_handler: Mutex<Option<Box<Fn() + 'static + Send>>>,
+	exit_handler: Mutex<Option<Box<dyn Fn() + 'static + Send>>>,
 
 	time_provider: T,
 	rng: R,
@@ -159,7 +163,7 @@ pub struct Updater<O = OperationsContractClient, F = fetch::Client, T = StdTimeP
 const CLIENT_ID: &str = "parity";
 
 lazy_static! {
-	static ref CLIENT_ID_HASH: H256 = CLIENT_ID.as_bytes().into();
+	static ref CLIENT_ID_HASH: H256 = h256_from_str_resizing(CLIENT_ID);
 }
 
 lazy_static! {
@@ -177,7 +181,16 @@ lazy_static! {
 }
 
 lazy_static! {
-	static ref PLATFORM_ID_HASH: H256 = PLATFORM.as_bytes().into();
+	static ref PLATFORM_ID_HASH: H256 = h256_from_str_resizing(&PLATFORM);
+}
+
+
+// Pads the bytes with zeros or truncates the last bytes to H256::len_bytes()
+// before the conversion to match the previous behavior.
+fn h256_from_str_resizing(s: &str) -> H256 {
+	let mut bytes = s.as_bytes().to_vec();
+	bytes.resize(H256::len_bytes(), 0);
+	H256::from_slice(&bytes)
 }
 
 /// Client trait for getting latest release information from operations contract.
@@ -192,11 +205,11 @@ pub trait OperationsClient: Send + Sync + 'static {
 
 /// `OperationsClient` that delegates calls to the operations contract.
 pub struct OperationsContractClient {
-	client: Weak<BlockChainClient>,
+	client: Weak<dyn BlockChainClient>,
 }
 
 impl OperationsContractClient {
-	fn new(client: Weak<BlockChainClient>) -> Self {
+	fn new(client: Weak<dyn BlockChainClient>) -> Self {
 		OperationsContractClient {
 			client
 		}
@@ -238,8 +251,11 @@ impl OperationsClient for OperationsContractClient {
 		}
 
 		let client = self.client.upgrade().ok_or_else(|| "Cannot obtain client")?;
-		let address = client.registry_address("operations".into(), BlockId::Latest).ok_or_else(|| "Cannot get operations contract address")?;
-		let do_call = |data| client.call_contract(BlockId::Latest, address, data).map_err(|e| format!("{:?}", e));
+		let address = client.get_address("operations", BlockId::Latest)?
+			.ok_or_else(|| "Cannot get operations contract address")?;
+		let do_call = |data| {
+			client.call_contract(BlockId::Latest, address, data).map_err(|e| format!("{:?}", e))
+		};
 
 		trace!(target: "updater", "Looking up this_fork for our release: {}/{:?}", CLIENT_ID, this.hash);
 
@@ -267,8 +283,7 @@ impl OperationsClient for OperationsContractClient {
 		// if the minor version has changed, let's check the minor version on a different track
 		while in_minor.as_ref().expect(PROOF).version.version.minor != this.version.minor {
 			let track = match in_minor.as_ref().expect(PROOF).version.track {
-				ReleaseTrack::Beta => ReleaseTrack::Stable,
-				ReleaseTrack::Nightly => ReleaseTrack::Beta,
+				ReleaseTrack::Nightly => ReleaseTrack::Stable,
 				_ => { in_minor = None; break; }
 			};
 
@@ -291,7 +306,7 @@ impl OperationsClient for OperationsContractClient {
 
 	fn release_block_number(&self, from: BlockNumber, release: &ReleaseInfo) -> Option<BlockNumber> {
 		let client = self.client.upgrade()?;
-		let address = client.registry_address("operations".into(), BlockId::Latest)?;
+		let address = client.get_address("operations", BlockId::Latest).unwrap_or(None)?;
 
 		let topics = operations::events::release_added::filter(Some(*CLIENT_ID_HASH), Some(release.fork.into()), Some(release.is_critical));
 		let topics = vec![topics.topic0, topics.topic1, topics.topic2, topics.topic3];
@@ -355,8 +370,8 @@ impl GenRange for ThreadRngGenRange {
 impl Updater {
 	/// `Updater` constructor
 	pub fn new(
-		client: &Weak<BlockChainClient>,
-		sync: &Weak<SyncProvider>,
+		client: &Weak<dyn BlockChainClient>,
+		sync: &Weak<dyn SyncProvider>,
 		update_policy: UpdatePolicy,
 		fetcher: fetch::Client,
 	) -> Arc<Updater> {
@@ -373,7 +388,7 @@ impl Updater {
 				VersionInfo {
 					track: ReleaseTrack::Stable,
 					version: Version::new(1, 3, 7),
-					hash: 0.into(),
+					hash: H160::zero(),
 				}
 			} else {
 				VersionInfo::this()
@@ -670,8 +685,8 @@ impl<O: OperationsClient, F: HashFetch, T: TimeProvider, R: GenRange> Updater<O,
 impl ChainNotify for Updater {
 	fn new_blocks(&self, new_blocks: NewBlocks) {
 		if new_blocks.has_more_blocks_to_import { return }
-		match (self.client.upgrade(), self.sync.as_ref().and_then(Weak::upgrade)) {
-			(Some(ref c), Some(ref s)) if !s.status().is_syncing(c.queue_info()) => self.poll(),
+		match self.sync.as_ref().and_then(Weak::upgrade) {
+			Some(ref s) if !s.is_major_syncing() => self.poll(),
 			_ => {},
 		}
 	}
@@ -710,7 +725,7 @@ pub mod tests {
 	use std::sync::Arc;
 	use semver::Version;
 	use tempdir::TempDir;
-	use ethcore::client::{TestBlockChainClient, EachBlockWith};
+	use ethcore::test_helpers::{TestBlockChainClient, EachBlockWith};
 	use self::fetch::Error;
 	use super::*;
 
@@ -743,7 +758,7 @@ pub mod tests {
 
 	#[derive(Clone)]
 	struct FakeFetch {
-		on_done: Arc<Mutex<Option<Box<Fn(Result<PathBuf, Error>) + Send>>>>,
+		on_done: Arc<Mutex<Option<Box<dyn Fn(Result<PathBuf, Error>) + Send>>>>,
 	}
 
 	impl FakeFetch {
@@ -759,7 +774,7 @@ pub mod tests {
 	}
 
 	impl HashFetch for FakeFetch {
-		fn fetch(&self, _hash: H256, _abort: fetch::Abort, on_done: Box<Fn(Result<PathBuf, Error>) + Send>) {
+		fn fetch(&self, _hash: H256, _abort: fetch::Abort, on_done: Box<dyn Fn(Result<PathBuf, Error>) + Send>) {
 			*self.on_done.lock() = Some(on_done);
 		}
 	}
@@ -825,9 +840,9 @@ pub mod tests {
 		let rng = FakeGenRange::new();
 
 		let this = VersionInfo {
-			track: ReleaseTrack::Beta,
+			track: ReleaseTrack::Nightly,
 			version: Version::parse("1.0.0").unwrap(),
-			hash: 0.into(),
+			hash: H160::zero(),
 		};
 
 		let updater = Arc::new(Updater {
@@ -865,16 +880,16 @@ pub mod tests {
 
 	fn new_upgrade(version: &str) -> (VersionInfo, ReleaseInfo, OperationsInfo) {
 		let latest_version = VersionInfo {
-			track: ReleaseTrack::Beta,
+			track: ReleaseTrack::Nightly,
 			version: Version::parse(version).unwrap(),
-			hash: 1.into(),
+			hash: H160::from_low_u64_be(1),
 		};
 
 		let latest_release = ReleaseInfo {
 			version: latest_version.clone(),
 			is_critical: false,
 			fork: 0,
-			binary: Some(0.into()),
+			binary: Some(H256::zero()),
 		};
 
 		let latest = OperationsInfo {
@@ -1252,5 +1267,12 @@ pub mod tests {
 
 		// and since our update policy requires consensus, the client should be disabled
 		assert!(client.is_disabled());
+	}
+
+	#[test]
+	fn static_hashes_do_not_panic() {
+		let client_id_hash: H256 = *CLIENT_ID_HASH;
+		assert_eq!(&format!("{:x}", client_id_hash), "7061726974790000000000000000000000000000000000000000000000000000");
+		let _: H256 = *PLATFORM_ID_HASH;
 	}
 }

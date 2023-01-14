@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -14,9 +14,11 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
-use tests::helpers::TestNet;
+use crate::tests::helpers::TestNet;
 
-use ethcore::client::{BlockInfo, BlockId, EachBlockWith};
+use ethcore::test_helpers::EachBlockWith;
+use client_traits::BlockInfo;
+use common_types::ids::BlockId;
 
 mod test_net;
 

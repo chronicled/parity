@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -119,5 +119,5 @@ impl fmt::Display for Error {
 pub type Result<T> = ::std::result::Result<T, Error>;
 pub type TrapResult<T, Call, Create> = ::std::result::Result<Result<T>, TrapError<Call, Create>>;
 
-pub type ExecTrapResult<T> = TrapResult<T, Box<ResumeCall>, Box<ResumeCreate>>;
-pub type ExecTrapError = TrapError<Box<ResumeCall>, Box<ResumeCreate>>;
+pub type ExecTrapResult<T> = TrapResult<T, Box<dyn ResumeCall>, Box<dyn ResumeCreate>>;
+pub type ExecTrapError = TrapError<Box<dyn ResumeCall>, Box<dyn ResumeCreate>>;

@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -17,6 +17,7 @@
 //! Engine deserialization.
 
 use super::{Ethash, BasicAuthority, AuthorityRound, NullEngine, InstantSeal, Clique};
+use serde::Deserialize;
 
 /// Engine deserialization.
 #[derive(Debug, PartialEq, Deserialize)]
@@ -40,8 +41,7 @@ pub enum Engine {
 
 #[cfg(test)]
 mod tests {
-	use serde_json;
-	use spec::Engine;
+	use super::Engine;
 
 	#[test]
 	fn engine_deserialization() {

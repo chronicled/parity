@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -91,7 +91,7 @@ fn schedule(executor: Executor,
 /// Implementation of functions that require signing when no trusted signer is used.
 pub struct SigningQueueClient<D> {
 	signer: Arc<SignerService>,
-	accounts: Arc<dispatch::Accounts>,
+	accounts: Arc<dyn dispatch::Accounts>,
 	dispatcher: D,
 	executor: Executor,
 	// None here means that the request hasn't yet been confirmed
@@ -101,7 +101,7 @@ pub struct SigningQueueClient<D> {
 
 impl<D: Dispatcher + 'static> SigningQueueClient<D> {
 	/// Creates a new signing queue client given shared signing queue.
-	pub fn new(signer: &Arc<SignerService>, dispatcher: D, executor: Executor, accounts: &Arc<dispatch::Accounts>) -> Self {
+	pub fn new(signer: &Arc<SignerService>, dispatcher: D, executor: Executor, accounts: &Arc<dyn dispatch::Accounts>) -> Self {
 		SigningQueueClient {
 			signer: signer.clone(),
 			accounts: accounts.clone(),
@@ -114,6 +114,12 @@ impl<D: Dispatcher + 'static> SigningQueueClient<D> {
 
 	fn dispatch(&self, payload: RpcConfirmationPayload, origin: Origin) -> BoxFuture<DispatchResult> {
 		let default_account = self.accounts.default_account();
+		let from = &payload.sender().unwrap_or(&default_account);
+		// bail early if the account isn't unlocked
+		if !self.accounts.is_unlocked(from) && !self.signer.is_enabled() {
+			return Box::new(future::done(Err(errors::signing_queue_disabled())))
+		}
+
 		let accounts = self.accounts.clone();
 		let dispatcher = self.dispatcher.clone();
 		let signer = self.signer.clone();
@@ -127,7 +133,9 @@ impl<D: Dispatcher + 'static> SigningQueueClient<D> {
 				} else {
 					Either::B(future::done(
 						signer.add_request(payload, origin)
-							.map(|(id, future)| DispatchResult::Future(id, future))
+							.map(|(id, future)| {
+								DispatchResult::Future(id, future)
+							})
 							.map_err(|_| errors::request_rejected_limit())
 					))
 				}

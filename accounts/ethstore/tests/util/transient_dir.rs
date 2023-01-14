@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,12 +16,12 @@
 
 use std::path::PathBuf;
 use std::{env, fs};
-use rand::{Rng, OsRng};
+use rand::{RngCore, rngs::OsRng};
 use ethstore::accounts_dir::{KeyDirectory, RootDiskDirectory};
 use ethstore::{Error, SafeAccount};
 
 pub fn random_dir() -> PathBuf {
-	let mut rng = OsRng::new().unwrap();
+	let mut rng = OsRng;
 	let mut dir = env::temp_dir();
 	dir.push(format!("{:x}-{:x}", rng.next_u64(), rng.next_u64()));
 	dir

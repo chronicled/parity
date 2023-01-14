@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -49,6 +49,15 @@ pub enum TransactionType {
 pub trait Client: fmt::Debug + Sync {
 	/// Is transaction with given hash already in the blockchain?
 	fn transaction_already_included(&self, hash: &H256) -> bool;
+
+	/// Perform basic/cheap transaction verification.
+	///
+	/// This should include all cheap checks that can be done before
+	/// actually checking the signature, like chain-replay protection.
+	///
+	/// This method is currently used only for verifying local transactions.
+	fn verify_transaction_basic(&self, t: &transaction::UnverifiedTransaction)
+		-> Result<(), transaction::Error>;
 
 	/// Structurarily verify given transaction.
 	fn verify_transaction(&self, tx: transaction::UnverifiedTransaction)

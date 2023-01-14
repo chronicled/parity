@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -61,7 +61,6 @@ pub fn find_unique_filename_using_random_suffix(parent_path: &Path, original_fil
 /// Create a new file and restrict permissions to owner only. It errors if the file already exists.
 #[cfg(unix)]
 pub fn create_new_file_with_permissions_to_owner(file_path: &Path) -> io::Result<fs::File> {
-	use libc;
 	use std::os::unix::fs::OpenOptionsExt;
 
 	fs::OpenOptions::new()
@@ -83,7 +82,6 @@ pub fn create_new_file_with_permissions_to_owner(file_path: &Path) -> io::Result
 /// Create a new file and restrict permissions to owner only. It replaces the existing file if it already exists.
 #[cfg(unix)]
 pub fn replace_file_with_permissions_to_owner(file_path: &Path) -> io::Result<fs::File> {
-	use libc;
 	use std::os::unix::fs::PermissionsExt;
 
 	let file = fs::File::create(file_path)?;
@@ -286,7 +284,7 @@ impl<T> KeyDirectory for DiskDirectory<T> where T: KeyFileManager {
 
 	fn path(&self) -> Option<&PathBuf> { Some(&self.path) }
 
-	fn as_vault_provider(&self) -> Option<&VaultKeyDirectoryProvider> {
+	fn as_vault_provider(&self) -> Option<&dyn VaultKeyDirectoryProvider> {
 		Some(self)
 	}
 
@@ -296,12 +294,12 @@ impl<T> KeyDirectory for DiskDirectory<T> where T: KeyFileManager {
 }
 
 impl<T> VaultKeyDirectoryProvider for DiskDirectory<T> where T: KeyFileManager {
-	fn create(&self, name: &str, key: VaultKey) -> Result<Box<VaultKeyDirectory>, Error> {
+	fn create(&self, name: &str, key: VaultKey) -> Result<Box<dyn VaultKeyDirectory>, Error> {
 		let vault_dir = VaultDiskDirectory::create(&self.path, name, key)?;
 		Ok(Box::new(vault_dir))
 	}
 
-	fn open(&self, name: &str, key: VaultKey) -> Result<Box<VaultKeyDirectory>, Error> {
+	fn open(&self, name: &str, key: VaultKey) -> Result<Box<dyn VaultKeyDirectory>, Error> {
 		let vault_dir = VaultDiskDirectory::at(&self.path, name, key)?;
 		Ok(Box::new(vault_dir))
 	}
@@ -359,7 +357,7 @@ mod test {
 	use std::num::NonZeroU32;
 	use super::{KeyDirectory, RootDiskDirectory, VaultKey};
 	use account::SafeAccount;
-	use ethkey::{Random, Generator};
+	use crypto::publickey::{Random, Generator};
 	use self::tempdir::TempDir;
 
 	lazy_static! {

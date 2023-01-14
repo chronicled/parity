@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -17,7 +17,7 @@
 use std::sync::Arc;
 use std::collections::{BTreeSet, BTreeMap};
 use ethereum_types::H256;
-use ethkey::Secret;
+use crypto::publickey::Secret;
 use key_server_cluster::{Error, NodeId, SessionId, ServerKeyId, KeyStorage};
 use key_server_cluster::cluster::Cluster;
 use key_server_cluster::cluster_sessions::ClusterSession;
@@ -43,9 +43,9 @@ pub struct ShareChangeSession {
 	/// Share change session meta.
 	meta: ShareChangeSessionMeta,
 	/// Cluster.
-	cluster: Arc<Cluster>,
+	cluster: Arc<dyn Cluster>,
 	/// Key storage.
-	key_storage: Arc<KeyStorage>,
+	key_storage: Arc<dyn KeyStorage>,
 	/// Key version.
 	key_version: H256,
 	/// Nodes that have reported version ownership.
@@ -82,9 +82,9 @@ pub struct ShareChangeSessionParams {
 	/// Share change session meta.
 	pub meta: ShareChangeSessionMeta,
 	/// Cluster.
-	pub cluster: Arc<Cluster>,
+	pub cluster: Arc<dyn Cluster>,
 	/// Keys storage.
-	pub key_storage: Arc<KeyStorage>,
+	pub key_storage: Arc<dyn KeyStorage>,
 	/// Session plan.
 	pub plan: ShareChangeSessionPlan,
 }
@@ -97,7 +97,7 @@ pub struct ShareChangeTransport {
 	/// Session nonce.
 	nonce: u64,
 	/// Cluster.
-	cluster: Arc<Cluster>,
+	cluster: Arc<dyn Cluster>,
 }
 
 impl ShareChangeSession {
@@ -166,7 +166,7 @@ impl ShareChangeSession {
 		let consensus_group = self.consensus_group.take().ok_or(Error::InvalidStateForRequest)?;
 		let version_holders = self.version_holders.take().ok_or(Error::InvalidStateForRequest)?;
 		let new_nodes_map = self.new_nodes_map.take().ok_or(Error::InvalidStateForRequest)?;
-		let share_add_session = ShareAddSessionImpl::new(ShareAddSessionParams {
+		let (share_add_session, _) = ShareAddSessionImpl::new(ShareAddSessionParams {
 			meta: self.meta.clone(),
 			nonce: self.nonce,
 			transport: ShareChangeTransport::new(self.session_id, self.nonce, self.cluster.clone()),
@@ -201,7 +201,7 @@ impl ShareChangeSession {
 }
 
 impl ShareChangeTransport {
-	pub fn new(session_id: SessionId, nonce: u64, cluster: Arc<Cluster>) -> Self {
+	pub fn new(session_id: SessionId, nonce: u64, cluster: Arc<dyn Cluster>) -> Self {
 		ShareChangeTransport {
 			session_id: session_id,
 			nonce: nonce,

@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,15 +16,14 @@
 
 use std::collections::BTreeMap;
 
-use ethcore::client::Executed;
-use ethcore::trace as et;
-use ethcore::trace::{FlatTrace, LocalizedTrace as EthLocalizedTrace, trace, TraceError};
+use machine::executed::Executed;
+use trace as et;
+use trace::{FlatTrace, LocalizedTrace as EthLocalizedTrace, trace, TraceError};
 use ethereum_types::{H160, H256, U256};
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
 use types::account_diff;
 use types::state_diff;
-use vm;
 
 use v1::types::Bytes;
 
@@ -214,6 +213,7 @@ impl From<state_diff::StateDiff> for StateDiff {
 
 /// Create response
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Create {
 	/// Sender
 	from: H160,
@@ -223,6 +223,9 @@ pub struct Create {
 	gas: U256,
 	/// Initialization code
 	init: Bytes,
+	// Create Type
+	#[serde(skip_serializing_if="Option::is_none")]
+	creation_method: Option<CreationMethod>,
 }
 
 impl From<trace::Create> for Create {
@@ -232,6 +235,7 @@ impl From<trace::Create> for Create {
 			value: c.value,
 			gas: c.gas,
 			init: Bytes::new(c.init),
+			creation_method: c.creation_method.map(|c| c.into()),
 		}
 	}
 }
@@ -240,8 +244,6 @@ impl From<trace::Create> for Create {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CallType {
-	/// None
-	None,
 	/// Call
 	Call,
 	/// Call code
@@ -252,14 +254,32 @@ pub enum CallType {
 	StaticCall,
 }
 
-impl From<vm::CallType> for CallType {
-	fn from(c: vm::CallType) -> Self {
+impl From<trace::CallType> for CallType {
+	fn from(c: trace::CallType) -> Self {
 		match c {
-			vm::CallType::None => CallType::None,
-			vm::CallType::Call => CallType::Call,
-			vm::CallType::CallCode => CallType::CallCode,
-			vm::CallType::DelegateCall => CallType::DelegateCall,
-			vm::CallType::StaticCall => CallType::StaticCall,
+			trace::CallType::Call => CallType::Call,
+			trace::CallType::CallCode => CallType::CallCode,
+			trace::CallType::DelegateCall => CallType::DelegateCall,
+			trace::CallType::StaticCall => CallType::StaticCall,
+		}
+	}
+}
+
+/// Create type.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CreationMethod {
+	/// Create
+	Create,
+	/// Create2
+	Create2,
+}
+
+impl From<trace::CreationMethod> for CreationMethod {
+	fn from(c: trace::CreationMethod) -> Self {
+		match c {
+			trace::CreationMethod::Create => CreationMethod::Create,
+			trace::CreationMethod::Create2 => CreationMethod::Create2,
 		}
 	}
 }
@@ -279,18 +299,19 @@ pub struct Call {
 	/// Input data
 	input: Bytes,
 	/// The type of the call.
-	call_type: CallType,
+	call_type: Option<CallType>,
 }
 
 impl From<trace::Call> for Call {
 	fn from(c: trace::Call) -> Self {
+		let optional: Option<trace::CallType> = c.call_type.0;
 		Call {
 			from: c.from,
 			to: c.to,
 			value: c.value,
 			gas: c.gas,
 			input: c.input.into(),
-			call_type: c.call_type.into(),
+			call_type: optional.map(|c| c.into()),
 		}
 	}
 }
@@ -656,7 +677,8 @@ mod tests {
 	use serde_json;
 	use std::collections::BTreeMap;
 	use v1::types::Bytes;
-	use ethcore::trace::TraceError;
+	use trace::TraceError;
+	use ethereum_types::Address;
 	use super::*;
 
 	#[test]
@@ -675,12 +697,12 @@ mod tests {
 	fn test_trace_call_serialize() {
 		let t = LocalizedTrace {
 			action: Action::Call(Call {
-				from: 4.into(),
-				to: 5.into(),
+				from: Address::from_low_u64_be(4),
+				to: Address::from_low_u64_be(5),
 				value: 6.into(),
 				gas: 7.into(),
 				input: Bytes::new(vec![0x12, 0x34]),
-				call_type: CallType::Call,
+				call_type: Some(CallType::Call),
 			}),
 			result: Res::Call(CallResult {
 				gas_used: 8.into(),
@@ -689,9 +711,9 @@ mod tests {
 			trace_address: vec![10],
 			subtraces: 1,
 			transaction_position: Some(11),
-			transaction_hash: Some(12.into()),
+			transaction_hash: Some(H256::from_low_u64_be(12)),
 			block_number: 13,
-			block_hash: 14.into(),
+			block_hash: H256::from_low_u64_be(14),
 		};
 		let serialized = serde_json::to_string(&t).unwrap();
 		assert_eq!(serialized, r#"{"type":"call","action":{"from":"0x0000000000000000000000000000000000000004","to":"0x0000000000000000000000000000000000000005","value":"0x6","gas":"0x7","input":"0x1234","callType":"call"},"result":{"gasUsed":"0x8","output":"0x5678"},"traceAddress":[10],"subtraces":1,"transactionPosition":11,"transactionHash":"0x000000000000000000000000000000000000000000000000000000000000000c","blockNumber":13,"blockHash":"0x000000000000000000000000000000000000000000000000000000000000000e"}"#);
@@ -701,20 +723,20 @@ mod tests {
 	fn test_trace_failed_call_serialize() {
 		let t = LocalizedTrace {
 			action: Action::Call(Call {
-				from: 4.into(),
-				to: 5.into(),
+				from: Address::from_low_u64_be(4),
+				to: Address::from_low_u64_be(5),
 				value: 6.into(),
 				gas: 7.into(),
 				input: Bytes::new(vec![0x12, 0x34]),
-				call_type: CallType::Call,
+				call_type: Some(CallType::Call),
 			}),
 			result: Res::FailedCall(TraceError::OutOfGas),
 			trace_address: vec![10],
 			subtraces: 1,
 			transaction_position: Some(11),
-			transaction_hash: Some(12.into()),
+			transaction_hash: Some(H256::from_low_u64_be(12)),
 			block_number: 13,
-			block_hash: 14.into(),
+			block_hash: H256::from_low_u64_be(14),
 		};
 		let serialized = serde_json::to_string(&t).unwrap();
 		assert_eq!(serialized, r#"{"type":"call","action":{"from":"0x0000000000000000000000000000000000000004","to":"0x0000000000000000000000000000000000000005","value":"0x6","gas":"0x7","input":"0x1234","callType":"call"},"error":"Out of gas","traceAddress":[10],"subtraces":1,"transactionPosition":11,"transactionHash":"0x000000000000000000000000000000000000000000000000000000000000000c","blockNumber":13,"blockHash":"0x000000000000000000000000000000000000000000000000000000000000000e"}"#);
@@ -724,63 +746,65 @@ mod tests {
 	fn test_trace_create_serialize() {
 		let t = LocalizedTrace {
 			action: Action::Create(Create {
-				from: 4.into(),
+				from: Address::from_low_u64_be(4),
 				value: 6.into(),
 				gas: 7.into(),
 				init: Bytes::new(vec![0x12, 0x34]),
+				creation_method: Some(CreationMethod::Create).into(),
 			}),
 			result: Res::Create(CreateResult {
 				gas_used: 8.into(),
 				code: vec![0x56, 0x78].into(),
-				address: 0xff.into(),
+				address: Address::from_low_u64_be(0xff),
 			}),
 			trace_address: vec![10],
 			subtraces: 1,
 			transaction_position: Some(11),
-			transaction_hash: Some(12.into()),
+			transaction_hash: Some(H256::from_low_u64_be(12)),
 			block_number: 13,
-			block_hash: 14.into(),
+			block_hash: H256::from_low_u64_be(14),
 		};
 		let serialized = serde_json::to_string(&t).unwrap();
-		assert_eq!(serialized, r#"{"type":"create","action":{"from":"0x0000000000000000000000000000000000000004","value":"0x6","gas":"0x7","init":"0x1234"},"result":{"gasUsed":"0x8","code":"0x5678","address":"0x00000000000000000000000000000000000000ff"},"traceAddress":[10],"subtraces":1,"transactionPosition":11,"transactionHash":"0x000000000000000000000000000000000000000000000000000000000000000c","blockNumber":13,"blockHash":"0x000000000000000000000000000000000000000000000000000000000000000e"}"#);
+		assert_eq!(serialized, r#"{"type":"create","action":{"from":"0x0000000000000000000000000000000000000004","value":"0x6","gas":"0x7","init":"0x1234","creationMethod":"create"},"result":{"gasUsed":"0x8","code":"0x5678","address":"0x00000000000000000000000000000000000000ff"},"traceAddress":[10],"subtraces":1,"transactionPosition":11,"transactionHash":"0x000000000000000000000000000000000000000000000000000000000000000c","blockNumber":13,"blockHash":"0x000000000000000000000000000000000000000000000000000000000000000e"}"#);
 	}
 
 	#[test]
 	fn test_trace_failed_create_serialize() {
 		let t = LocalizedTrace {
 			action: Action::Create(Create {
-				from: 4.into(),
+				from: Address::from_low_u64_be(4),
 				value: 6.into(),
 				gas: 7.into(),
 				init: Bytes::new(vec![0x12, 0x34]),
+				creation_method: Some(CreationMethod::Create).into(),
 			}),
 			result: Res::FailedCreate(TraceError::OutOfGas),
 			trace_address: vec![10],
 			subtraces: 1,
 			transaction_position: Some(11),
-			transaction_hash: Some(12.into()),
+			transaction_hash: Some(H256::from_low_u64_be(12)),
 			block_number: 13,
-			block_hash: 14.into(),
+			block_hash: H256::from_low_u64_be(14),
 		};
 		let serialized = serde_json::to_string(&t).unwrap();
-		assert_eq!(serialized, r#"{"type":"create","action":{"from":"0x0000000000000000000000000000000000000004","value":"0x6","gas":"0x7","init":"0x1234"},"error":"Out of gas","traceAddress":[10],"subtraces":1,"transactionPosition":11,"transactionHash":"0x000000000000000000000000000000000000000000000000000000000000000c","blockNumber":13,"blockHash":"0x000000000000000000000000000000000000000000000000000000000000000e"}"#);
+		assert_eq!(serialized, r#"{"type":"create","action":{"from":"0x0000000000000000000000000000000000000004","value":"0x6","gas":"0x7","init":"0x1234","creationMethod":"create"},"error":"Out of gas","traceAddress":[10],"subtraces":1,"transactionPosition":11,"transactionHash":"0x000000000000000000000000000000000000000000000000000000000000000c","blockNumber":13,"blockHash":"0x000000000000000000000000000000000000000000000000000000000000000e"}"#);
 	}
 
 	#[test]
 	fn test_trace_suicide_serialize() {
 		let t = LocalizedTrace {
 			action: Action::Suicide(Suicide {
-				address: 4.into(),
-				refund_address: 6.into(),
+				address: Address::from_low_u64_be(4),
+				refund_address: Address::from_low_u64_be(6),
 				balance: 7.into(),
 			}),
 			result: Res::None,
 			trace_address: vec![10],
 			subtraces: 1,
 			transaction_position: Some(11),
-			transaction_hash: Some(12.into()),
+			transaction_hash: Some(H256::from_low_u64_be(12)),
 			block_number: 13,
-			block_hash: 14.into(),
+			block_hash: H256::from_low_u64_be(14),
 		};
 		let serialized = serde_json::to_string(&t).unwrap();
 		assert_eq!(serialized, r#"{"type":"suicide","action":{"address":"0x0000000000000000000000000000000000000004","refundAddress":"0x0000000000000000000000000000000000000006","balance":"0x7"},"result":null,"traceAddress":[10],"subtraces":1,"transactionPosition":11,"transactionHash":"0x000000000000000000000000000000000000000000000000000000000000000c","blockNumber":13,"blockHash":"0x000000000000000000000000000000000000000000000000000000000000000e"}"#);
@@ -790,7 +814,7 @@ mod tests {
 	fn test_trace_reward_serialize() {
 		let t = LocalizedTrace {
 			action: Action::Reward(Reward {
-				author: 4.into(),
+				author: Address::from_low_u64_be(4),
 				value: 6.into(),
 				reward_type: RewardType::Block,
 			}),
@@ -800,7 +824,7 @@ mod tests {
 			transaction_position: None,
 			transaction_hash: None,
 			block_number: 13,
-			block_hash: 14.into(),
+			block_hash: H256::from_low_u64_be(14),
 		};
 		let serialized = serde_json::to_string(&t).unwrap();
 		assert_eq!(serialized, r#"{"type":"reward","action":{"author":"0x0000000000000000000000000000000000000004","value":"0x6","rewardType":"block"},"result":null,"traceAddress":[10],"subtraces":1,"transactionPosition":null,"transactionHash":null,"blockNumber":13,"blockHash":"0x000000000000000000000000000000000000000000000000000000000000000e"}"#);
@@ -852,15 +876,15 @@ mod tests {
 	#[test]
 	fn test_statediff_serialize() {
 		let t = StateDiff(map![
-			42.into() => AccountDiff {
+			Address::from_low_u64_be(42) => AccountDiff {
 				balance: Diff::Same,
 				nonce: Diff::Born(1.into()),
 				code: Diff::Same,
 				storage: map![
-					42.into() => Diff::Same
+					H256::from_low_u64_be(42) => Diff::Same
 				]
 			},
-			69.into() => AccountDiff {
+			Address::from_low_u64_be(69) => AccountDiff {
 				balance: Diff::Same,
 				nonce: Diff::Changed(ChangedType { from: 1.into(), to: 0.into() }),
 				code: Diff::Died(vec![96].into()),

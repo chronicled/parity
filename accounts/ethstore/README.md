@@ -6,7 +6,7 @@ Parity Ethereum key management.
 
 ```
 Parity Ethereum key management tool.
-  Copyright 2015-2019 Parity Technologies (UK) Ltd.
+  Copyright 2015-2020 Parity Technologies (UK) Ltd.
 
 Usage:
     ethstore insert <secret> <password> [--dir DIR] [--vault VAULT] [--vault-pwd VAULTPWD]
@@ -337,4 +337,4 @@ _This project is a part of the Parity Ethereum toolchain._
 - [ethabi](https://github.com/paritytech/ethabi) - Parity Ethereum function calls encoding.
 - [ethstore](https://github.com/paritytech/parity-ethereum/blob/master/accounts/ethstore) - Parity Ethereum key management.
 - [ethkey](https://github.com/paritytech/parity-ethereum/blob/master/accounts/ethkey) - Parity Ethereum keys generator.
-- [whisper](https://github.com/paritytech/parity-ethereum/blob/master/whisper/) - Implementation of Whisper-v2 PoC.
+- [whisper](https://github.com/paritytech/whisper) - Implementation of Whisper-v2 PoC.

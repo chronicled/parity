@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -19,12 +19,11 @@
 extern crate bit_set;
 extern crate ethereum_types;
 extern crate parking_lot;
-extern crate heapsize;
+extern crate parity_util_mem;
 extern crate vm;
 extern crate keccak_hash as hash;
 extern crate memory_cache;
 extern crate parity_bytes as bytes;
-extern crate num_bigint;
 
 #[macro_use]
 extern crate lazy_static;
@@ -42,18 +41,16 @@ pub mod interpreter;
 
 #[macro_use]
 pub mod factory;
-mod vmtype;
 mod instructions;
 
 #[cfg(test)]
 mod tests;
 
 pub use vm::{
-    Schedule, CleanDustMode, EnvInfo, CallType, ActionParams, Ext,
+    Schedule, CleanDustMode, EnvInfo, ActionType, ActionParams, Ext,
     ContractCreateResult, MessageCallResult, CreateContractAddress,
     GasLeft, ReturnData
 };
 pub use self::evm::{Finalize, FinalizationResult, CostType};
 pub use self::instructions::{InstructionInfo, Instruction};
-pub use self::vmtype::VMType;
 pub use self::factory::Factory;

@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use ethereum_types::{U256, H256, Address};
 use bytes::Bytes;
 use {
-	CallType, Schedule, EnvInfo,
+	ActionType, Schedule, EnvInfo,
 	ReturnData, Ext, ContractCreateResult, MessageCallResult,
 	CreateContractAddress, Result, GasLeft,
 };
@@ -122,11 +122,11 @@ impl FakeExt {
 
 impl Ext for FakeExt {
 	fn initial_storage_at(&self, _key: &H256) -> Result<H256> {
-		Ok(H256::new())
+		Ok(H256::zero())
 	}
 
 	fn storage_at(&self, key: &H256) -> Result<H256> {
-		Ok(self.store.get(key).unwrap_or(&H256::new()).clone())
+		Ok(self.store.get(key).unwrap_or(&H256::zero()).clone())
 	}
 
 	fn set_storage(&mut self, key: H256, value: H256) -> Result<()> {
@@ -151,7 +151,7 @@ impl Ext for FakeExt {
 	}
 
 	fn blockhash(&mut self, number: &U256) -> H256 {
-		self.blockhashes.get(number).unwrap_or(&H256::new()).clone()
+		self.blockhashes.get(number).unwrap_or(&H256::zero()).clone()
 	}
 
 	fn create(
@@ -159,6 +159,7 @@ impl Ext for FakeExt {
 		gas: &U256,
 		value: &U256,
 		code: &[u8],
+		_parent_version: &U256,
 		address: CreateContractAddress,
 		_trap: bool,
 	) -> ::std::result::Result<ContractCreateResult, TrapKind> {
@@ -184,7 +185,7 @@ impl Ext for FakeExt {
 		value: Option<U256>,
 		data: &[u8],
 		code_address: &Address,
-		_call_type: CallType,
+		_call_type: ActionType,
 		_trap: bool,
 	) -> ::std::result::Result<MessageCallResult, TrapKind> {
 		self.calls.insert(FakeCall {

@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,10 +16,13 @@
 
 //! Spec genesis deserialization.
 
-use uint::{Uint, self};
-use hash::{Address, H256};
-use bytes::Bytes;
-use spec::Seal;
+use crate::{
+	bytes::Bytes,
+	hash::{Address, H256},
+	spec::Seal,
+	uint::{self, Uint},
+};
+use serde::Deserialize;
 
 /// Spec genesis.
 #[derive(Debug, PartialEq, Deserialize)]
@@ -53,14 +56,13 @@ pub struct Genesis {
 
 #[cfg(test)]
 mod tests {
-	use serde_json;
-	use bytes::Bytes;
-	use uint::Uint;
-	use ethereum_types::{U256, H160, H64 as Eth64, H256 as Eth256};
-	use hash::{H64, H256, Address};
-	use spec::genesis::Genesis;
-	use spec::{Ethereum, Seal};
 	use std::str::FromStr;
+	use super::{Address, Bytes, Genesis, H256, Uint};
+	use crate::{
+		hash::H64,
+		spec::{Ethereum, Seal}
+	};
+	use ethereum_types::{U256, H160, H64 as Eth64, H256 as Eth256};
 
 	#[test]
 	fn genesis_deserialization() {
@@ -82,19 +84,19 @@ mod tests {
 		let deserialized: Genesis = serde_json::from_str(s).unwrap();
 		assert_eq!(deserialized, Genesis {
 			seal: Seal::Ethereum(Ethereum {
-				nonce: H64(Eth64::from("0x00006d6f7264656e")),
-				mix_hash: H256(Eth256::from("0x0000000000000000000000000000000000000000000000000000000000000000"))
+				nonce: H64(Eth64::from_str("00006d6f7264656e").unwrap()),
+				mix_hash: H256(Eth256::from_str("0000000000000000000000000000000000000000000000000000000000000000").unwrap())
 			}),
 			difficulty: Uint(U256::from(0x400000000u64)),
-			author: Some(Address(H160::from("0x1000000000000000000000000000000000000001"))),
+			author: Some(Address(H160::from_str("1000000000000000000000000000000000000001").unwrap())),
 			timestamp: Some(Uint(U256::from(0x07))),
-			parent_hash: Some(H256(Eth256::from("0x9000000000000000000000000000000000000000000000000000000000000000"))),
+			parent_hash: Some(H256(Eth256::from_str("9000000000000000000000000000000000000000000000000000000000000000").unwrap())),
 			gas_limit: Uint(U256::from(0x1388)),
 			transactions_root: None,
 			receipts_root: None,
-			state_root: Some(H256(Eth256::from("0xd7f8974fb5ac78d9ac099b9ad5018bedc2ce0a72dad1827a1709da30580f0544"))),
+			state_root: Some(H256(Eth256::from_str("d7f8974fb5ac78d9ac099b9ad5018bedc2ce0a72dad1827a1709da30580f0544").unwrap())),
 			gas_used: None,
-			extra_data: Some(Bytes::from_str("0x11bbe8db4e347b4e8c937c1c8370e4b5ed33adb3db69cbdb7a38e1e50b1b82fa").unwrap()),
+			extra_data: Some(Bytes::from_str("11bbe8db4e347b4e8c937c1c8370e4b5ed33adb3db69cbdb7a38e1e50b1b82fa").unwrap()),
 		});
 	}
 }

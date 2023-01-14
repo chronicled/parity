@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -54,20 +54,24 @@ extern crate serde_derive;
 extern crate log;
 
 extern crate bincode;
+extern crate client_traits;
 extern crate common_types;
+extern crate engine;
 extern crate ethcore_blockchain;
 extern crate ethcore_db;
 extern crate ethcore_io as io;
 extern crate ethcore_network as network;
+extern crate executive_state;
 extern crate parity_bytes as bytes;
 extern crate ethereum_types;
-extern crate ethcore;
+extern crate ethcore_miner as miner;
 extern crate hash_db;
-extern crate heapsize;
+extern crate parity_util_mem;
+extern crate parity_util_mem as malloc_size_of;
 extern crate failsafe;
 extern crate futures;
-extern crate itertools;
 extern crate keccak_hasher;
+extern crate machine;
 extern crate memory_db;
 extern crate trie_db as trie;
 extern crate patricia_trie_ethereum as ethtrie;
@@ -78,6 +82,7 @@ extern crate parking_lot;
 #[macro_use]
 extern crate rlp_derive;
 extern crate serde;
+extern crate spec;
 extern crate smallvec;
 extern crate stats;
 extern crate vm;
@@ -85,9 +90,11 @@ extern crate keccak_hash as hash;
 extern crate triehash_ethereum as triehash;
 extern crate kvdb;
 extern crate memory_cache;
-#[macro_use]
-extern crate error_chain;
+extern crate derive_more;
+extern crate verification;
 
+#[cfg(test)]
+extern crate ethcore;
 #[cfg(test)]
 extern crate kvdb_memorydb;
 #[cfg(test)]

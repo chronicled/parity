@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -19,7 +19,7 @@ use std::time::Duration;
 use futures::{Future, Poll};
 use tokio::timer::timeout::{Timeout, Error as TimeoutError};
 
-type DeadlineBox<F> = Box<Future<
+type DeadlineBox<F> = Box<dyn Future<
 	Item = DeadlineStatus<<F as Future>::Item>,
 	Error = TimeoutError<<F as Future>::Error>
 > + Send>;

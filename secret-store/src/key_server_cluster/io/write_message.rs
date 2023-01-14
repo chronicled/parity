@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -18,7 +18,7 @@ use std::io;
 use futures::{Future, Poll};
 use tokio_io::AsyncWrite;
 use tokio_io::io::{WriteAll, write_all};
-use ethkey::KeyPair;
+use crypto::publickey::KeyPair;
 use key_server_cluster::message::Message;
 use key_server_cluster::io::{serialize_message, encrypt_message};
 

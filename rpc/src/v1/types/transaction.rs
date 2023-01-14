@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -18,7 +18,8 @@ use std::sync::Arc;
 
 use serde::{Serialize, Serializer};
 use serde::ser::SerializeStruct;
-use ethcore::{contract_address, CreateContractAddress};
+use machine::executive::{contract_address};
+use vm::CreateContractAddress;
 use ethereum_types::{H160, H256, H512, U64, U256};
 use miner;
 use types::transaction::{LocalizedTransaction, Action, PendingTransaction, SignedTransaction};
@@ -286,6 +287,8 @@ mod tests {
 
 	#[test]
 	fn test_local_transaction_status_serialize() {
+		use ethereum_types::H256;
+
 		let tx_ser = serde_json::to_string(&Transaction::default()).unwrap();
 		let status1 = LocalTransactionStatus::Pending;
 		let status2 = LocalTransactionStatus::Future;
@@ -293,7 +296,7 @@ mod tests {
 		let status4 = LocalTransactionStatus::Dropped(Transaction::default());
 		let status5 = LocalTransactionStatus::Invalid(Transaction::default());
 		let status6 = LocalTransactionStatus::Rejected(Transaction::default(), "Just because".into());
-		let status7 = LocalTransactionStatus::Replaced(Transaction::default(), 5.into(), 10.into());
+		let status7 = LocalTransactionStatus::Replaced(Transaction::default(), 5.into(), H256::from_low_u64_be(10));
 
 		assert_eq!(
 			serde_json::to_string(&status1).unwrap(),

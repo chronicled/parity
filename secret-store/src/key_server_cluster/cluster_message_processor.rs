@@ -1,4 +1,4 @@
-// Copyright 2015-2018 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -15,7 +15,8 @@
 // along with Parity.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::sync::Arc;
-use key_server_cluster::{Error, NodeId, NodeKeyPair};
+use blockchain::SigningKeyPair;
+use key_server_cluster::{Error, NodeId};
 use key_server_cluster::cluster::{ServersSetChangeParams, new_servers_set_change_session};
 use key_server_cluster::cluster_sessions::{AdminSession};
 use key_server_cluster::cluster_connections::{ConnectionProvider, Connection};
@@ -32,7 +33,7 @@ pub trait MessageProcessor: Send + Sync {
 	/// Process disconnect from the remote node.
 	fn process_disconnect(&self, node: &NodeId);
 	/// Process single message from the connection.
-	fn process_connection_message(&self, connection: Arc<Connection>, message: Message);
+	fn process_connection_message(&self, connection: Arc<dyn Connection>, message: Message);
 
 	/// Start servers set change session. This is typically used by ConnectionManager when
 	/// it detects that auto-migration session needs to be started.
@@ -49,19 +50,19 @@ pub trait MessageProcessor: Send + Sync {
 
 /// Bridge between ConnectionManager and ClusterSessions.
 pub struct SessionsMessageProcessor {
-	self_key_pair: Arc<NodeKeyPair>,
-	servers_set_change_creator_connector: Arc<ServersSetChangeSessionCreatorConnector>,
+	self_key_pair: Arc<dyn SigningKeyPair>,
+	servers_set_change_creator_connector: Arc<dyn ServersSetChangeSessionCreatorConnector>,
 	sessions: Arc<ClusterSessions>,
-	connections: Arc<ConnectionProvider>,
+	connections: Arc<dyn ConnectionProvider>,
 }
 
 impl SessionsMessageProcessor {
 	/// Create new instance of SessionsMessageProcessor.
 	pub fn new(
-		self_key_pair: Arc<NodeKeyPair>,
-		servers_set_change_creator_connector: Arc<ServersSetChangeSessionCreatorConnector>,
+		self_key_pair: Arc<dyn SigningKeyPair>,
+		servers_set_change_creator_connector: Arc<dyn ServersSetChangeSessionCreatorConnector>,
 		sessions: Arc<ClusterSessions>,
-		connections: Arc<ConnectionProvider>,
+		connections: Arc<dyn ConnectionProvider>,
 	) -> Self {
 		SessionsMessageProcessor {
 			self_key_pair,
@@ -72,10 +73,10 @@ impl SessionsMessageProcessor {
 	}
 
 	/// Process single session message from connection.
-	fn process_message<S: ClusterSession, SC: ClusterSessionCreator<S, D>, D>(
+	fn process_message<S: ClusterSession, SC: ClusterSessionCreator<S>>(
 		&self,
-		sessions: &ClusterSessionsContainer<S, SC, D>,
-		connection: Arc<Connection>,
+		sessions: &ClusterSessionsContainer<S, SC>,
+		connection: Arc<dyn Connection>,
 		mut message: Message,
 	) -> Option<Arc<S>>
 		where
@@ -151,9 +152,9 @@ impl SessionsMessageProcessor {
 	}
 
 	/// Get or insert new session.
-	fn prepare_session<S: ClusterSession, SC: ClusterSessionCreator<S, D>, D>(
+	fn prepare_session<S: ClusterSession, SC: ClusterSessionCreator<S>>(
 		&self,
-		sessions: &ClusterSessionsContainer<S, SC, D>,
+		sessions: &ClusterSessionsContainer<S, SC>,
 		sender: &NodeId,
 		message: &Message
 	) -> Result<Arc<S>, Error>
@@ -192,13 +193,13 @@ impl SessionsMessageProcessor {
 
 				let nonce = Some(message.session_nonce().ok_or(Error::InvalidMessage)?);
 				let exclusive = message.is_exclusive_session_message();
-				sessions.insert(cluster, master, session_id, nonce, exclusive, creation_data)
+				sessions.insert(cluster, master, session_id, nonce, exclusive, creation_data).map(|s| s.session)
 			},
 		}
 	}
 
 	/// Process single cluster message from the connection.
-	fn process_cluster_message(&self, connection: Arc<Connection>, message: ClusterMessage) {
+	fn process_cluster_message(&self, connection: Arc<dyn Connection>, message: ClusterMessage) {
 		match message {
 			ClusterMessage::KeepAlive(_) => {
 				let msg = Message::Cluster(ClusterMessage::KeepAliveResponse(message::KeepAliveResponse {
@@ -220,7 +221,7 @@ impl MessageProcessor for SessionsMessageProcessor {
 		self.sessions.on_connection_timeout(node);
 	}
 
-	fn process_connection_message(&self, connection: Arc<Connection>, message: Message) {
+	fn process_connection_message(&self, connection: Arc<dyn Connection>, message: Message) {
 		trace!(target: "secretstore_net", "{}: received message {} from {}",
 			self.self_key_pair.public(), message, connection.node_id());
 
@@ -273,8 +274,8 @@ impl MessageProcessor for SessionsMessageProcessor {
 			let is_master_node = meta.self_node_id == meta.master_node_id;
 			if is_master_node && session.is_finished() {
 				self.sessions.negotiation_sessions.remove(&session.id());
-				match session.wait() {
-					Ok(Some((version, master))) => match session.take_continue_action() {
+				match session.result() {
+					Some(Ok(Some((version, master)))) => match session.take_continue_action() {
 						Some(ContinueAction::Decrypt(
 							session, origin, is_shadow_decryption, is_broadcast_decryption
 						)) => {
@@ -317,10 +318,7 @@ impl MessageProcessor for SessionsMessageProcessor {
 						},
 						None => (),
 					},
-					Ok(None) => unreachable!("is_master_node; session is finished;
-						negotiation version always finished with result on master;
-						qed"),
-					Err(error) => match session.take_continue_action() {
+					Some(Err(error)) => match session.take_continue_action() {
 						Some(ContinueAction::Decrypt(session, _, _, _)) => {
 							session.on_session_error(&meta.self_node_id, error);
 							self.sessions.decryption_sessions.remove(&session.id());
@@ -335,6 +333,9 @@ impl MessageProcessor for SessionsMessageProcessor {
 						},
 						None => (),
 					},
+					None | Some(Ok(None)) => unreachable!("is_master_node; session is finished;
+						negotiation version always finished with result on master;
+						qed"),
 				}
 			}
 		}
@@ -352,6 +353,6 @@ impl MessageProcessor for SessionsMessageProcessor {
 			self.connections.clone(),
 			self.servers_set_change_creator_connector.clone(),
 			params,
-		)
+		).map(|s| s.session)
 	}
 }

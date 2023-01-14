@@ -1,4 +1,4 @@
-// Copyright 2015-2018 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity.
 
 // Parity is free software: you can redistribute it and/or modify
@@ -19,8 +19,9 @@
 use std::sync::Arc;
 use parking_lot::RwLock;
 use ethereum_types::{H256, Address};
-use call_contract::{CallContract, RegistryInfo};
-use ethcore::client::BlockId;
+use call_contract::CallContract;
+use registrar::RegistrarClient;
+use types::ids::BlockId;
 use ethabi::FunctionOutputDecoder;
 
 const ACL_CHECKER_CONTRACT_REGISTRY_NAME: &'static str = "secretstore_acl_checker";
@@ -29,15 +30,15 @@ use_contract!(keys_acl_contract, "res/keys_acl.json");
 
 /// Returns the address (of the contract), that corresponds to the key
 pub fn key_to_address(key: &H256) -> Address {
-	Address::from_slice(&key.to_vec()[..10])
+	Address::from_slice(&key.as_bytes()[..10])
 }
 
 /// Returns the key from the key server associated with the contract
 pub fn address_to_key(contract_address: &Address) -> H256 {
 	// Current solution uses contract address extended with 0 as id
-	let contract_address_extended: H256 = contract_address.into();
+	let contract_address_extended: H256 = (*contract_address).into();
 
-	H256::from_slice(&contract_address_extended)
+	H256::from_slice(contract_address_extended.as_bytes())
 }
 
 /// Trait for keys server keys provider.
@@ -53,13 +54,13 @@ pub trait KeyProvider: Send + Sync + 'static {
 }
 
 /// Secret Store keys provider
-pub struct SecretStoreKeys<C> where C: CallContract + RegistryInfo + Send + Sync + 'static {
+pub struct SecretStoreKeys<C> where C: CallContract + RegistrarClient + Send + Sync + 'static {
 	client: Arc<C>,
 	key_server_account: Option<Address>,
 	keys_acl_contract: RwLock<Option<Address>>,
 }
 
-impl<C> SecretStoreKeys<C> where C: CallContract + RegistryInfo + Send + Sync + 'static {
+impl<C> SecretStoreKeys<C> where C: CallContract + RegistrarClient + Send + Sync + 'static {
 	/// Create provider
 	pub fn new(client: Arc<C>, key_server_account: Option<Address>) -> Self {
 		SecretStoreKeys {
@@ -70,7 +71,9 @@ impl<C> SecretStoreKeys<C> where C: CallContract + RegistryInfo + Send + Sync + 
 	}
 }
 
-impl<C> KeyProvider for SecretStoreKeys<C> where C: CallContract + RegistryInfo + Send + Sync + 'static {
+impl<C> KeyProvider for SecretStoreKeys<C>
+	where C: CallContract + RegistrarClient + Send + Sync + 'static
+{
 	fn key_server_account(&self) -> Option<Address> {
 		self.key_server_account
 	}
@@ -92,7 +95,11 @@ impl<C> KeyProvider for SecretStoreKeys<C> where C: CallContract + RegistryInfo 
 	}
 
 	fn update_acl_contract(&self) {
-		let contract_address = self.client.registry_address(ACL_CHECKER_CONTRACT_REGISTRY_NAME.into(), BlockId::Latest);
+		let contract_address = self.client.get_address(
+			ACL_CHECKER_CONTRACT_REGISTRY_NAME,
+			BlockId::Latest
+		).unwrap_or(None);
+
 		if *self.keys_acl_contract.read() != contract_address {
 			trace!(target: "privatetx", "Configuring for ACL checker contract from address {:?}",
 				contract_address);
@@ -118,7 +125,7 @@ impl Default for StoringKeyProvider {
 	fn default() -> Self {
 		StoringKeyProvider {
 			available_keys: RwLock::new(None),
-			key_server_account: Some(Address::default()),
+			key_server_account: Some(Address::zero()),
 		}
 	}
 }
@@ -138,9 +145,11 @@ impl KeyProvider for StoringKeyProvider {
 #[cfg(test)]
 mod tests {
 	use std::sync::Arc;
-	use ethkey::{Secret, KeyPair};
+	use std::str::FromStr;
+	use crypto::publickey::{Secret, KeyPair};
 	use bytes::Bytes;
 	use super::*;
+	use registrar::RegistrarClient;
 
 	struct DummyRegistryClient {
 		registry_address: Option<Address>,
@@ -154,17 +163,30 @@ mod tests {
 		}
 	}
 
-	impl RegistryInfo for DummyRegistryClient {
-		fn registry_address(&self, _name: String, _block: BlockId) -> Option<Address> { self.registry_address }
+	impl RegistrarClient for DummyRegistryClient {
+		fn registrar_address(&self) -> Option<Address> {
+			unimplemented!()
+		}
+
+		fn get_address(&self, _name: &str, _block: BlockId) -> Result<Option<Address>, String> {
+			Ok(self.registry_address)
+		}
 	}
 
 	impl CallContract for DummyRegistryClient {
-		fn call_contract(&self, _id: BlockId, _address: Address, _data: Bytes) -> Result<Bytes, String> { Ok(vec![]) }
+		fn call_contract(
+			&self,
+			_block_id: BlockId,
+			_address: Address,
+			_data: Bytes
+		) -> Result<Bytes, String> {
+			Ok(vec![])
+		}
 	}
 
 	#[test]
 	fn should_update_acl_contract() {
-		let key = KeyPair::from_secret(Secret::from("0000000000000000000000000000000000000000000000000000000000000011")).unwrap();
+		let key = KeyPair::from_secret(Secret::from_str("0000000000000000000000000000000000000000000000000000000000000011").unwrap()).unwrap();
 		let client = DummyRegistryClient::new(Some(key.address()));
 		let keys_data = SecretStoreKeys::new(Arc::new(client), None);
 		keys_data.update_acl_contract();

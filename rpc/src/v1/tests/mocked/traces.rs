@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,12 +16,14 @@
 
 use std::sync::Arc;
 
-use ethcore::executed::{Executed, CallError};
-use ethcore::trace::trace::{Action, Res, Call};
-use ethcore::trace::LocalizedTrace;
-use ethcore::client::TestBlockChainClient;
+use machine::executed::Executed;
+use trace::trace::{Action, Res, Call};
+use trace::LocalizedTrace;
+use ethcore::test_helpers::TestBlockChainClient;
+use ethereum_types::{Address, H256};
 
-use vm::CallType;
+use types::transaction::CallError;
+use trace::trace::CallType;
 
 use jsonrpc_core::IoHandler;
 use v1::tests::helpers::{TestMinerService};
@@ -37,20 +39,20 @@ fn io() -> Tester {
 	let client = Arc::new(TestBlockChainClient::new());
 	*client.traces.write() = Some(vec![LocalizedTrace {
 		action: Action::Call(Call {
-			from: 0xf.into(),
-			to: 0x10.into(),
+			from: Address::from_low_u64_be(0xf),
+			to: Address::from_low_u64_be(0x10),
 			value: 0x1.into(),
 			gas: 0x100.into(),
 			input: vec![1, 2, 3],
-			call_type: CallType::Call,
+			call_type: Some(CallType::Call).into(),
 		}),
 		result: Res::None,
 		subtraces: 0,
 		trace_address: vec![0],
 		transaction_number: Some(0),
-		transaction_hash: Some(5.into()),
+		transaction_hash: Some(H256::from_low_u64_be(5)),
 		block_number: 10,
-		block_hash: 10.into(),
+		block_hash: H256::from_low_u64_be(10),
 	}]);
 	*client.execution_result.write() = Some(Ok(Executed {
 		exception: None,

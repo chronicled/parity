@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -14,17 +14,6 @@
 // You should have received a copy of the GNU General Public License
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
-extern crate multihash;
-extern crate cid;
-extern crate unicase;
-
-extern crate rlp;
-extern crate ethcore;
-extern crate parity_bytes as bytes;
-extern crate ethereum_types;
-extern crate jsonrpc_core;
-extern crate jsonrpc_http_server as http;
-
 pub mod error;
 mod route;
 
@@ -34,7 +23,7 @@ use std::net::{SocketAddr, IpAddr};
 
 use jsonrpc_core::futures::future::{self, FutureResult};
 use jsonrpc_core::futures::{self, Future};
-use ethcore::client::BlockChainClient;
+use client_traits::BlockChainClient;
 use http::hyper::{self, server, Method, StatusCode, Body,
 	header::{self, HeaderValue},
 };

@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -38,7 +38,7 @@ impl<'a> Into<String> for &'a Uuid {
 		let d3 = &self.0[6..8];
 		let d4 = &self.0[8..10];
 		let d5 = &self.0[10..16];
-		[d1, d2, d3, d4, d5].into_iter().map(|d| d.to_hex()).collect::<Vec<String>>().join("-")
+		[d1, d2, d3, d4, d5].iter().map(|d| d.to_hex()).collect::<Vec<String>>().join("-")
 	}
 }
 

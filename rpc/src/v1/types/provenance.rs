@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -67,18 +67,19 @@ impl fmt::Display for Origin {
 mod tests {
 	use serde_json;
 	use super::Origin;
+	use ethereum_types::H256;
 
 	#[test]
 	fn should_serialize_origin() {
 		// given
 		let o1 = Origin::Rpc("test service".into());
-		let o3 = Origin::Ipc(5.into());
+		let o3 = Origin::Ipc(H256::from_low_u64_be(5));
 		let o4 = Origin::Signer {
-			session: 10.into(),
+			session: H256::from_low_u64_be(10),
 		};
 		let o5 = Origin::Unknown;
 		let o6 = Origin::Ws {
-			session: 5.into(),
+			session: H256::from_low_u64_be(5),
 		};
 
 		// when

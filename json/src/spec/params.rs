@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,9 +16,12 @@
 
 //! Spec params deserialization.
 
-use uint::{self, Uint};
-use hash::{H256, Address};
-use bytes::Bytes;
+use crate::{
+	bytes::Bytes,
+	hash::{H256, Address},
+	uint::{self, Uint}
+};
+use serde::Deserialize;
 
 /// Spec params.
 #[derive(Debug, PartialEq, Deserialize)]
@@ -104,6 +107,8 @@ pub struct Params {
 	/// See `CommonParams` docs.
 	pub eip2028_transition: Option<Uint>,
 	/// See `CommonParams` docs.
+	pub eip2200_advance_transition: Option<Uint>,
+	/// See `CommonParams` docs.
 	pub dust_protection_transition: Option<Uint>,
 	/// See `CommonParams` docs.
 	pub nonce_cap_increment: Option<Uint>,
@@ -128,8 +133,10 @@ pub struct Params {
 	pub transaction_permission_contract: Option<Address>,
 	/// Block at which the transaction permission contract should start being used.
 	pub transaction_permission_contract_transition: Option<Uint>,
-	/// Wasm activation block height, if not activated from start
+	/// Wasm activation block height, if not activated from start.
 	pub wasm_activation_transition: Option<Uint>,
+	/// Define a separate wasm version instead of using the prefix.
+	pub wasm_version: Option<Uint>,
 	/// KIP4 activiation block height.
 	pub kip4_transition: Option<Uint>,
 	/// KIP6 activiation block height.
@@ -138,18 +145,16 @@ pub struct Params {
 
 #[cfg(test)]
 mod tests {
-	use serde_json;
-	use uint::Uint;
+	use super::{Params, Uint};
 	use ethereum_types::U256;
-	use spec::params::Params;
 
 	#[test]
 	fn params_deserialization() {
 		let s = r#"{
 			"maximumExtraDataSize": "0x20",
-			"networkID" : "0x1",
-			"chainID" : "0x15",
-			"subprotocolName" : "exp",
+			"networkID": "0x1",
+			"chainID": "0x15",
+			"subprotocolName": "exp",
 			"minGasLimit": "0x1388",
 			"accountStartNonce": "0x01",
 			"gasLimitBoundDivisor": "0x20",

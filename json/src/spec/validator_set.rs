@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -17,8 +17,8 @@
 //! Validator set deserialization.
 
 use std::collections::BTreeMap;
-use uint::Uint;
-use hash::Address;
+use crate::{hash::Address, uint::Uint};
+use serde::Deserialize;
 
 /// Different ways of specifying validators.
 #[derive(Debug, PartialEq, Deserialize)]
@@ -37,11 +37,9 @@ pub enum ValidatorSet {
 
 #[cfg(test)]
 mod tests {
-	use serde_json;
-	use uint::Uint;
+	use std::str::FromStr;
+	use super::{Address, Uint, ValidatorSet};
 	use ethereum_types::{H160, U256};
-	use hash::Address;
-	use spec::validator_set::ValidatorSet;
 
 	#[test]
 	fn validator_set_deserialization() {
@@ -62,9 +60,9 @@ mod tests {
 		let deserialized: Vec<ValidatorSet> = serde_json::from_str(s).unwrap();
 		assert_eq!(deserialized.len(), 4);
 
-		assert_eq!(deserialized[0], ValidatorSet::List(vec![Address(H160::from("0xc6d9d2cd449a754c494264e1809c50e34d64562b"))]));
-		assert_eq!(deserialized[1], ValidatorSet::SafeContract(Address(H160::from("0xc6d9d2cd449a754c494264e1809c50e34d64562b"))));
-		assert_eq!(deserialized[2], ValidatorSet::Contract(Address(H160::from("0xc6d9d2cd449a754c494264e1809c50e34d64562b"))));
+		assert_eq!(deserialized[0], ValidatorSet::List(vec![Address(H160::from_str("c6d9d2cd449a754c494264e1809c50e34d64562b").unwrap())]));
+		assert_eq!(deserialized[1], ValidatorSet::SafeContract(Address(H160::from_str("c6d9d2cd449a754c494264e1809c50e34d64562b").unwrap())));
+		assert_eq!(deserialized[2], ValidatorSet::Contract(Address(H160::from_str("c6d9d2cd449a754c494264e1809c50e34d64562b").unwrap())));
 		match deserialized[3] {
 			ValidatorSet::Multi(ref map) => {
 				assert_eq!(map.len(), 3);

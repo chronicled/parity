@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -16,26 +16,30 @@
 
 //! Parity-specific rpc implementation.
 use std::sync::Arc;
-use std::str::FromStr;
 use std::collections::BTreeMap;
 
 use crypto::DEFAULT_MAC;
-use ethereum_types::{Address, H64, H160, H256, H512, U64, U256};
-use ethcore::client::{BlockChainClient, StateClient, Call};
-use ethcore::miner::{self, MinerService};
-use ethcore::snapshot::{SnapshotService, RestorationStatus};
-use ethcore::state::StateInfo;
+use ethereum_types::{H64, H160, H256, H512, U64, U256};
+use ethcore::client::Call;
+use client_traits::{BlockChainClient, StateClient};
+use ethcore::miner::{self, MinerService, FilterOptions};
+use snapshot::SnapshotService;
+use account_state::state::StateInfo;
 use ethcore_logger::RotatingLogger;
-use ethkey::{crypto::ecies, Brain, Generator};
+use ethkey::Brain;
+use crypto::publickey::{ecies, Generator};
 use ethstore::random_phrase;
 use jsonrpc_core::futures::future;
 use jsonrpc_core::{BoxFuture, Result};
 use sync::{SyncProvider, ManageNetwork};
-use types::ids::BlockId;
+use types::{
+	ids::BlockId,
+	verification::Unverified,
+	snapshot::RestorationStatus,
+};
 use updater::{Service as UpdateService};
 use version::version_data;
 
-use v1::helpers::block_import::is_major_importing;
 use v1::helpers::{self, errors, fake_sign, ipfs, NetworkSettings, verify_signature};
 use v1::helpers::external_signer::{SigningQueue, SignerService};
 use v1::metadata::Metadata;
@@ -56,13 +60,13 @@ pub struct ParityClient<C, M, U> {
 	client: Arc<C>,
 	miner: Arc<M>,
 	updater: Arc<U>,
-	sync: Arc<SyncProvider>,
-	net: Arc<ManageNetwork>,
+	sync: Arc<dyn SyncProvider>,
+	net: Arc<dyn ManageNetwork>,
 	logger: Arc<RotatingLogger>,
 	settings: Arc<NetworkSettings>,
 	signer: Option<Arc<SignerService>>,
 	ws_address: Option<Host>,
-	snapshot: Option<Arc<SnapshotService>>,
+	snapshot: Option<Arc<dyn SnapshotService>>,
 }
 
 impl<C, M, U> ParityClient<C, M, U> where
@@ -72,14 +76,14 @@ impl<C, M, U> ParityClient<C, M, U> where
 	pub fn new(
 		client: Arc<C>,
 		miner: Arc<M>,
-		sync: Arc<SyncProvider>,
+		sync: Arc<dyn SyncProvider>,
 		updater: Arc<U>,
-		net: Arc<ManageNetwork>,
+		net: Arc<dyn ManageNetwork>,
 		logger: Arc<RotatingLogger>,
 		settings: Arc<NetworkSettings>,
 		signer: Option<Arc<SignerService>>,
 		ws_address: Option<Host>,
-		snapshot: Option<Arc<SnapshotService>>,
+		snapshot: Option<Arc<dyn SnapshotService>>,
 	) -> Self {
 		ParityClient {
 			client,
@@ -165,12 +169,7 @@ impl<C, M, U, S> Parity for ParityClient<C, M, U> where
 	}
 
 	fn registry_address(&self) -> Result<Option<H160>> {
-		Ok(
-			self.client
-				.additional_params()
-				.get("registrar")
-				.and_then(|s| Address::from_str(s).ok())
-		)
+		Ok(self.client.registrar_address())
 	}
 
 	fn rpc_settings(&self) -> Result<RpcSettings> {
@@ -224,7 +223,7 @@ impl<C, M, U, S> Parity for ParityClient<C, M, U> where
 			.map(|a| a.into_iter().map(Into::into).collect()))
 	}
 
-	fn list_storage_keys(&self, address: H160, count: u64, after: Option<H256>, block_number: Option<BlockNumber>) -> Result<Option<Vec<H256>>> {
+	fn list_storage_keys(&self, address: H160, count: Option<u64>, after: Option<H256>, block_number: Option<BlockNumber>) -> Result<Option<Vec<H256>>> {
 		let number = match block_number.unwrap_or_default() {
 			BlockNumber::Pending => {
 				warn!("BlockNumber::Pending is unsupported");
@@ -245,10 +244,11 @@ impl<C, M, U, S> Parity for ParityClient<C, M, U> where
 			.map(Into::into)
 	}
 
-	fn pending_transactions(&self, limit: Option<usize>) -> Result<Vec<Transaction>> {
-		let ready_transactions = self.miner.ready_transactions(
+	fn pending_transactions(&self, limit: Option<usize>, filter: Option<FilterOptions>) -> Result<Vec<Transaction>> {
+		let ready_transactions = self.miner.ready_transactions_filtered(
 			&*self.client,
 			limit.unwrap_or_else(usize::max_value),
+			filter,
 			miner::PendingOrdering::Priority,
 		);
 
@@ -355,6 +355,7 @@ impl<C, M, U, S> Parity for ParityClient<C, M, U> where
 			(header.encoded(), None)
 		} else {
 			let id = match number {
+				BlockNumber::Hash { hash, .. } => BlockId::Hash(hash),
 				BlockNumber::Num(num) => BlockId::Number(num),
 				BlockNumber::Earliest => BlockId::Earliest,
 				BlockNumber::Latest => BlockId::Latest,
@@ -386,6 +387,7 @@ impl<C, M, U, S> Parity for ParityClient<C, M, U> where
 					.collect()
 				))
 			},
+			BlockNumber::Hash { hash, .. } => BlockId::Hash(hash),
 			BlockNumber::Num(num) => BlockId::Number(num),
 			BlockNumber::Earliest => BlockId::Earliest,
 			BlockNumber::Latest => BlockId::Latest,
@@ -417,6 +419,7 @@ impl<C, M, U, S> Parity for ParityClient<C, M, U> where
 			(state, header)
 		} else {
 			let id = match num {
+				BlockNumber::Hash { hash, .. } => BlockId::Hash(hash),
 				BlockNumber::Num(num) => BlockId::Number(num),
 				BlockNumber::Earliest => BlockId::Earliest,
 				BlockNumber::Latest => BlockId::Latest,
@@ -445,8 +448,7 @@ impl<C, M, U, S> Parity for ParityClient<C, M, U> where
 			_ => false,
 		};
 		let is_not_syncing =
-			!is_warping &&
-			!is_major_importing(Some(self.sync.status().state), self.client.queue_info());
+			!is_warping && !self.sync.is_major_syncing();
 
 		if has_peers && is_not_syncing {
 			Ok(())
@@ -463,5 +465,23 @@ impl<C, M, U, S> Parity for ParityClient<C, M, U> where
 
 	fn verify_signature(&self, is_prefixed: bool, message: Bytes, r: H256, s: H256, v: U64) -> Result<RecoveredAccount> {
 		verify_signature(is_prefixed, message, r, s, v, self.client.signing_chain_id())
+	}
+
+	fn get_raw_block_by_number(&self, block_number: BlockNumber) -> BoxFuture<Option<Bytes>> {
+		Box::new(futures::done(
+			Ok(
+				self.client
+					.block(block_number_to_id(block_number))
+					.map(|block| Bytes::from(block.raw().to_vec()))
+			)
+		))
+	}
+
+
+	fn submit_raw_block(&self, block: Bytes) -> Result<H256> {
+		let result = self.client.import_block(
+			Unverified::from_rlp(block.into_vec()).map_err(errors::rlp)?
+		);
+		Ok(result.map_err(errors::cannot_submit_block)?)
 	}
 }

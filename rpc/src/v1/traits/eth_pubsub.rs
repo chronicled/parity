@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -23,16 +23,22 @@ use jsonrpc_pubsub::{typed, SubscriptionId};
 use v1::types::pubsub;
 
 /// Eth PUB-SUB rpc interface.
-#[rpc]
+#[rpc(server)]
 pub trait EthPubSub {
 	/// RPC Metadata
 	type Metadata;
 
 	/// Subscribe to Eth subscription.
 	#[pubsub(subscription = "eth_subscription", subscribe, name = "eth_subscribe")]
-	fn subscribe(&self, Self::Metadata, typed::Subscriber<pubsub::Result>, pubsub::Kind, Option<pubsub::Params>);
+	fn subscribe(
+		&self,
+		_: Self::Metadata,
+		_: typed::Subscriber<pubsub::Result>,
+		_: pubsub::Kind,
+		_: Option<pubsub::Params>,
+	);
 
 	/// Unsubscribe from existing Eth subscription.
 	#[pubsub(subscription = "eth_subscription", unsubscribe, name = "eth_unsubscribe")]
-	fn unsubscribe(&self, Option<Self::Metadata>, SubscriptionId) -> Result<bool>;
+	fn unsubscribe(&self, _: Option<Self::Metadata>, _: SubscriptionId) -> Result<bool>;
 }

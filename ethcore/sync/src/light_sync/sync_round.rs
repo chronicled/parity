@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -20,11 +20,11 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fmt;
 
-use types::encoded;
-use types::header::Header;
+use common_types::{encoded, header::Header};
 
 use light::net::ReqId;
 use light::request::CompleteHeadersRequest as HeadersRequest;
+use log::trace;
 
 use network::PeerId;
 use ethereum_types::H256;
@@ -37,7 +37,7 @@ const SCAFFOLD_ATTEMPTS: usize = 3;
 /// Context for a headers response.
 pub trait ResponseContext {
 	/// Get the peer who sent this response.
-	fn responder(&self) ->	PeerId;
+	fn responder(&self) -> PeerId;
 	/// Get the request ID this response corresponds to.
 	fn req_id(&self) -> &ReqId;
 	/// Get the (unverified) response data.
@@ -234,7 +234,7 @@ impl Fetcher {
 				}
 
 				// state transition not triggered until drain is finished.
-				(SyncRound::Fetch(self))
+				SyncRound::Fetch(self)
 			}
 		}
 	}

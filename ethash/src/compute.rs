@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -26,7 +26,7 @@ use seed_compute::SeedHashCompute;
 use shared::*;
 use std::io;
 
-use std::{mem, ptr};
+use std::mem;
 use std::path::Path;
 
 const MIX_WORDS: usize = ETHASH_MIX_BYTES / 4;
@@ -135,22 +135,16 @@ pub fn quick_get_difficulty(header_hash: &H256, nonce: u64, mix_hash: &H256, pro
 			let seed = keccak_f800_short(*header_hash, nonce, [0u32; 8]);
 			keccak_f800_long(*header_hash, seed, mem::transmute(*mix_hash))
 		} else {
-			// This is safe - the `keccak_512` call below reads the first 40 bytes (which we explicitly set
-			// with two `copy_nonoverlapping` calls) but writes the first 64, and then we explicitly write
-			// the next 32 bytes before we read the whole thing with `keccak_256`.
-			//
-			// This cannot be elided by the compiler as it doesn't know the implementation of
-			// `keccak_512`.
-			let mut buf: [u8; 64 + 32] = mem::uninitialized();
+			let mut buf = [0u8; 64 + 32];
 
-			ptr::copy_nonoverlapping(header_hash.as_ptr(), buf.as_mut_ptr(), 32);
-			ptr::copy_nonoverlapping(&nonce as *const u64 as *const u8, buf[32..].as_mut_ptr(), 8);
+			let hash_len = header_hash.len();
+			buf[..hash_len].copy_from_slice(header_hash);
+			buf[hash_len..hash_len + mem::size_of::<u64>()].copy_from_slice(&nonce.to_ne_bytes());
 
 			keccak_512::unchecked(buf.as_mut_ptr(), 64, buf.as_ptr(), 40);
-			ptr::copy_nonoverlapping(mix_hash.as_ptr(), buf[64..].as_mut_ptr(), 32);
+			buf[64..].copy_from_slice(mix_hash);
 
-			// This is initialized in `keccak_256`
-			let mut hash: [u8; 32] = mem::uninitialized();
+			let mut hash = [0u8; 32];
 			keccak_256::unchecked(hash.as_mut_ptr(), hash.len(), buf.as_ptr(), buf.len());
 
 			hash
@@ -205,17 +199,11 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 	let mut buf: MixBuf = MixBuf {
 		half_mix: unsafe {
 			// Pack `header_hash` and `nonce` together
-			// We explicitly write the first 40 bytes, leaving the last 24 as uninitialized. Then
-			// `keccak_512` reads the first 40 bytes (4th parameter) and overwrites the entire array,
-			// leaving it fully initialized.
-			let mut out: [u8; NODE_BYTES] = mem::uninitialized();
+			let mut out = [0u8; NODE_BYTES];
 
-			ptr::copy_nonoverlapping(header_hash.as_ptr(), out.as_mut_ptr(), header_hash.len());
-			ptr::copy_nonoverlapping(
-				&nonce as *const u64 as *const u8,
-				out[header_hash.len()..].as_mut_ptr(),
-				mem::size_of::<u64>(),
-			);
+			let hash_len = header_hash.len();
+			out[..hash_len].copy_from_slice(header_hash);
+			out[hash_len..hash_len + mem::size_of::<u64>()].copy_from_slice(&nonce.to_ne_bytes());
 
 			// compute keccak-512 hash and replicate across mix
 			keccak_512::unchecked(
@@ -227,8 +215,7 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 
 			Node { bytes: out }
 		},
-		// This is fully initialized before being read, see `let mut compress = ...` below
-		compress_bytes: unsafe { mem::uninitialized() },
+		compress_bytes: [0u8; MIX_WORDS],
 	};
 
 	let mut mix: [_; MIX_NODES] = [buf.half_mix.clone(), buf.half_mix.clone()];
@@ -252,24 +239,16 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 			fnv_hash(first_val ^ i, mix_words[i as usize % MIX_WORDS]) % num_full_pages
 		};
 
-		unroll! {
-			// MIX_NODES
-			for n in 0..2 {
-				let tmp_node = calculate_dag_item(
-					index * MIX_NODES as u32 + n as u32,
-					cache,
-				);
+		// MIX_NODES
+		for n in 0..2 {
+			let tmp_node = calculate_dag_item(
+				index * MIX_NODES as u32 + n as u32,
+				cache,
+			);
 
-				unroll! {
-					// NODE_WORDS
-					for w in 0..16 {
-						mix[n].as_words_mut()[w] =
-							fnv_hash(
-								mix[n].as_words()[w],
-								tmp_node.as_words()[w],
-							);
-					}
-				}
+			// NODE_WORDS
+			for (a, b) in mix[n].as_words_mut().iter_mut().zip(tmp_node.as_words()) {
+				*a = fnv_hash(*a, *b);
 			}
 		}
 	}
@@ -277,25 +256,27 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 	let mix_words: [u32; MIX_WORDS] = unsafe { mem::transmute(mix) };
 
 	{
-		// This is an uninitialized buffer to begin with, but we iterate precisely `compress.len()`
-		// times and set each index, leaving the array fully initialized. THIS ONLY WORKS ON LITTLE-
-		// ENDIAN MACHINES. See a future PR to make this and the rest of the code work correctly on
+		// We iterate precisely `compress.len()` times and set each index,
+		// leaving the array fully initialized. THIS ONLY WORKS ON LITTLE-ENDIAN MACHINES.
+		// See a future PR to make this and the rest of the code work correctly on
 		// big-endian arches like mips.
 		let compress: &mut [u32; MIX_WORDS / 4] =
 			unsafe { make_const_array!(MIX_WORDS / 4, &mut buf.compress_bytes) };
+		#[cfg(target_endian = "big")]
+		{
+			compile_error!("parity-ethereum currently only supports little-endian targets");
+		}
 
 		// Compress mix
 		debug_assert_eq!(MIX_WORDS / 4, 8);
-		unroll! {
-			for i in 0..8 {
-				let w = i * 4;
+		for i in 0..8 {
+			let w = i * 4;
 
-				let mut reduction = mix_words[w + 0];
-				reduction = reduction.wrapping_mul(FNV_PRIME) ^ mix_words[w + 1];
-				reduction = reduction.wrapping_mul(FNV_PRIME) ^ mix_words[w + 2];
-				reduction = reduction.wrapping_mul(FNV_PRIME) ^ mix_words[w + 3];
-				compress[i] = reduction;
-			}
+			let mut reduction = mix_words[w + 0];
+			reduction = reduction.wrapping_mul(FNV_PRIME) ^ mix_words[w + 1];
+			reduction = reduction.wrapping_mul(FNV_PRIME) ^ mix_words[w + 2];
+			reduction = reduction.wrapping_mul(FNV_PRIME) ^ mix_words[w + 3];
+			compress[i] = reduction;
 		}
 	}
 
@@ -321,7 +302,6 @@ fn hash_compute(light: &Light, full_size: usize, header_hash: &H256, nonce: u64)
 	ProofOfWork { mix_hash: mix_hash, value: value }
 }
 
-// TODO: Use the `simd` crate
 pub fn calculate_dag_item(node_index: u32, cache: &[Node]) -> Node {
 	let num_parent_nodes = cache.len();
 	let mut ret = cache[node_index as usize % num_parent_nodes].clone();
@@ -335,10 +315,8 @@ pub fn calculate_dag_item(node_index: u32, cache: &[Node]) -> Node {
 			num_parent_nodes as u32;
 		let parent = &cache[parent_index as usize];
 
-		unroll! {
-			for w in 0..16 {
-				ret.as_words_mut()[w] = fnv_hash(ret.as_words()[w], parent.as_words()[w]);
-			}
+		for (a, b) in ret.as_words_mut().iter_mut().zip(parent.as_words()) {
+			*a = fnv_hash(*a, *b);
 		}
 	}
 

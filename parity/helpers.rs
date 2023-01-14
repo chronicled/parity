@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -19,10 +19,11 @@ use std::io::{Write, BufReader, BufRead};
 use std::time::Duration;
 use std::fs::File;
 use std::collections::HashSet;
-use ethereum_types::{U256, clean_0x, Address};
+use ethereum_types::{U256, Address};
 use journaldb::Algorithm;
-use ethcore::client::{Mode, BlockId, VMType, DatabaseCompactionProfile, ClientConfig, VerifierType};
+use ethcore::client::{DatabaseCompactionProfile, ClientConfig};
 use ethcore::miner::{PendingSet, Penalization};
+use verification::VerifierType;
 use miner::pool::PrioritizationStrategy;
 use cache::CacheConfig;
 use dir::DatabaseDirectories;
@@ -32,9 +33,22 @@ use sync::{validate_node_url, self};
 use db::migrate;
 use path;
 use ethkey::Password;
+use types::{
+	ids::BlockId,
+	client_types::Mode,
+};
 
 pub fn to_duration(s: &str) -> Result<Duration, String> {
 	to_seconds(s).map(Duration::from_secs)
+}
+
+// TODO: should we bring it back to ethereum-types?
+fn clean_0x(s: &str) -> &str {
+	if s.starts_with("0x") {
+		&s[2..]
+	} else {
+		s
+	}
 }
 
 fn to_seconds(s: &str) -> Result<u64, String> {
@@ -117,7 +131,7 @@ pub fn to_queue_penalization(time: Option<u64>) -> Result<Penalization, String> 
 pub fn to_address(s: Option<String>) -> Result<Address, String> {
 	match s {
 		Some(ref a) => clean_0x(a).parse().map_err(|_| format!("Invalid address: {:?}", a)),
-		None => Ok(Address::default())
+		None => Ok(Address::zero())
 	}
 }
 
@@ -132,7 +146,7 @@ pub fn to_addresses(s: &Option<String>) -> Result<Vec<Address>, String> {
 
 /// Tries to parse string as a price.
 pub fn to_price(s: &str) -> Result<f32, String> {
-	s.parse::<f32>().map_err(|_| format!("Invalid transaciton price 's' given. Must be a decimal number."))
+	s.parse::<f32>().map_err(|_| format!("Invalid transaction price {:?} given. Must be a decimal number.", s))
 }
 
 pub fn join_set(set: Option<&HashSet<String>>) -> Option<String> {
@@ -177,7 +191,7 @@ pub fn to_bootnodes(bootnodes: &Option<String>) -> Result<Vec<String>, String> {
 		Some(ref x) if !x.is_empty() => x.split(',').map(|s| {
 			match validate_node_url(s).map(Into::into) {
 				None => Ok(s.to_owned()),
-				Some(sync::ErrorKind::AddressResolve(_)) => Err(format!("Failed to resolve hostname of a boot node: {}", s)),
+				Some(sync::Error::AddressResolve(_)) => Err(format!("Failed to resolve hostname of a boot node: {}", s)),
 				Some(_) => Err(format!("Invalid node address format given for a boot node: {}", s)),
 			}
 		}).collect(),
@@ -188,6 +202,7 @@ pub fn to_bootnodes(bootnodes: &Option<String>) -> Result<Vec<String>, String> {
 
 #[cfg(test)]
 pub fn default_network_config() -> ::sync::NetworkConfiguration {
+	use network::NatType;
 	use sync::{NetworkConfiguration};
 	use super::network::IpFilter;
 	NetworkConfiguration {
@@ -197,6 +212,7 @@ pub fn default_network_config() -> ::sync::NetworkConfiguration {
 		public_address: None,
 		udp_port: None,
 		nat_enabled: true,
+		nat_type: NatType::Any,
 		discovery_enabled: true,
 		boot_nodes: Vec::new(),
 		use_secret: None,
@@ -218,7 +234,6 @@ pub fn to_client_config(
 	tracing: bool,
 	fat_db: bool,
 	compaction: DatabaseCompactionProfile,
-	vm_type: VMType,
 	name: String,
 	pruning: Algorithm,
 	pruning_history: u64,
@@ -254,7 +269,6 @@ pub fn to_client_config(
 	client_config.pruning = pruning;
 	client_config.history = pruning_history;
 	client_config.db_compaction = compaction;
-	client_config.vm_type = vm_type;
 	client_config.name = name;
 	client_config.verifier_type = if check_seal { VerifierType::Canon } else { VerifierType::CanonNoSeal };
 	client_config.spec_name = spec_name;
@@ -338,9 +352,12 @@ mod tests {
 	use std::collections::HashSet;
 	use tempdir::TempDir;
 	use ethereum_types::U256;
-	use ethcore::client::{Mode, BlockId};
 	use ethcore::miner::PendingSet;
 	use ethkey::Password;
+	use types::{
+		ids::BlockId,
+		client_types::Mode,
+	};
 	use super::{to_duration, to_mode, to_block_id, to_u256, to_pending_set, to_address, to_addresses, to_price, geth_ipc_path, to_bootnodes, join_set, password_from_file};
 
 	#[test]

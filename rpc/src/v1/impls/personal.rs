@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -22,7 +22,7 @@ use accounts::AccountProvider;
 use bytes::Bytes;
 use eip_712::{EIP712, hash_structured_data};
 use ethereum_types::{H160, H256, H520, U128, Address};
-use ethkey::{public_to_address, recover, Signature};
+use crypto::publickey::{public_to_address, recover, Signature};
 use types::transaction::{PendingTransaction, SignedTransaction};
 
 use jsonrpc_core::futures::{future, Future};
@@ -223,7 +223,7 @@ impl<D: Dispatcher + 'static> Personal for PersonalClient<D> {
 
 	fn ec_recover(&self, data: RpcBytes, signature: H520) -> BoxFuture<H160> {
 		let signature: H520 = signature.into();
-		let signature = Signature::from_electrum(&signature);
+		let signature = Signature::from_electrum(signature.as_bytes());
 		let data: Bytes = data.into();
 
 		let hash = eth_data_hash(data);

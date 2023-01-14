@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -18,11 +18,12 @@
 
 use std::ops::Deref;
 
-use ethereum_types::{H256, H160, Address, U256};
+use ethereum_types::{H256, H160, Address, U256, BigEndianHash};
 use ethjson;
-use ethkey::{self, Signature, Secret, Public, recover, public_to_address};
+use parity_crypto::publickey::{Signature, Secret, Public, recover, public_to_address};
 use hash::keccak;
-use heapsize::HeapSizeOf;
+use parity_util_mem::MallocSizeOf;
+
 use rlp::{self, RlpStream, Rlp, DecoderError, Encodable};
 
 use transaction::error;
@@ -37,7 +38,7 @@ pub const UNSIGNED_SENDER: Address = H160([0xff; 20]);
 pub const SYSTEM_ADDRESS: Address = H160([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,0xff, 0xff, 0xff, 0xff,0xff, 0xff, 0xff, 0xff,0xff, 0xff, 0xff, 0xfe]);
 
 /// Transaction action type.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, MallocSizeOf)]
 pub enum Action {
 	/// Create creates new contract.
 	Create,
@@ -103,7 +104,7 @@ pub mod signature {
 
 /// A set of information describing an externally-originating message call
 /// or contract creation operation.
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, MallocSizeOf)]
 pub struct Transaction {
 	/// Nonce.
 	pub nonce: U256,
@@ -137,14 +138,9 @@ impl Transaction {
 	}
 }
 
-impl HeapSizeOf for Transaction {
-	fn heap_size_of_children(&self) -> usize {
-		self.data.heap_size_of_children()
-	}
-}
-
-impl From<ethjson::state::Transaction> for SignedTransaction {
-	fn from(t: ethjson::state::Transaction) -> Self {
+#[cfg(any(test, feature = "test-helpers"))]
+impl From<ethjson::transaction::Transaction> for SignedTransaction {
+	fn from(t: ethjson::transaction::Transaction) -> Self {
 		let to: Option<ethjson::hash::Address> = t.to.into();
 		let secret = t.secret.map(|s| Secret::from(s.0));
 		let tx = Transaction {
@@ -183,7 +179,7 @@ impl From<ethjson::transaction::Transaction> for UnverifiedTransaction {
 			r: t.r.into(),
 			s: t.s.into(),
 			v: t.v.into(),
-			hash: 0.into(),
+			hash: H256::zero(),
 		}.compute_hash()
 	}
 }
@@ -198,7 +194,7 @@ impl Transaction {
 
 	/// Signs the transaction as coming from `sender`.
 	pub fn sign(self, secret: &Secret, chain_id: Option<u64>) -> SignedTransaction {
-		let sig = ::ethkey::sign(secret, &self.hash(chain_id))
+		let sig = parity_crypto::publickey::sign(secret, &self.hash(chain_id))
 			.expect("data is valid and context has signing capabilities; qed");
 		SignedTransaction::new(self.with_signature(sig, chain_id))
 			.expect("secret is valid so it's recoverable")
@@ -211,7 +207,7 @@ impl Transaction {
 			r: sig.r().into(),
 			s: sig.s().into(),
 			v: signature::add_chain_replay_protection(sig.v() as u64, chain_id),
-			hash: 0.into(),
+			hash: H256::zero(),
 		}.compute_hash()
 	}
 
@@ -223,7 +219,7 @@ impl Transaction {
 			r: U256::one(),
 			s: U256::one(),
 			v: 0,
-			hash: 0.into(),
+			hash: H256::zero(),
 		}.compute_hash()
 	}
 
@@ -235,14 +231,17 @@ impl Transaction {
 				r: U256::one(),
 				s: U256::one(),
 				v: 0,
-				hash: 0.into(),
+				hash: H256::zero(),
 			}.compute_hash(),
 			sender: from,
 			public: None,
 		}
 	}
 
-	/// Add EIP-86 compatible empty signature.
+	/// Legacy EIP-86 compatible empty signature.
+	/// This method is used in json tests as well as
+	/// signature verification tests.
+	#[cfg(any(test, feature = "test-helpers"))]
 	pub fn null_sign(self, chain_id: u64) -> SignedTransaction {
 		SignedTransaction {
 			transaction: UnverifiedTransaction {
@@ -250,7 +249,7 @@ impl Transaction {
 				r: U256::zero(),
 				s: U256::zero(),
 				v: chain_id,
-				hash: 0.into(),
+				hash: H256::zero(),
 			}.compute_hash(),
 			sender: UNSIGNED_SENDER,
 			public: None,
@@ -259,7 +258,7 @@ impl Transaction {
 }
 
 /// Signed transaction information without verified signature.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, MallocSizeOf)]
 pub struct UnverifiedTransaction {
 	/// Plain Transaction.
 	unsigned: Transaction,
@@ -272,12 +271,6 @@ pub struct UnverifiedTransaction {
 	s: U256,
 	/// Hash of the transaction
 	hash: H256,
-}
-
-impl HeapSizeOf for UnverifiedTransaction {
-	fn heap_size_of_children(&self) -> usize {
-		self.unsigned.heap_size_of_children()
-	}
 }
 
 impl Deref for UnverifiedTransaction {
@@ -306,7 +299,7 @@ impl rlp::Decodable for UnverifiedTransaction {
 			v: d.val_at(6)?,
 			r: d.val_at(7)?,
 			s: d.val_at(8)?,
-			hash: hash,
+			hash,
 		})
 	}
 }
@@ -323,9 +316,17 @@ impl UnverifiedTransaction {
 		self
 	}
 
-	/// Checks is signature is empty.
+	/// Checks if the signature is empty.
 	pub fn is_unsigned(&self) -> bool {
 		self.r.is_zero() && self.s.is_zero()
+	}
+
+	/// Returns transaction receiver, if any
+	pub fn receiver(&self) -> Option<Address> {
+		match self.unsigned.action {
+			Action::Create => None,
+			Action::Call(receiver) => Some(receiver),
+		}
 	}
 
 	/// Append object with a signature into RLP stream
@@ -364,13 +365,15 @@ impl UnverifiedTransaction {
 
 	/// Construct a signature object from the sig.
 	pub fn signature(&self) -> Signature {
-		Signature::from_rsv(&self.r.into(), &self.s.into(), self.standard_v())
+		let r: H256 = BigEndianHash::from_uint(&self.r);
+		let s: H256 = BigEndianHash::from_uint(&self.s);
+		Signature::from_rsv(&r, &s, self.standard_v())
 	}
 
 	/// Checks whether the signature has a low 's' value.
-	pub fn check_low_s(&self) -> Result<(), ethkey::Error> {
+	pub fn check_low_s(&self) -> Result<(), parity_crypto::publickey::Error> {
 		if !self.signature().is_low_s() {
-			Err(ethkey::Error::InvalidSignature.into())
+			Err(parity_crypto::publickey::Error::InvalidSignature)
 		} else {
 			Ok(())
 		}
@@ -382,22 +385,17 @@ impl UnverifiedTransaction {
 	}
 
 	/// Recovers the public key of the sender.
-	pub fn recover_public(&self) -> Result<Public, ethkey::Error> {
+	pub fn recover_public(&self) -> Result<Public, parity_crypto::publickey::Error> {
 		Ok(recover(&self.signature(), &self.unsigned.hash(self.chain_id()))?)
 	}
 
 	/// Verify basic signature params. Does not attempt sender recovery.
-	pub fn verify_basic(&self, check_low_s: bool, chain_id: Option<u64>, allow_empty_signature: bool) -> Result<(), error::Error> {
-		if check_low_s && !(allow_empty_signature && self.is_unsigned()) {
+	pub fn verify_basic(&self, check_low_s: bool, chain_id: Option<u64>) -> Result<(), error::Error> {
+		if self.is_unsigned() {
+			return Err(parity_crypto::publickey::Error::InvalidSignature.into());
+		}
+		if check_low_s {
 			self.check_low_s()?;
-		}
-		// Disallow unsigned transactions in case EIP-86 is disabled.
-		if !allow_empty_signature && self.is_unsigned() {
-			return Err(ethkey::Error::InvalidSignature.into());
-		}
-		// EIP-86: Transactions of this form MUST have gasprice = 0, nonce = 0, value = 0, and do NOT increment the nonce of account 0.
-		if allow_empty_signature && self.is_unsigned() && !(self.gas_price.is_zero() && self.value.is_zero() && self.nonce.is_zero()) {
-			return Err(ethkey::Error::InvalidSignature.into())
 		}
 		match (self.chain_id(), chain_id) {
 			(None, _) => {},
@@ -406,20 +404,19 @@ impl UnverifiedTransaction {
 		};
 		Ok(())
 	}
+
+	/// Try to verify transaction and recover sender.
+	pub fn verify_unordered(self) -> Result<SignedTransaction, parity_crypto::publickey::Error> {
+		SignedTransaction::new(self)
+	}
 }
 
 /// A `UnverifiedTransaction` with successfully recovered `sender`.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, MallocSizeOf)]
 pub struct SignedTransaction {
 	transaction: UnverifiedTransaction,
 	sender: Address,
 	public: Option<Public>,
-}
-
-impl HeapSizeOf for SignedTransaction {
-	fn heap_size_of_children(&self) -> usize {
-		self.transaction.heap_size_of_children()
-	}
 }
 
 impl rlp::Encodable for SignedTransaction {
@@ -441,22 +438,17 @@ impl From<SignedTransaction> for UnverifiedTransaction {
 
 impl SignedTransaction {
 	/// Try to verify transaction and recover sender.
-	pub fn new(transaction: UnverifiedTransaction) -> Result<Self, ethkey::Error> {
+	pub fn new(transaction: UnverifiedTransaction) -> Result<Self, parity_crypto::publickey::Error> {
 		if transaction.is_unsigned() {
-			Ok(SignedTransaction {
-				transaction: transaction,
-				sender: UNSIGNED_SENDER,
-				public: None,
-			})
-		} else {
-			let public = transaction.recover_public()?;
-			let sender = public_to_address(&public);
-			Ok(SignedTransaction {
-				transaction: transaction,
-				sender: sender,
-				public: Some(public),
-			})
+			return Err(parity_crypto::publickey::Error::InvalidSignature);
 		}
+		let public = transaction.recover_public()?;
+		let sender = public_to_address(&public);
+		Ok(SignedTransaction {
+			transaction,
+			sender,
+			public: Some(public),
+		})
 	}
 
 	/// Returns transaction sender.
@@ -556,23 +548,26 @@ impl From<SignedTransaction> for PendingTransaction {
 
 #[cfg(test)]
 mod tests {
+	use std::str::FromStr;
+
 	use super::*;
-	use ethereum_types::U256;
+	use ethereum_types::{U256, Address};
 	use hash::keccak;
+	use rustc_hex::FromHex;
 
 	#[test]
 	fn sender_test() {
-		let bytes = ::rustc_hex::FromHex::from_hex("f85f800182520894095e7baea6a6c7c4c2dfeb977efac326af552d870a801ba048b55bfa915ac795c431978d8a6a992b628d557da5ff759b307d495a36649353a0efffd310ac743f371de3b9f7f9cb56c0b28ad43601b4ab949f53faa07bd2c804").unwrap();
+		let bytes: Vec<u8> = FromHex::from_hex("f85f800182520894095e7baea6a6c7c4c2dfeb977efac326af552d870a801ba048b55bfa915ac795c431978d8a6a992b628d557da5ff759b307d495a36649353a0efffd310ac743f371de3b9f7f9cb56c0b28ad43601b4ab949f53faa07bd2c804").unwrap();
 		let t: UnverifiedTransaction = rlp::decode(&bytes).expect("decoding UnverifiedTransaction failed");
 		assert_eq!(t.data, b"");
 		assert_eq!(t.gas, U256::from(0x5208u64));
 		assert_eq!(t.gas_price, U256::from(0x01u64));
 		assert_eq!(t.nonce, U256::from(0x00u64));
 		if let Action::Call(ref to) = t.action {
-			assert_eq!(*to, "095e7baea6a6c7c4c2dfeb977efac326af552d87".into());
+			assert_eq!(*to, Address::from_str("095e7baea6a6c7c4c2dfeb977efac326af552d87").unwrap());
 		} else { panic!(); }
 		assert_eq!(t.value, U256::from(0x0au64));
-		assert_eq!(public_to_address(&t.recover_public().unwrap()), "0f65fe9276bc9a24ae7083ae28e2660ef72df99e".into());
+		assert_eq!(public_to_address(&t.recover_public().unwrap()), Address::from_str("0f65fe9276bc9a24ae7083ae28e2660ef72df99e").unwrap());
 		assert_eq!(t.chain_id(), None);
 	}
 
@@ -592,7 +587,7 @@ mod tests {
 
 	#[test]
 	fn signing_eip155_zero_chainid() {
-		use ethkey::{Random, Generator};
+		use parity_crypto::publickey::{Random, Generator};
 
 		let key = Random.generate().unwrap();
 		let t = Transaction {
@@ -605,7 +600,7 @@ mod tests {
 		};
 
 		let hash = t.hash(Some(0));
-		let sig = ::ethkey::sign(&key.secret(), &hash).unwrap();
+		let sig = parity_crypto::publickey::sign(&key.secret(), &hash).unwrap();
 		let u = t.with_signature(sig, Some(0));
 
 		assert!(SignedTransaction::new(u).is_ok());
@@ -613,7 +608,7 @@ mod tests {
 
 	#[test]
 	fn signing() {
-		use ethkey::{Random, Generator};
+		use parity_crypto::publickey::{Random, Generator};
 
 		let key = Random.generate().unwrap();
 		let t = Transaction {
@@ -637,18 +632,36 @@ mod tests {
 			gas: U256::from(50_000),
 			value: U256::from(1),
 			data: b"Hello!".to_vec()
-		}.fake_sign(Address::from(0x69));
-		assert_eq!(Address::from(0x69), t.sender());
+		}.fake_sign(Address::from_low_u64_be(0x69));
+		assert_eq!(Address::from_low_u64_be(0x69), t.sender());
 		assert_eq!(t.chain_id(), None);
 
 		let t = t.clone();
-		assert_eq!(Address::from(0x69), t.sender());
+		assert_eq!(Address::from_low_u64_be(0x69), t.sender());
 		assert_eq!(t.chain_id(), None);
 	}
 
 	#[test]
+	fn should_reject_null_signature() {
+		let t = Transaction {
+			nonce: U256::zero(),
+			gas_price: U256::from(10000000000u64),
+			gas: U256::from(21000),
+			action: Action::Call(Address::from_str("d46e8dd67c5d32be8058bb8eb970870f07244567").unwrap()),
+			value: U256::from(1),
+			data: vec![]
+		}.null_sign(1);
+
+		let res = SignedTransaction::new(t.transaction);
+		match res {
+			Err(parity_crypto::publickey::Error::InvalidSignature) => {}
+			_ => panic!("null signature should be rejected"),
+		}
+	}
+
+	#[test]
 	fn should_recover_from_chain_specific_signing() {
-		use ethkey::{Random, Generator};
+		use parity_crypto::publickey::{Random, Generator};
 		let key = Random.generate().unwrap();
 		let t = Transaction {
 			action: Action::Create,
@@ -664,12 +677,10 @@ mod tests {
 
 	#[test]
 	fn should_agree_with_vitalik() {
-		use rustc_hex::FromHex;
-
 		let test_vector = |tx_data: &str, address: &'static str| {
-			let signed = rlp::decode(&FromHex::from_hex(tx_data).unwrap()).expect("decoding tx data failed");
-			let signed = SignedTransaction::new(signed).unwrap();
-			assert_eq!(signed.sender(), address.into());
+			let bytes = rlp::decode(&tx_data.from_hex::<Vec<u8>>().unwrap()).expect("decoding tx data failed");
+			let signed = SignedTransaction::new(bytes).unwrap();
+			assert_eq!(signed.sender(), Address::from_str(&address[2..]).unwrap());
 			println!("chainid: {:?}", signed.chain_id());
 		};
 

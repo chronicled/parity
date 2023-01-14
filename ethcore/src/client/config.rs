@@ -1,4 +1,4 @@
-// Copyright 2015-2019 Parity Technologies (UK) Ltd.
+// Copyright 2015-2020 Parity Technologies (UK) Ltd.
 // This file is part of Parity Ethereum.
 
 // Parity Ethereum is free software: you can redistribute it and/or modify
@@ -15,16 +15,13 @@
 // along with Parity Ethereum.  If not, see <http://www.gnu.org/licenses/>.
 
 use std::str::FromStr;
-use std::fmt::{Display, Formatter, Error as FmtError};
 
-use verification::{VerifierType, QueueConfig};
+use blockchain::Config as BlockChainConfig;
 use journaldb;
 use snapshot::SnapshotConfiguration;
-
-pub use std::time::Duration;
-pub use blockchain::Config as BlockChainConfig;
-pub use trace::Config as TraceConfig;
-pub use evm::VMType;
+use trace::Config as TraceConfig;
+use types::client_types::Mode;
+use verification::{VerifierType, QueueConfig};
 
 /// Client state db compaction profile
 #[derive(Debug, PartialEq, Clone)]
@@ -56,32 +53,6 @@ impl FromStr for DatabaseCompactionProfile {
 	}
 }
 
-/// Operating mode for the client.
-#[derive(Debug, Eq, PartialEq, Clone)]
-pub enum Mode {
-	/// Always on.
-	Active,
-	/// Goes offline after client is inactive for some (given) time, but
-	/// comes back online after a while of inactivity.
-	Passive(Duration, Duration),
-	/// Goes offline after client is inactive for some (given) time and
-	/// stays inactive.
-	Dark(Duration),
-	/// Always off.
-	Off,
-}
-
-impl Display for Mode {
-	fn fmt(&self, f: &mut Formatter) -> Result<(), FmtError> {
-		match *self {
-			Mode::Active => write!(f, "active"),
-			Mode::Passive(..) => write!(f, "passive"),
-			Mode::Dark(..) => write!(f, "dark"),
-			Mode::Off => write!(f, "offline"),
-		}
-	}
-}
-
 /// Client configuration. Includes configs for all sub-systems.
 #[derive(Debug, PartialEq, Clone)]
 pub struct ClientConfig {
@@ -91,8 +62,6 @@ pub struct ClientConfig {
 	pub blockchain: BlockChainConfig,
 	/// Trace configuration.
 	pub tracing: TraceConfig,
-	/// VM type.
-	pub vm_type: VMType,
 	/// Fat DB enabled?
 	pub fat_db: bool,
 	/// The JournalDB ("pruning") algorithm to use.
@@ -117,7 +86,7 @@ pub struct ClientConfig {
 	pub history: u64,
 	/// Ideal memory usage for state pruning history.
 	pub history_mem: usize,
-	/// Check seal valididity on block import
+	/// Check seal validity on block import
 	pub check_seal: bool,
 	/// Maximal number of transactions queued for verification in a separate thread.
 	pub transaction_verification_queue_size: usize,
@@ -134,7 +103,6 @@ impl Default for ClientConfig {
 			queue: Default::default(),
 			blockchain: Default::default(),
 			tracing: Default::default(),
-			vm_type: Default::default(),
 			fat_db: false,
 			pruning: journaldb::Algorithm::OverlayRecent,
 			name: "default".into(),
