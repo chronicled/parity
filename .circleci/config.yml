@@ -94,9 +94,7 @@ workflows:
   blockchain-interface-workflow:
     jobs:
       - test
-      - image:
-          requires:
-            - test
+      - image
       - system_tests:
           requires:
             - image
