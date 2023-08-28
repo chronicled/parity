@@ -28,8 +28,8 @@ jobs:
             sudo apt update
             sudo apt upgrade -y
             sudo apt install time build-essential libgflags-dev libsnappy-dev zlib1g-dev libbz2-dev \
-            liblz4-dev libzstd-dev perl python libsnappy1v5 libudev-dev cmake libgflags-dev linux-headers-generic \
-            libusb-dev -y
+            liblz4-dev libzstd-dev perl python libsnappy1v5 libudev-dev cmake libgflags-dev linux-headers-generic libssl-dev \
+            pkg-config libusb-dev -y
             RUST_BACKTRACE=1 cargo test --package=parity-rabbitmq
           no_output_timeout: 30m
   image:
