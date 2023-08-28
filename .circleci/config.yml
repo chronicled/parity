@@ -60,7 +60,7 @@ jobs:
       - run:
           name: Deploy to quay
           command: |
-            mkdir -p ~/.docker; echo -n "${QUAY_AUTH}" > ~/.docker/config.json;
+            mkdir -p ~/.docker; echo -n "${NABP_QUAY_AUTH}" > ~/.docker/config.json;
             SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             docker push "${QUAY_IMAGE}:${SHORT_COMMIT}";
             docker push "${QUAY_IMAGE}:${CIRCLE_BRANCH}"
