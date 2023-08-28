@@ -1,4 +1,4 @@
-FROM registry.dev.infra.chronicled.com/blockchain-interface:latest
+FROM quay.io/nabp/blockchain-interface:latest
 WORKDIR /home/parity/
 
 COPY --chown=parity:parity .circleci/docker/parity /home/parity

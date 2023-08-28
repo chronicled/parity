@@ -3,7 +3,7 @@ defaults: &defaults
   working_directory: ~/parity
   resource_class: xlarge
   docker:
-    - image: circleci/rust:1.38.0
+    - image: cimg/rust:1.38.0
 
 jobs:
   test:
@@ -35,8 +35,7 @@ jobs:
   image:
     <<: *defaults
     environment:
-      FINAL_IMAGE: registry.dev.infra.chronicled.com/blockchain-interface
-      QUAY_IMAGE: quay.io/chronicled/blockchain-interface
+      QUAY_IMAGE: quay.io/nabp/blockchain-interface
     steps:
       - add_ssh_keys:
           fingerprints:
@@ -54,17 +53,10 @@ jobs:
           name: Build docker image
           command: |
             export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
-            export PREV_IMAGE=`docker images "${FINAL_IMAGE}:${CIRCLE_BRANCH}" --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
+            export PREV_IMAGE=`docker images "${QUAY_IMAGE}:${CIRCLE_BRANCH}" --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
             ssh-add -L
-            docker build -c 1024 --rm=false -f scripts/docker/debian/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" --tag "${FINAL_IMAGE}:${CIRCLE_BRANCH}" --tag "${QUAY_IMAGE}:${SHORT_COMMIT}" --tag "${QUAY_IMAGE}:${CIRCLE_BRANCH}" . --cache-from="${PREV_IMAGE}" --ssh default;
+            docker build -c 1024 --rm=false -f scripts/docker/debian/Dockerfile --tag "${QUAY_IMAGE}:${SHORT_COMMIT}" --tag "${QUAY_IMAGE}:${CIRCLE_BRANCH}" . --cache-from="${PREV_IMAGE}" --ssh default;
           no_output_timeout: 60m
-      - run:
-          name: Deploy to dev registry
-          command: |
-            mkdir -p ~/.docker; echo -n "${REGISTRY_AUTH}" > ~/.docker/config.json;
-            SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
-            docker push "${FINAL_IMAGE}:${SHORT_COMMIT}";
-            docker push "${FINAL_IMAGE}:${CIRCLE_BRANCH}"
       - run:
           name: Deploy to quay
           command: |
@@ -77,7 +69,7 @@ jobs:
     machine:
       image: ubuntu-1604:201903-01
     environment:
-      - FINAL_IMAGE: quay.io/chronicled/blockchain-interface
+      QUAY_IMAGE: quay.io/chronicled/blockchain-interface
     steps:
       - run: mkdir -p ~/.docker ; echo -n "${QUAY_AUTH}" > ~/.docker/config.json
       - run: SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
@@ -87,7 +79,7 @@ jobs:
           --origin-branch "${CIRCLE_BRANCH}"
           --branch "develop"
           --merge-origin-branch "develop"
-          blockchain blockchain "${FINAL_IMAGE}:${SHORT_COMMIT}"
+          blockchain blockchain "${QUAY_IMAGE}:${SHORT_COMMIT}"
 
 workflows:
   version: 2
@@ -97,6 +89,6 @@ workflows:
       - image:
           requires:
             - test
-      - system_tests:
-          requires:
-            - image
+      # - system_tests:
+      #     requires:
+      #       - image

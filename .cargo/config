@@ -8,4 +8,5 @@ git-fetch-with-cli = false
 [registries]
 default = "crates-io"
 chronicled-platform-v2 = { index = "https://dl.cloudsmith.io/ItqwH3F8rYFNB5vv/chronicled/platform-v2/cargo/index.git" }
+nabp-platform-v2 = { index = "https://dl.cloudsmith.io/XpaLe6bzFui90glT/nabp/platform-v2/cargo/index.git" }
 crates-io = { index = "https://github.com/rust-lang/crates.io-index" }
