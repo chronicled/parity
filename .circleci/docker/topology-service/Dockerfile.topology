@@ -1,4 +1,4 @@
-FROM registry.dev.infra.chronicled.com/topology-service:668e929
+FROM quay.io/nabp/topology-service:668e929
 COPY ./docker/topology-service/*.json ./
 
 # wait for RMQ init

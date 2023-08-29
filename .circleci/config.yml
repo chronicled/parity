@@ -3,15 +3,12 @@ defaults: &defaults
   working_directory: ~/parity
   resource_class: xlarge
   docker:
-    - image: circleci/rust:1.38.0
+    - image: cimg/rust:1.38.0
 
 jobs:
   test:
     <<: *defaults
     steps:
-      - add_ssh_keys:
-          fingerprints:
-          - "26:cf:cd:da:23:08:97:7b:d4:6a:f4:da:cc:e6:69:21"
       - checkout
       - run:
           name: "Pull Submodules"
@@ -28,19 +25,15 @@ jobs:
             sudo apt update
             sudo apt upgrade -y
             sudo apt install time build-essential libgflags-dev libsnappy-dev zlib1g-dev libbz2-dev \
-            liblz4-dev libzstd-dev perl python libsnappy1v5 libudev-dev cmake libgflags-dev linux-headers-amd64 \
-            libusb-dev -y
+            liblz4-dev libzstd-dev perl python libsnappy1v5 libudev-dev cmake libgflags-dev linux-headers-generic libssl-dev \
+            pkg-config libusb-dev -y
             RUST_BACKTRACE=1 cargo test --package=parity-rabbitmq
           no_output_timeout: 30m
   image:
     <<: *defaults
     environment:
-      FINAL_IMAGE: registry.dev.infra.chronicled.com/blockchain-interface
-      QUAY_IMAGE: quay.io/chronicled/blockchain-interface
+      QUAY_IMAGE: quay.io/nabp/blockchain-interface
     steps:
-      - add_ssh_keys:
-          fingerprints:
-          - "26:cf:cd:da:23:08:97:7b:d4:6a:f4:da:cc:e6:69:21"
       - checkout
       - run:
           name: "Pull Submodules"
@@ -54,40 +47,17 @@ jobs:
           name: Build docker image
           command: |
             export SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
-            export PREV_IMAGE=`docker images "${FINAL_IMAGE}:${CIRCLE_BRANCH}" --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
+            export PREV_IMAGE=`docker images "${QUAY_IMAGE}:${CIRCLE_BRANCH}" --format "{{.Repository}}:{{.Tag}}" | head -n 1`;
             ssh-add -L
-            docker build -c 1024 --rm=false -f scripts/docker/debian/Dockerfile --tag "${FINAL_IMAGE}:${SHORT_COMMIT}" --tag "${FINAL_IMAGE}:${CIRCLE_BRANCH}" --tag "${QUAY_IMAGE}:${SHORT_COMMIT}" --tag "${QUAY_IMAGE}:${CIRCLE_BRANCH}" . --cache-from="${PREV_IMAGE}" --ssh default;
+            docker build -c 1024 --rm=false -f scripts/docker/debian/Dockerfile --tag "${QUAY_IMAGE}:${SHORT_COMMIT}" --tag "${QUAY_IMAGE}:${CIRCLE_BRANCH}" . --cache-from="${PREV_IMAGE}" --ssh default;
           no_output_timeout: 60m
-      - run:
-          name: Deploy to dev registry
-          command: |
-            mkdir -p ~/.docker; echo -n "${REGISTRY_AUTH}" > ~/.docker/config.json;
-            SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
-            docker push "${FINAL_IMAGE}:${SHORT_COMMIT}";
-            docker push "${FINAL_IMAGE}:${CIRCLE_BRANCH}"
       - run:
           name: Deploy to quay
           command: |
-            mkdir -p ~/.docker; echo -n "${QUAY_AUTH}" > ~/.docker/config.json;
+            mkdir -p ~/.docker; echo -n "${NABP_QUAY_AUTH}" > ~/.docker/config.json;
             SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
             docker push "${QUAY_IMAGE}:${SHORT_COMMIT}";
             docker push "${QUAY_IMAGE}:${CIRCLE_BRANCH}"
-
-  system_tests:
-    machine:
-      image: ubuntu-1604:201903-01
-    environment:
-      - FINAL_IMAGE: quay.io/chronicled/blockchain-interface
-    steps:
-      - run: mkdir -p ~/.docker ; echo -n "${QUAY_AUTH}" > ~/.docker/config.json
-      - run: SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
-          docker run quay.io/chronicled/c-rex
-          run-patch
-          --token "${CIRCLE_TOKEN}"
-          --origin-branch "${CIRCLE_BRANCH}"
-          --branch "develop"
-          --merge-origin-branch "develop"
-          blockchain blockchain "${FINAL_IMAGE}:${SHORT_COMMIT}"
 
 workflows:
   version: 2
@@ -97,6 +67,3 @@ workflows:
       - image:
           requires:
             - test
-      - system_tests:
-          requires:
-            - image
