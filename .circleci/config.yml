@@ -9,9 +9,6 @@ jobs:
   test:
     <<: *defaults
     steps:
-      - add_ssh_keys:
-          fingerprints:
-          - "26:cf:cd:da:23:08:97:7b:d4:6a:f4:da:cc:e6:69:21"
       - checkout
       - run:
           name: "Pull Submodules"
@@ -37,9 +34,6 @@ jobs:
     environment:
       QUAY_IMAGE: quay.io/nabp/blockchain-interface
     steps:
-      - add_ssh_keys:
-          fingerprints:
-          - "26:cf:cd:da:23:08:97:7b:d4:6a:f4:da:cc:e6:69:21"
       - checkout
       - run:
           name: "Pull Submodules"
