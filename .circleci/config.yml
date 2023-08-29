@@ -59,22 +59,6 @@ jobs:
             docker push "${QUAY_IMAGE}:${SHORT_COMMIT}";
             docker push "${QUAY_IMAGE}:${CIRCLE_BRANCH}"
 
-  system_tests:
-    machine:
-      image: ubuntu-1604:201903-01
-    environment:
-      QUAY_IMAGE: quay.io/chronicled/blockchain-interface
-    steps:
-      - run: mkdir -p ~/.docker ; echo -n "${QUAY_AUTH}" > ~/.docker/config.json
-      - run: SHORT_COMMIT="$(echo $CIRCLE_SHA1 | cut -c1-7)";
-          docker run quay.io/chronicled/c-rex
-          run-patch
-          --token "${CIRCLE_TOKEN}"
-          --origin-branch "${CIRCLE_BRANCH}"
-          --branch "develop"
-          --merge-origin-branch "develop"
-          blockchain blockchain "${QUAY_IMAGE}:${SHORT_COMMIT}"
-
 workflows:
   version: 2
   blockchain-interface-workflow:
@@ -83,6 +67,3 @@ workflows:
       - image:
           requires:
             - test
-      # - system_tests:
-      #     requires:
-      #       - image
